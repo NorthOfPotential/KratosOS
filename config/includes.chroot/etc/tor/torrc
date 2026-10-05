@@ -1,0 +1,37 @@
+# KratosOS Tor configuration
+# Transparent proxy: nftables redirects all TCP to TransPort and DNS to DNSPort.
+
+User debian-tor
+DataDirectory /var/lib/tor
+ControlSocket /run/tor/control GroupWritable RelaxDirModeCheck
+CookieAuthentication 1
+CookieAuthFileGroupReadable 1
+
+# SOCKS for Tor-aware apps (Tor Browser uses its own). Isolate streams per
+# destination so separate sites never share a circuit.
+SocksPort 127.0.0.1:9050 IsolateDestAddr IsolateDestPort IsolateSOCKSAuth
+TransPort 127.0.0.1:9040 IsolateClientAddr IsolateDestAddr IsolateDestPort
+DNSPort 127.0.0.1:5353
+
+# Resolve .onion addresses through the transparent proxy
+VirtualAddrNetworkIPv4 10.192.0.0/10
+AutomapHostsOnResolve 1
+AutomapHostsSuffixes .onion,.exit
+
+ClientUseIPv6 0
+ClientUseIPv4 1
+AvoidDiskWrites 1
+SafeLogging 1
+Log notice syslog
+
+# ── Bridges (hide Tor usage from your ISP) ──
+# Get bridges from https://bridges.torproject.org or via email, then uncomment:
+# UseBridges 1
+# ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy
+# Bridge obfs4 <IP:PORT> <FINGERPRINT> cert=<CERT> iat-mode=0
+#
+# Snowflake: copy the current bridge line from
+# /usr/share/doc/snowflake-client or https://bridges.torproject.org
+# UseBridges 1
+# ClientTransportPlugin snowflake exec /usr/bin/snowflake-client
+# Bridge snowflake <line from the Tor Project>

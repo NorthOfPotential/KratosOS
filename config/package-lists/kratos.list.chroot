@@ -1,0 +1,63 @@
+# ── Base desktop ─────────────────────────────────────────────
+task-gnome-desktop
+gnome-tweaks
+network-manager
+network-manager-gnome
+firmware-linux-free
+firmware-misc-nonfree
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+
+# ── Anonymity / network ──────────────────────────────────────
+tor
+torbrowser-launcher
+obfs4proxy
+snowflake-client
+wireguard
+wireguard-tools
+nftables
+macchanger
+onionshare
+curl
+torsocks
+
+# ── Defense ──────────────────────────────────────────────────
+apparmor
+apparmor-profiles
+apparmor-profiles-extra
+apparmor-utils
+firejail
+firejail-profiles
+clamav
+clamav-daemon
+clamav-freshclam
+rkhunter
+usbguard
+aide
+
+# ── Virtualization ───────────────────────────────────────────
+qemu-system-x86
+qemu-utils
+ovmf
+
+# ── Encryption / OpSec tools ─────────────────────────────────
+cryptsetup
+keepassxc
+gnupg
+kleopatra
+mat2
+secure-delete
+wipe
+pwgen
+diceware
+xclip
+
+# ── Windows migration ────────────────────────────────────────
+ntfs-3g
+dislocker
+rsync
+pv
+
+# ── Communication ────────────────────────────────────────────
+thunderbird

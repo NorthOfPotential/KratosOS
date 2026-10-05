@@ -1,0 +1,20 @@
+#!/usr/sbin/nft -f
+# KratosOS mode: offline. Nothing leaves the machine except loopback.
+# Also loaded as a transitional state while switching modes.
+
+table inet kratos
+delete table inet kratos
+
+table inet kratos {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+    chain output {
+        type filter hook output priority filter; policy drop;
+        oifname "lo" accept
+    }
+}
