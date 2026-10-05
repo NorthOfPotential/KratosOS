@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Constant-rate decoy (cover) traffic generator.
+
+Sends dummy UDP packets to a sink at a steady average rate with small random
+jitter, so a local observer (your ISP) sees a filled, uniform pipe instead of
+the bursts of your real activity. Intended to run INSIDE the VPN tunnel, to a
+sink that discards the packets.
+
+  kratos-decoy <host:port> <rate e.g. 1mbit|500kbit>
+
+HONESTY: this blinds a *local* observer only. It does not defeat a global
+adversary and, if the rate/pattern is unusual, it is itself a fingerprint.
+Prefer a mixnet (Nym) for real unobservability. See
+docs/CORRELATION-RESISTANCE.md.
+"""
+import random
+import socket
+import sys
+import time
+
+PKT = 1200  # bytes per decoy packet (near a typical MTU payload)
+
+
+def parse_rate(s):
+    s = s.strip().lower()
+    mult = 1
+    for suffix, m in (("gbit", 1_000_000_000), ("mbit", 1_000_000), ("kbit", 1000), ("bit", 1)):
+        if s.endswith(suffix):
+            return float(s[: -len(suffix)]) * m
+    return float(s) * 8  # bare number = bytes/s -> bits
+
+
+def main():
+    if len(sys.argv) != 3:
+        print(__doc__)
+        return 2
+    host, _, port = sys.argv[1].rpartition(":")
+    bits_per_s = parse_rate(sys.argv[2])
+    pps = max(1.0, bits_per_s / (PKT * 8))
+    interval = 1.0 / pps
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    dest = (host, int(port))
+    payload = bytes(PKT)
+    next_t = time.monotonic()
+    while True:
+        try:
+            sock.sendto(payload, dest)
+        except OSError:
+            pass
+        # Steady average rate, with +/-20% jitter so it isn't a metronome.
+        next_t += interval * random.uniform(0.8, 1.2)
+        delay = next_t - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        else:
+            next_t = time.monotonic()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

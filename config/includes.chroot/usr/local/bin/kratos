@@ -11,6 +11,10 @@ KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 . "$KRATOS_LIB/net.sh"
 # shellcheck source=stealth.sh
 . "$KRATOS_LIB/stealth.sh"
+# shellcheck source=corr.sh
+. "$KRATOS_LIB/corr.sh"
+# shellcheck source=bootcheck.sh
+. "$KRATOS_LIB/bootcheck.sh"
 # shellcheck source=opsec.sh
 . "$KRATOS_LIB/opsec.sh"
 # shellcheck source=migrate.sh
@@ -33,12 +37,16 @@ ${BOLD}Network${RESET}
   mode <m>               normal | vpn | offline (fail-closed switch)
   vpn-import <file>      Install a WireGuard config (e.g. from Proton VPN)
   mac                    Show current vs hardware MAC addresses
+  corr [shape on|off]    Traffic-correlation resistance (see docs/CORRELATION-RESISTANCE.md)
+  fingerprint            Check whether this machine blends in or stands out
 
 ${BOLD}OpSec${RESET}
   scrub [--show] <files> Remove metadata (EXIF, GPS, author, ...) with mat2
+  stylo [--scan] [file]  Strip hidden writing-style fingerprints from persona text
   shred <files>          Overwrite and delete files
   scan [path]            Malware and rootkit scan (ClamAV + rkhunter)
   usb [allow|block <id>] List USB devices or allow/block one (USBGuard)
+  bootcheck record|verify Detect /boot, ESP or TPM tampering since a baseline
   panic                  Kill stealth VMs, lock vault, cut network, power off NOW
 
 ${BOLD}Migration${RESET}
@@ -59,6 +67,10 @@ main() {
         restore)     net_restore "$@" ;;
         vpn-import)  net_vpn_import "$@" ;;
         mac)         net_mac "$@" ;;
+        corr)        corr_main "$@" ;;
+        fingerprint) corr_fingerprint ;;
+        stylo)       python3 "$KRATOS_LIB/stylo.py" "$@" ;;
+        bootcheck)   bootcheck_main "$@" ;;
         scrub)       opsec_scrub "$@" ;;
         shred)       opsec_shred "$@" ;;
         scan)        opsec_scan "$@" ;;

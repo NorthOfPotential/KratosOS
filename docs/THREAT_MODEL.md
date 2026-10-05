@@ -77,7 +77,7 @@ software on it.
 |---|---|
 | Host compromise | See above. Mitigations: hardening, AppArmor, Firejail, updates, minimal host software. |
 | Hypervisor (KVM/QEMU) escape | Rare but possible. Mitigation: no integration devices, updates. |
-| Global passive adversary / traffic correlation | A known limit of low-latency anonymity networks like Tor. No local setup fixes it. |
+| Global passive adversary / traffic correlation | Still unsolved for low-latency Tor. KratosOS adds opt-in local-link shaping/jitter/decoy (local observers only) and an experimental Nym **mixnet** mode for real unobservability — see CORRELATION-RESISTANCE.md. Blends by default so it adds no fingerprint. |
 | Browser 0-days inside the Workstation | Can take over the Workstation. Mitigation: Tor Browser "Safest" level, disposable mode. |
 | Hardware/firmware (Intel ME, AMD PSP, BIOS) | Below the OS. Use trusted hardware. |
 | Physical access while running | RAM holds keys. Mitigation: panic button, lock screen, power off. Sleep is blocked in Stealth Mode. |
@@ -89,7 +89,7 @@ software on it.
 | Vulnerability | What can happen | Mitigation in KratosOS | Your part |
 |---|---|---|---|
 | Normal-user malware observes the persona | Watch screen, inject keys, read vault | Dedicated kstealth user + own session, `hidepid`, root-owned vault/config (tested by `attack_isolation.sh`) | Don't run untrusted code as root |
-| Root compromise of the host | Full access, incl. the VMs | Reduced attack surface only; not eliminated (needs Qubes) | Keep updated, install little |
+| Root compromise of the host | Full access, incl. the VMs | sVirt per-VM confinement shrinks VM-breakout blast radius (COMPARTMENTALIZATION.md); not eliminated — needs Qubes+Whonix | Keep updated, install little |
 | VM escape | Guest attacks host | KVM, no integration devices | Updates |
 | Host artifacts | Evidence VMs existed | Encrypted vault, transient VMs, logs shredded, RAM-only journal, swap off | Full disk encryption at install |
 | VPN failure | Gateway reaches Tor outside VPN | Kill switch at firewall level; optional `STEALTH_REQUIRE_VPN` | Test the kill switch once |

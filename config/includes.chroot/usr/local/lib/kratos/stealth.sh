@@ -298,7 +298,21 @@ wipe_artifacts() {
 
 # ── ON / OFF ────────────────────────────────────────────────
 
+# Always-on stylometry/timing guard at Stealth start.
+guard_start() {
+    local max="${GUARD_START_JITTER:-0}"
+    if [[ "$max" =~ ^[0-9]+$ ]] && (( max > 0 )); then
+        local d=$(( RANDOM % (max + 1) ))
+        info "Timing guard: delaying start ${d}s to decorrelate from your real activity"
+        sleep "$d"
+    fi
+    if [[ "${GUARD_STYLO_REMINDER:-yes}" == yes ]]; then
+        info "Reminder: run persona text through 'kratos stylo' before posting it."
+    fi
+}
+
 stealth_on_steps() {
+    guard_start
     info "${BOLD}Host lockdown${RESET}"
     host_lockdown
 

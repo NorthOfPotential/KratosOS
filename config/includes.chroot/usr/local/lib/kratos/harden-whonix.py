@@ -107,6 +107,22 @@ def harden_domain(root, name, disk, ram_mib):
         src = iface.find("source")
         src.set("network", map_network_name(src.get("network", "")))
 
+    # A disk shared between VMs would be a bridge between compartments.
+    for d in devices.findall("disk"):
+        if d.find("shareable") is not None:
+            raise Violation(f"{name}: disks must not be <shareable/>")
+
+    # sVirt compartmentalization: give each VM a dynamic, per-domain security
+    # label (AppArmor/SELinux via libvirt). The QEMU process and its disk get a
+    # unique label, so a compromised Gateway cannot read the Workstation's disk
+    # or escape to the host as easily. This shrinks the blast radius of a VM
+    # breakout — the closest KVM equivalent to Qubes-style sectioning.
+    for sl in root.findall("seclabel"):
+        root.remove(sl)
+    seclabel = ET.SubElement(root, "seclabel")
+    seclabel.set("type", "dynamic")
+    seclabel.set("relabel", "yes")
+
 
 def check_domain(root):
     name = root.findtext("name")
@@ -140,6 +156,14 @@ def check_domain(root):
         if len(listens) != 1 or listens[0].get("type") != "socket" \
                 or listens[0].get("socket") != f"{SPICE_DIR}/{name}.sock":
             raise Violation(f"{name}: display must listen only on {SPICE_DIR}/{name}.sock")
+    for d in devices.findall("disk"):
+        if d.find("shareable") is not None:
+            raise Violation(f"{name}: disks must not be <shareable/> (would bridge compartments)")
+    # sVirt confinement must be present and relabeling, or the VMs share the
+    # host's security context and a breakout is unconstrained.
+    seclabel = root.find("seclabel")
+    if seclabel is None or seclabel.get("type") != "dynamic" or seclabel.get("relabel") != "yes":
+        raise Violation(f"{name}: a dynamic relabeling <seclabel> (sVirt) is required")
 
 
 def harden_network(root, name):
@@ -196,9 +220,18 @@ def cmd_prepare(a):
     write(int_, f"{a.outdir}/{INT}.xml")
 
 
+def _disk_path(root):
+    return root.find("devices/disk/source").get("file")
+
+
 def cmd_check(a):
-    check_domain(ET.parse(f"{a.dir}/{GW}.xml").getroot())
-    check_domain(ET.parse(f"{a.dir}/{WS}.xml").getroot())
+    gw = ET.parse(f"{a.dir}/{GW}.xml").getroot()
+    ws = ET.parse(f"{a.dir}/{WS}.xml").getroot()
+    check_domain(gw)
+    check_domain(ws)
+    # The compartments must not share a backing disk.
+    if _disk_path(gw) == _disk_path(ws):
+        raise Violation("Gateway and Workstation share a disk")
     check_network(ET.parse(f"{a.dir}/{EXT}.xml").getroot())
     check_network(ET.parse(f"{a.dir}/{INT}.xml").getroot())
 

@@ -118,7 +118,8 @@ config/includes.chroot/
   usr/local/bin/kratos           command-line tool
   usr/local/bin/kratos-tray      tray icon with the Stealth Mode toggle
   usr/local/lib/kratos/          implementation (stealth.sh, net.sh, ...)
-docs/                            threat model, OpSec, architecture, migration
+docs/                            threat model, OpSec, architecture, migration,
+                                 compartmentalization, correlation-resistance
 tests/                           test suite
 ```
 

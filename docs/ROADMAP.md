@@ -20,3 +20,13 @@
 - [ ] Reproducible, signed ISOs; Secure Boot
 - [ ] Optional: Qubes-style isolated GUI (display the Workstation via a separate sandboxed viewer)
 - [ ] Independent security review
+
+## Correlation / compartmentalization / anti-fingerprint (this version)
+- [x] sVirt per-VM confinement + no shared/bridged disks (COMPARTMENTALIZATION.md)
+- [x] Opt-in local-link traffic shaping: constant rate + jitter + decoy (CORRELATION-RESISTANCE.md)
+- [x] Stylometry normalizer `kratos stylo` + always-on timing guard in Stealth
+- [x] `kratos bootcheck` — /boot, ESP and TPM-PCR tamper detection
+- [x] Anti-fingerprint audit: defaults must blend (`kratos fingerprint`, tests)
+- [ ] KratosOS-on-Qubes profile (drive Qubes-Whonix instead of local KVM) — the real host-exploit fix
+- [ ] Wire the Nym mixnet mode end-to-end (currently experimental/off)
+- [ ] Separate non-root QEMU uids + seccomp sandbox per VM

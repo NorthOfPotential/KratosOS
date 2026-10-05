@@ -157,6 +157,32 @@ class HardenWhonixTest(unittest.TestCase):
             '<listen type="address" address="0.0.0.0" />'))
         self.assertNotEqual(run("check", self.out).returncode, 0)
 
+    # ── compartmentalization (sVirt / blast-radius reduction) ──
+
+    def test_svirt_seclabel_added(self):
+        self.prepare()
+        for name in ("kx-gw", "kx-ws"):
+            sl = self.load(name).find("seclabel")
+            self.assertIsNotNone(sl, f"{name} has no <seclabel>")
+            self.assertEqual(sl.get("type"), "dynamic")
+            self.assertEqual(sl.get("relabel"), "yes")
+
+    def test_check_detects_svirt_removed(self):
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace("dynamic", "none"))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_check_detects_shareable_disk(self):
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace("</disk>", "<shareable/></disk>", 1))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_check_detects_shared_disk_between_vms(self):
+        self.prepare()
+        # Point the Workstation at the Gateway's disk: a cross-compartment bridge.
+        self.tamper("kx-ws", lambda s: s.replace("workstation.qcow2", "gateway.qcow2"))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

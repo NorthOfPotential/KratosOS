@@ -23,7 +23,7 @@ done
 rm -rf "$tmp"
 
 step "python syntax"
-run python3 -m py_compile $inc/usr/local/bin/kratos-tray $inc/usr/local/lib/kratos/harden-whonix.py && echo ok
+run python3 -m py_compile $inc/usr/local/bin/kratos-tray $inc/usr/local/bin/kratos-decoy $inc/usr/local/lib/kratos/harden-whonix.py $inc/usr/local/lib/kratos/stylo.py && echo ok
 run python3 -m json.tool $inc/etc/firefox/policies/policies.json >/dev/null && echo "ok   policies.json"
 
 step "Whonix isolation check"
@@ -40,6 +40,22 @@ if [[ $EUID -eq 0 ]] && id "${ATTACKER:-mallory}" >/dev/null 2>&1 && id kstealth
     run tests/attack_isolation.sh
 else
     echo "skipped (needs root + 'mallory' and 'kstealth' users)"
+fi
+
+step "stylometry normalizer"
+run python3 -m unittest tests.test_stylo
+
+step "anti-fingerprint defaults"
+run python3 -m unittest tests.test_fingerprint
+
+step "boot/firmware integrity"
+run tests/bootcheck_test.sh
+
+step "traffic shaping (network namespace)"
+if [[ $EUID -eq 0 ]]; then
+    run unshare -rn bash tests/corr_test.sh
+else
+    echo "skipped (needs root)"
 fi
 
 step "firewall behaviour (network namespace)"
