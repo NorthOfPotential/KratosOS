@@ -80,7 +80,8 @@ Full guide: [`docs/MIGRATION.md`](docs/MIGRATION.md).
 **No Linux machine?** Push this repo to GitHub and run the **CI** workflow from
 the Actions tab; download the built ISO from its Artifacts. Or build locally in
 WSL2. Full steps, plus how to try it in VirtualBox or from a USB stick without
-installing: [`docs/BUILD-ON-WINDOWS.md`](docs/BUILD-ON-WINDOWS.md).
+installing: [`docs/BUILD-ON-WINDOWS.md`](docs/BUILD-ON-WINDOWS.md). After booting,
+work through [`docs/FIRST-BOOT.md`](docs/FIRST-BOOT.md).
 
 On Debian 13 / Ubuntu 24.04+:
 

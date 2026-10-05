@@ -31,6 +31,14 @@ Tor with a separate persona and separate accounts = both. Stealth Mode is built 
 | Proton VPN app kill switch you have to trust | nftables kill switch, covered by `tests/run.sh`; Gateway traffic can only leave through the tunnel |
 | Turning things off in the wrong order is possible | Off = Workstation first, verified; nothing else proceeds if it won't stop |
 
+## Facing a state-level adversary
+
+If your threat model includes an agency like the FBI specifically targeting
+you, read [`HIGH-RESOURCE-ADVERSARY.md`](HIGH-RESOURCE-ADVERSARY.md). Short
+version: no OS can guarantee anonymity against that, KratosOS included; use the
+most-audited tools (Tails, Qubes+Whonix) and perfect behavioural discipline, and
+treat the software as cost-raising, not invincibility.
+
 ## Isolation between your normal session and the persona
 
 Malware running as your **normal desktop user** is the realistic everyday
