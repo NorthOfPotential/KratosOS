@@ -1,0 +1,14 @@
+[Unit]
+Description=KratosOS firewall (loaded before any network interface comes up)
+DefaultDependencies=no
+Before=network-pre.target libvirtd.service
+Wants=network-pre.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/kratos boot
+
+[Install]
+WantedBy=sysinit.target

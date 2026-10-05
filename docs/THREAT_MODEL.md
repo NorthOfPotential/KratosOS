@@ -1,62 +1,89 @@
-# KratosOS Threat Model
+# Threat Model
 
-## The honest headline
+## The goal, stated precisely
 
-**No system can guarantee that "no matter how many resources the opponent has,
-they cannot track it back to you."** A powerful enough adversary has options that
-no operating system can defend against. KratosOS aims to:
+KratosOS does **not** promise that nobody can ever trace you. No system can.
+The goal is:
 
-1. remove every *technical* leak that the OS can control,
-2. make correlation attacks expensive enough that only the most powerful adversaries can try them,
-3. make the remaining risk (your behaviour) visible and easier to manage.
+> Keep the computer useful as an ordinary computer, and keep a separate persona
+> technically and operationally isolated from it, so that a mistake or
+> compromise in one doesn't automatically expose the other.
 
-## What KratosOS defends against
+That takes two separate controls. KratosOS can enforce the first. The second
+depends on you.
 
-| Adversary / threat | Defence |
+| Control | Question it answers | Provided by |
+|---|---|---|
+| **Network anonymity** | Can the destination see my real IP? | Whonix Gateway + Tor (+ optional VPN) |
+| **Identity separation** | Can the activity be linked to the real me? | Separate vault, separate VMs, **your behaviour** |
+
+Tor with your personal accounts = network protection without identity separation.
+Tor with a separate persona and separate accounts = both. Stealth Mode is built for the second.
+
+## What changes compared to Windows + VirtualBox + Whonix
+
+| Before | KratosOS |
 |---|---|
-| Websites and trackers learning your IP | All traffic goes through Tor. The exit IP is shared by many users. |
-| Your ISP, Wi-Fi operator or local network seeing what you do | Tor encrypts traffic to the guard. In `vpn-tor` mode the ISP sees only the VPN. |
-| DNS leaks | DNS is redirected to Tor's DNSPort. Every other DNS query is dropped. |
-| WebRTC / UDP / IPv6 leaks | IPv6 is disabled. UDP other than Tor DNS is dropped. The firewall default is DROP. |
-| Apps that ignore proxy settings | Transparent proxying at the firewall level, so apps can't bypass it. |
-| Tor or VPN crashing | Fail-closed firewall: no connection, no leak. |
-| Hardware identifiers on the network (MAC) | MAC is randomized per connection. Hostname is generic. |
-| Forensic analysis of the machine afterwards | Live/amnesic by default. RAM is cleared on free. Persistence is LUKS2-encrypted. |
-| Metadata in files you publish (EXIF GPS, author names) | `kratos scrub` (mat2). |
-| Common malware | AppArmor, Firejail, ClamAV on-access scanning, no listening services. |
-| Physical DMA attacks via FireWire/Thunderbolt | Modules blacklisted. |
-| Cross-site correlation of your activity | Tor stream isolation (each app/destination gets its own circuit). `kratos newnym` gives you a fresh identity. |
+| Windows (telemetry, large attack surface) is the host under the persona | A minimal, hardened Linux host with no telemetry |
+| VirtualBox with Guest Additions, shared clipboard possible | KVM; clipboard, file transfer, USB redirection and shared folders removed and **checked on every start** |
+| Workstation network depends on VirtualBox settings staying correct | Kratos refuses to start a Workstation with any path except the Gateway |
+| VM files, logs and configs on the normal disk | VMs live inside a separate encrypted vault; definitions are transient; logs shredded at shutdown |
+| Proton VPN app kill switch you have to trust | nftables kill switch, covered by `tests/run.sh`; Gateway traffic can only leave through the tunnel |
+| Turning things off in the wrong order is possible | Off = Workstation first, verified; nothing else proceeds if it won't stop |
 
-## What KratosOS does **not** defend against
+## What it still does NOT protect against
 
-| Threat | Why |
+**The host is still underneath the persona.** KratosOS is a much smaller, cleaner
+host than Windows, but if the host is compromised, the attacker can see the
+Workstation's window and keystrokes. Qubes OS reduces this further with a
+Xen hypervisor and an isolated GUI layer. KratosOS trades some of that for being
+a normal everyday computer. Keep the host updated, and don't install sketchy
+software on it.
+
+| Threat | Why it remains |
 |---|---|
-| **Global passive adversary** (someone who can watch both where traffic enters and where it leaves the Tor network) | Traffic-timing correlation is a known limitation of low-latency anonymity networks, including Tor. No OS can fix this. |
-| **You identifying yourself** | Logging into personal accounts, reusing usernames, writing style (stylometry), mentioning personal details, or using the same session for both identities. **This is the #1 cause of real-world deanonymization.** |
-| **Compromised hardware or firmware** | Intel ME/AMD PSP, malicious BIOS, hardware keyloggers. Use trusted hardware. |
-| **Browser exploits / 0-days** | Sandboxing reduces the impact, but a sufficiently good exploit chain can escape. Qubes-style VM isolation helps more than anything else here. |
-| **Malicious VPN provider** | In `vpn` mode, the VPN sees everything Tor would have hidden. Prefer `tor` or `vpn-tor`. |
-| **Physical surveillance** | Cameras, informants, someone looking over your shoulder. |
-| **Payment trails** | Buying a VPN with your card links it to you. |
-| **Coercion** | You can be forced to reveal passwords. |
-| **Being targeted while the machine is running** | Cold-boot attacks on a powered-on machine. Use `kratos panic`. |
+| Host compromise | See above. Mitigations: hardening, AppArmor, Firejail, updates, minimal host software. |
+| Hypervisor (KVM/QEMU) escape | Rare but possible. Mitigation: no integration devices, updates. |
+| Global passive adversary / traffic correlation | A known limit of low-latency anonymity networks like Tor. No local setup fixes it. |
+| Browser 0-days inside the Workstation | Can take over the Workstation. Mitigation: Tor Browser "Safest" level, disposable mode. |
+| Hardware/firmware (Intel ME, AMD PSP, BIOS) | Below the OS. Use trusted hardware. |
+| Physical access while running | RAM holds keys. Mitigation: panic button, lock screen, power off. Sleep is blocked in Stealth Mode. |
+| Coercion | You can be forced to give up passphrases. |
+| **Your behaviour** | See below. This is the most common way people are identified. |
+
+## Vulnerability matrix
+
+| Vulnerability | What can happen | Mitigation in KratosOS | Your part |
+|---|---|---|---|
+| Host compromise | Host observes the VMs | Hardened minimal host, no telemetry | Keep updated, install little |
+| VM escape | Guest attacks host | KVM, no integration devices | Updates |
+| Host artifacts | Evidence VMs existed | Encrypted vault, transient VMs, logs shredded, RAM-only journal, swap off | Full disk encryption at install |
+| VPN failure | Gateway reaches Tor outside VPN | Kill switch at firewall level; optional `STEALTH_REQUIRE_VPN` | Test the kill switch once |
+| Network misconfiguration | Workstation gets a direct route | Isolation check on setup and every start; firewall never forwards the internal network | Don't edit VM definitions by hand |
+| Clipboard / file leakage | Data crosses the identity boundary | No SPICE agent, clipboard and file transfer disabled and verified | Don't retype persona data into the host |
+| Identity correlation | Persona linked to you | — | Persona rules ([OPSEC.md](OPSEC.md)) |
+| Translation / AI tools | Persona text stored in your personal accounts | — | Translate inside the Workstation, logged out |
+| Phone verification | Account tied to your SIM | — | Never use your number for the persona |
+| Timing patterns | Persona active when you are | — | Vary your sessions |
+| Metadata in files | EXIF/GPS/author leaks | `kratos scrub` | Scrub everything that leaves |
+| Backups | Persona and personal data found together | Vault is a separate encrypted file | Store persona backups separately |
+| Physical access | Live machine compromised | Panic button, sleep blocked in Stealth Mode | Lock/power off |
+| Human error | Wrong environment used | Clear tray state, separate windows | Discipline |
+
+## Network mode trade-offs (Stealth Mode traffic)
+
+| Host mode | ISP sees | VPN sees | Destination sees |
+|---|---|---|---|
+| `normal` | You use Tor | — | Tor exit IP |
+| `vpn` | You use a VPN | You use Tor | Tor exit IP |
+
+VPN-before-Tor hides Tor use from your ISP but makes the VPN a party that knows
+you use Tor. Pay for it in a way that doesn't identify you if that matters.
 
 ## Antivirus expectations
 
-KratosOS ships ClamAV, rkhunter, AppArmor, Firejail and USBGuard. Together they
-provide strong *containment*. ClamAV's detection rate is **not** on par with
-commercial products such as Bitdefender for Windows malware, though Linux malware
-is a much smaller threat surface. The main defence is architecture (amnesia,
-sandboxing, no exposed services, disposable VMs for risky files), not signatures.
-
-## Network mode trade-offs
-
-| Mode | ISP sees | Destination sees | Trust placed in |
-|---|---|---|---|
-| `tor` | That you use Tor | A Tor exit IP | Tor network (distributed) |
-| `vpn-tor` | That you use a VPN | A Tor exit IP | VPN (sees you use Tor) + Tor network |
-| `vpn` | That you use a VPN | The VPN IP | **VPN provider completely** |
-| `offline` | Nothing | Nothing | — |
-
-Tor bridges (obfs4 / Snowflake) can hide the fact that you use Tor from your ISP
-without trusting a VPN provider. Set them in `/etc/tor/torrc`.
+KratosOS ships ClamAV (on-access in Stealth Mode), rkhunter, AppArmor, Firejail
+and USBGuard. ClamAV's detection is **not** comparable to Bitdefender's on
+Windows, but Linux malware is a much smaller threat. The real protection is the
+architecture: a separate VM for risky activity, no exposed services, sandboxing,
+and a disposable Workstation option.

@@ -1,45 +1,63 @@
 # Architecture
 
+## Components
+
+| Component | File | Role |
+|---|---|---|
+| `kratos` | `usr/local/bin/kratos` | CLI entry point |
+| `kratos-tray` | `usr/local/bin/kratos-tray` | Tray icon: Stealth toggle, network mode, status, panic |
+| Network modes | `etc/kratos/modes/{normal,vpn,offline}.nft` | Host firewall, one table `inet kratos`, replaced atomically |
+| Stealth firewall | `etc/kratos/stealth.nft` | Table `inet kratos_stealth`, present only in Stealth Mode |
+| Stealth controller | `usr/local/lib/kratos/stealth.sh` | Vault, host lockdown, VM lifecycle, ordering |
+| Isolation check | `usr/local/lib/kratos/harden-whonix.py` | Rewrites and validates the Whonix libvirt XML |
+| Services | `kratos-firewall` (before network), `kratos-mode` (VPN after network), `kratos-stealth-shutdown` (clean off at shutdown) |
+
+## Stealth Mode networking
+
 ```
- ┌────────────────────────── KratosOS host (live, in RAM) ──────────────────────────┐
- │                                                                                  │
- │  Apps ──┐   Tor Browser ──┐   Disposable VM (QEMU, user-mode net) ──┐            │
- │         │                 │                                         │            │
- │         ▼                 ▼                                         ▼            │
- │   ┌──────────────── nftables (table inet kratos) ──────────────────────┐         │
- │   │ output nat:  TCP → 127.0.0.1:9040 (Tor TransPort)                   │        │
- │   │              DNS → 127.0.0.1:5353 (Tor DNSPort)                     │        │
- │   │ output filter: policy DROP; accept only uid debian-tor (+ wg in VPN)│        │
- │   │ input: policy DROP (no listening services)                          │        │
- │   └─────────────────────────────────────────────────────────────────────┘        │
- │                       │                                                          │
- │                   tor daemon ───────► (wg0 in vpn-tor mode) ──► NIC (random MAC) │
- └──────────────────────────────────────────────────────────────────────────────────┘
+ Workstation (kx-ws) ──kx-int──► Gateway (kx-gw) ──kx-ext──► host NAT ──► [wg tunnel] ──► Internet
+        isolated bridge,                          NAT bridge
+        host has no IP on it                      (libvirt)
 ```
 
-## Boot order
+Firewall rules, evaluated in priority order:
 
-1. Kernel boots with hardened parameters (see `config/bootloaders` / `build.sh`).
-2. `kratos-firewall.service` loads the ruleset for the saved mode **before**
-   `network-pre.target`, so no interface is ever up without the firewall.
-3. NetworkManager connects with a random MAC.
-4. Tor starts. Only the `debian-tor` user may reach the internet.
+1. `kratos_stealth` forward (priority filter-10)
+   - anything in or out of `kx-int` → **drop** (final)
+   - `kx-ext` → outside → mark `0x4b52`
+2. `kratos` forward (priority filter, the active mode)
+   - `normal`: accept marked packets
+   - `vpn`: accept marked packets **only** if the output interface is the WireGuard tunnel
+   - `offline`: accept nothing
+3. `kratos_stealth` input: `kx-ext`/`kx-int` → host services **drop**
 
-## Mode switching
+So the VPN kill switch also covers the Gateway, and switching network modes
+while Stealth Mode is on needs no extra steps.
 
-`kratos mode <m>` first loads the `offline` ruleset (drops everything), then
-reconfigures Tor/WireGuard, then loads the new ruleset. Nothing leaks during
-the transition.
+## Stealth vault
 
-## Why transparent proxying *and* a drop policy?
+`/var/lib/kratos/stealth.vault`: a LUKS2 (argon2id) file holding:
 
-Transparent proxying means apps that ignore proxy settings still go through Tor.
-The drop policy means anything Tor can't carry (UDP, ICMP, raw sockets) is blocked
-instead of going out in the clear. Either one alone leaks.
+```
+gateway.qcow2            Whonix-Gateway disk
+workstation-base.qcow2   clean Workstation image
+workstation.qcow2        overlay with the persona's changes (thrown away in disposable mode)
+libvirt/kx-*.xml         hardened, validated VM and network definitions
+```
 
-## Disposable VMs
+VMs and networks are created with `virsh create` / `net-create` (transient), so
+`/etc/libvirt` never holds them. VM displays are SPICE over a UNIX socket in
+`/run/kratos/spice/`, owned by the desktop user. That gives screen and input
+only: the desktop user has no libvirt rights and can't reconfigure the VMs.
 
-QEMU runs with `-snapshot` (disk writes go to a temporary overlay that is discarded)
-and `-netdev user` (SLIRP). SLIRP turns guest traffic into ordinary host sockets
-owned by the QEMU process, so the host firewall sends it through Tor. The guest
-can't reach the host or the LAN, and it can't leak around Tor.
+## Ordering guarantees (tested in `tests/test_stealth_order.sh`)
+
+- Off: Workstation is verified gone → Gateway → firewall → wipe → vault → host.
+- If the Workstation can't be stopped: Gateway, vault and host lockdown are left as they are, and the command fails loudly.
+- If any step of *on* fails, everything already done is rolled back with the same off sequence.
+- At reboot or poweroff, `kratos-stealth-shutdown.service` runs the off sequence before libvirt stops.
+
+## Boot
+
+1. `kratos-firewall.service` (before `network-pre.target`) loads `offline`, then the saved mode (`normal`). VPN mode stays offline until…
+2. `kratos-mode.service` (after `network-online.target`) brings up WireGuard and loads `vpn`.

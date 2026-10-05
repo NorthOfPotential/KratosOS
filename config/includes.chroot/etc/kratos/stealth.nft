@@ -1,0 +1,32 @@
+#!/usr/sbin/nft -f
+# KratosOS Stealth Mode firewall. Loaded while Stealth Mode is on, removed
+# when it's off.
+#
+#   kx-int  Workstation <-> Gateway only. Never forwarded, never reaches host.
+#   kx-ext  Gateway <-> outside. Forwarded traffic gets STEALTH_MARK; the
+#           active network-mode table (normal/vpn/offline) decides where
+#           marked traffic may go. In vpn mode that's the tunnel only.
+#
+# This chain runs before the mode table (priority filter - 10). Its drops
+# are final; its marks are what the mode table accepts.
+
+define STEALTH_MARK = 0x4b52
+
+table inet kratos_stealth
+delete table inet kratos_stealth
+
+table inet kratos_stealth {
+    chain forward {
+        type filter hook forward priority filter - 10; policy accept;
+        iifname "kx-int" drop
+        oifname "kx-int" drop
+        iifname "kx-ext" oifname != "kx-ext" meta mark set $STEALTH_MARK
+        oifname "kx-ext" ct state established,related meta mark set $STEALTH_MARK
+    }
+
+    chain input {
+        type filter hook input priority filter - 10; policy accept;
+        # The VMs can't talk to services on the host
+        iifname { "kx-ext", "kx-int" } drop
+    }
+}

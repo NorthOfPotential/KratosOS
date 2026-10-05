@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=KratosOS
+Comment=Stealth Mode and privacy controls
+Exec=/usr/local/bin/kratos-tray
+Icon=security-high
+X-KDE-autostart-phase=2
+NoDisplay=true

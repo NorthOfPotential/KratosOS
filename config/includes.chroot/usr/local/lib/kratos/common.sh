@@ -4,10 +4,9 @@
 KRATOS_ETC="${KRATOS_ETC:-/etc/kratos}"
 KRATOS_STATE="${KRATOS_STATE:-/var/lib/kratos}"
 KRATOS_RUN="${KRATOS_RUN:-/run/kratos}"
-KRATOS_MODES=(tor vpn-tor vpn offline)
-TOR_CONTROL_SOCKET="/run/tor/control"
-TOR_COOKIE="/run/tor/control.authcookie"
+KRATOS_MODES=(normal vpn offline)
 
+# shellcheck disable=SC2034  # colours are used by the other modules
 if [[ -t 1 ]]; then
     BOLD=$'\e[1m'; RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; RESET=$'\e[0m'
 else
@@ -49,19 +48,20 @@ is_valid_mode() {
 saved_mode() {
     local m
     m="$(cat "$KRATOS_STATE/mode" 2>/dev/null || true)"
-    if is_valid_mode "$m"; then echo "$m"; else echo tor; fi
+    if is_valid_mode "$m"; then echo "$m"; else echo "${DEFAULT_MODE:-normal}"; fi
 }
 
-# Send commands to Tor's control socket, authenticating with the cookie.
-tor_control() {
-    need_cmd nc od
-    [[ -S "$TOR_CONTROL_SOCKET" && -r "$TOR_COOKIE" ]] || return 1
-    local cookie
-    cookie="$(od -An -tx1 -v "$TOR_COOKIE" | tr -d ' \n')"
-    {
-        printf 'AUTHENTICATE %s\r\n' "$cookie"
-        local c
-        for c in "$@"; do printf '%s\r\n' "$c"; done
-        printf 'QUIT\r\n'
-    } | nc -U -w 5 "$TOR_CONTROL_SOCKET"
+load_config() {
+    # shellcheck source=/dev/null
+    [[ -r "$KRATOS_ETC/kratos.conf" ]] && . "$KRATOS_ETC/kratos.conf"
+    return 0
+}
+
+# The desktop user who invoked sudo/pkexec (empty if unknown).
+desktop_user() {
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        echo "$SUDO_USER"
+    elif [[ -n "${PKEXEC_UID:-}" ]]; then
+        id -nu "$PKEXEC_UID"
+    fi
 }

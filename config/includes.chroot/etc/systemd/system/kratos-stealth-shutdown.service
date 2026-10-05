@@ -1,0 +1,15 @@
+[Unit]
+Description=KratosOS: shut down Stealth Mode cleanly on reboot/poweroff
+# Stopped (ExecStop runs) before libvirtd and networking go away
+After=libvirtd.service network.target kratos-firewall.service
+Requires=libvirtd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/bin/sh -c '[ -e /run/kratos/stealth.active ] && /usr/local/bin/kratos stealth off || true'
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,62 @@
+#!/bin/sh
+# KratosOS image hardening, run inside the image at build time.
+set -e
+
+# ── Services ────────────────────────────────────────────────
+systemctl enable kratos-firewall.service kratos-mode.service kratos-stealth-shutdown.service
+systemctl enable systemd-resolved.service apparmor.service usbguard.service libvirtd.service \
+    clamav-freshclam.service
+# clamd + on-access scanning only run in Stealth Mode (they need ~1 GB RAM)
+systemctl disable clamav-daemon.service clamav-clamonacc.service 2>/dev/null || true
+# Services that announce the machine on the network or track location
+for s in avahi-daemon.service avahi-daemon.socket cups-browsed.service geoclue.service \
+         ModemManager.service; do
+    systemctl mask "$s" 2>/dev/null || true
+done
+# libvirt's default NAT network isn't used; Stealth Mode creates its own
+rm -f /etc/libvirt/qemu/networks/autostart/default.xml
+
+# ── KratosOS state ──────────────────────────────────────────
+install -d -m 755 /var/lib/kratos
+echo normal > /var/lib/kratos/mode
+chmod 755 /usr/local/bin/kratos /usr/local/bin/kratos-tray /usr/local/bin/kratos-panic
+chmod 644 /usr/local/lib/kratos/*.sh /usr/local/lib/kratos/*.tsv
+chmod 755 /usr/local/lib/kratos/harden-whonix.py
+install -d /usr/share/doc/kratos
+
+# ── USBGuard: allow devices in normal use; Stealth Mode blocks new ones ──
+conf=/etc/usbguard/usbguard-daemon.conf
+sed -i -e 's/^ImplicitPolicyTarget=.*/ImplicitPolicyTarget=allow/' \
+       -e 's/^PresentDevicePolicy=.*/PresentDevicePolicy=allow/' \
+       -e 's/^PresentControllerPolicy=.*/PresentControllerPolicy=allow/' "$conf"
+: > /etc/usbguard/rules.conf
+chmod 600 /etc/usbguard/rules.conf
+
+# ── ClamAV on-access scanning of home folders (used in Stealth Mode) ──
+cat >> /etc/clamav/clamd.conf <<'CONF'
+OnAccessIncludePath /home
+OnAccessExcludeUname clamav
+OnAccessExtraScanning yes
+CONF
+
+# ── Sandbox common apps with Firejail ───────────────────────
+firecfg >/dev/null 2>&1 || true
+
+# ── Flathub for apps (Spotify, Discord, Steam, ...) ─────────
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
+
+# ── Whonix signing key, pinned by fingerprint ───────────────
+FPR=916B8D99C38EAF5E8ADC7A2A8D66066A2EEACCDA
+tmp=$(mktemp -d)
+if curl -fsSL https://www.whonix.org/keys/derivative.asc -o "$tmp/key.asc" \
+   && GNUPGHOME="$tmp" gpg -q --import "$tmp/key.asc" \
+   && GNUPGHOME="$tmp" gpg --with-colons --fingerprint | grep -q "^fpr:::::::::$FPR:"; then
+    install -m 644 "$tmp/key.asc" /etc/kratos/whonix-signing-key.asc
+else
+    echo "WARNING: could not fetch/verify the Whonix signing key; users must pass --key" >&2
+fi
+rm -rf "$tmp"
+
+# ── Remove traces of the build ──────────────────────────────
+apt-get clean
+rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*

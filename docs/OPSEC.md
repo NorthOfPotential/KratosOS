@@ -1,33 +1,55 @@
-# OpSec Guide
+# OpSec Guide: Running a Separate Persona
 
-Most real-world deanonymization comes from people's mistakes, not from broken
-anonymity software. KratosOS can stop technical leaks. These rules cover the rest.
+KratosOS gives you a sealed room. These rules keep you from carrying things in
+and out of it. **Most people who get identified are identified by their own
+behaviour, not by broken software.**
 
-## Identity separation
-- **Never** log into an account tied to your real identity in an anonymous session.
-- One identity per session. Reboot (amnesia) between identities. Don't just switch tabs.
-- Don't reuse usernames, passwords, email addresses, avatars or PGP keys across identities.
-- Run `kratos newnym` when you switch tasks within the same identity.
+## The core rule
 
-## Behaviour
-- Your writing style is a fingerprint (stylometry). Keep anonymous writing short and plain, and consider rewording it.
-- Watch for time-zone patterns: when you're active reveals where you live. KratosOS sets the clock to UTC, but your schedule still shows.
-- Don't mention local details (weather, events, prices, slang).
-- Don't maximize the Tor Browser window. Its default size is part of its anti-fingerprinting design.
+> The persona belongs to the Stealth Workstation, not to the computer.
+> It is never used from anywhere else, and nothing flows between the two.
 
-## Files
-- Run `kratos scrub` on every file before sharing it. Photos contain GPS, camera serial numbers and timestamps.
-- Open untrusted documents in `kratos vm`, not on the host.
-- Office documents and PDFs can phone home when opened. Open them offline or in a VM.
+## Accounts & identity
+- Create the persona's accounts **from inside the Workstation**, never from the normal desktop.
+- New username, email, password and avatar. **Never reuse anything** from your real identity.
+- Store the persona's passwords **inside the Workstation** (KeePassXC there), never in your normal password manager.
+- **No phone numbers tied to you.** SMS verification is one of the most common ways accounts get linked to a real person. If a service insists, choose another service.
+- Recovery emails and recovery questions must not point back to you.
+- Don't pay for anything from the persona with a payment method in your name.
 
-## Network
-- Prefer `tor` mode. Use `vpn-tor` if Tor is blocked or attracts attention where you are. Use `vpn` only when you trust the provider more than you need anonymity.
-- Public Wi-Fi + KratosOS is better than home Wi-Fi + KratosOS, but cameras exist.
-- Pay for VPNs anonymously (cash, Monero) or don't use them.
+## Writing & language
+- Your writing style is a fingerprint. Using a different language helps, but it isn't a guarantee.
+- **Translate inside the Workstation**, logged out. If you paste persona text into DeepL, Google Translate or an AI assistant from your normal desktop, your personal account now stores the persona's words.
+- The same goes for grammar checkers, AI tools and anything else that "helps" with text.
+- Don't mention local details (weather, events, prices, local slang).
 
-## Hardware & physical
-- Use a dedicated device if you can. Leave your phone at home or powered off when it matters.
-- `kratos panic` cuts the network and powers off. Remember the shortcut.
-- Use a strong passphrase for persistence (6+ diceware words).
+## Timing
+- If the persona is only active exactly when you are online, the two can be correlated. Vary your sessions.
+- Don't switch between your personal accounts and the persona in quick succession.
 
-## Run `kratos check` at the start of every session.
+## Data crossing the boundary
+- Clipboard and file sharing are technically disabled. **Don't work around them** by retyping persona data on the host or photographing the screen.
+- Don't bring personal files into the Workstation. If you must, run `kratos scrub` on them first.
+- Nothing from the persona goes back to the normal desktop.
+- Open untrusted files only inside the Workstation, ideally with `STEALTH_WORKSTATION=disposable`.
+
+## Browser in the Workstation
+- Use Tor Browser. Consider the "Safer" or "Safest" security level.
+- Don't maximize the window (its default size is part of the anti-fingerprinting design).
+- Don't install extensions.
+- Whonix provides **kloak**, which disguises your typing rhythm. Check that it is installed and running in your Workstation (see the Whonix wiki: "Keystroke Deanonymization").
+
+## Backups
+- Back up the vault file (`/var/lib/kratos/stealth.vault`) **separately** from your personal backups. If they sit on the same drive, finding one means finding both.
+
+## Physical
+- Stealth Mode blocks sleep. Turn Stealth Mode off when you leave.
+- **Panic button:** tray → PANIC. It kills the VMs, locks the vault, cuts the network and powers off.
+- Leave your phone elsewhere (or off) during persona sessions if location matters.
+
+## Session checklist
+1. Network mode as intended (`vpn` if you use VPN-before-Tor)
+2. Stealth Mode on → check that the tray shows **STEALTH ON**
+3. In the Workstation: Whonix's systemcheck says Tor is connected
+4. Do the work. Nothing personal.
+5. Stealth Mode off → check the tray shows **Normal**
