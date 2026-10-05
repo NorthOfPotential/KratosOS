@@ -21,6 +21,9 @@ STEALTH_UNDO="$KRATOS_RUN/stealth.undo"
 STEALTH_NFT="$KRATOS_ETC/stealth.nft"
 HARDEN="$KRATOS_LIB/harden-whonix.py"
 SPICE_DIR="$KRATOS_RUN/spice"
+# Dedicated unprivileged user that owns the persona display and runs the
+# viewer in its own login session, isolated from the normal desktop user.
+STEALTH_USER="${STEALTH_USER:-kstealth}"
 GW="kx-gw"
 WS="kx-ws"
 
@@ -50,10 +53,14 @@ cryptsetup_pass() {
 vault_open() {
     vault_is_open || cryptsetup_pass open "$VAULT_IMG" "$VAULT_MAPPER" \
         || die "could not unlock the stealth vault"
-    install -d -m 711 "$VAULT_MNT"
+    # 0700 root: even while unlocked, no other user can enter the vault or read
+    # the VM disks, which hold the persona's whole filesystem.
+    install -d -m 700 "$VAULT_MNT"
+    chown root:root "$VAULT_MNT"
     mountpoint -q "$VAULT_MNT" \
         || mount -o nodev,nosuid,noexec "/dev/mapper/$VAULT_MAPPER" "$VAULT_MNT" \
         || die "could not mount the stealth vault"
+    chmod 700 "$VAULT_MNT"
 }
 
 vault_close() {
@@ -302,8 +309,11 @@ stealth_on_steps() {
     [[ -e "$VAULT_MNT/workstation.qcow2" ]] || stealth_reset_overlay
 
     info "${BOLD}Starting isolated environment${RESET}"
-    # QEMU (user libvirt-qemu) creates the display sockets here
-    install -d -m 711 -o libvirt-qemu -g libvirt-qemu "$SPICE_DIR"
+    # QEMU (user libvirt-qemu) creates the display sockets here, and the
+    # dedicated kstealth user needs to open them. 0710 root:kstealth: QEMU
+    # (root-group member via libvirt) can write, kstealth can enter, and the
+    # normal desktop user has no access at all.
+    install -d -m 710 -o libvirt-qemu -g "$STEALTH_USER" "$SPICE_DIR"
 
     nft -f "$STEALTH_NFT" || die "could not load the stealth firewall"
     ok "stealth firewall loaded"
@@ -317,15 +327,22 @@ stealth_on_steps() {
     give_display "$WS"
 }
 
-# Hand a VM's display socket to the desktop user (and nobody else).
+# Hand a VM's display socket to the dedicated stealth user ONLY.
+#
+# This is the heart of the host/persona separation. The persona's screen and
+# keyboard are reachable only by kstealth, who owns a separate login session
+# on its own VT (a cage kiosk run by kratos-stealth-seat@.service). Malware as your normal
+# desktop user is a different uid with no access to this socket, so it cannot
+# watch the persona or inject keystrokes. (A root compromise still wins; that
+# is the limit short of a Qubes-style hypervisor. See docs/THREAT_MODEL.md.)
 give_display() {
-    local sock="$SPICE_DIR/$1.sock" user t=0
-    user="$(desktop_user)"
-    [[ -n "$user" ]] || { warn "unknown desktop user; display only available to root"; return 0; }
+    local sock="$SPICE_DIR/$1.sock" t=0
     while [[ ! -S "$sock" ]] && (( t < 10 )); do sleep 1; t=$((t + 1)); done
     [[ -S "$sock" ]] || { warn "display socket for $1 not found"; return 0; }
-    chown "$user" "$sock"
-    chmod 600 "$sock"
+    chown "root:$STEALTH_USER" "$sock"
+    # 0660: connecting to a UNIX socket needs write, so the kstealth group gets
+    # read+write. "Other" (your normal desktop user) gets nothing.
+    chmod 0660 "$sock"
 }
 
 stealth_on() {
@@ -413,12 +430,27 @@ stealth_kill() {
     cryptsetup close "$VAULT_MAPPER" 2>/dev/null || true
 }
 
+# Open the persona display. The viewer runs as kstealth in its own session,
+# NOT in the caller's desktop session, so the persona's window never shares a
+# compositor, clipboard or input path with normal-mode programs. The tray
+# triggers this through the org.kratos.view polkit action.
 stealth_view() {
     local vm="${1:-workstation}" name="$WS"
     [[ "$vm" == gateway ]] && name="$GW"
+    need_root stealth view
     stealth_is_active || die "Stealth Mode is off"
-    [[ -r "$SPICE_DIR/$name.sock" ]] || die "no access to the $vm display (run as your desktop user)"
-    remote-viewer --title "KratosOS Stealth: $vm" "spice+unix://$SPICE_DIR/$name.sock" >/dev/null 2>&1 &
+    [[ -S "$SPICE_DIR/$name.sock" ]] || die "no display socket for $vm"
+    # kratos-stealth-seat@.service runs a cage (kiosk Wayland) session for kstealth on its own VT;
+    # launch the viewer into that session's bus, locked to this one socket.
+    if ! loginctl --no-legend list-sessions 2>/dev/null | grep -qw "$STEALTH_USER"; then
+        info "Starting the isolated stealth session (switch VTs with Ctrl+Alt+F2)..."
+        systemctl start "kratos-stealth-seat@${name}.service" \
+            || die "could not start the isolated stealth session"
+        return 0
+    fi
+    runuser -u "$STEALTH_USER" -- \
+        remote-viewer --title "KratosOS Stealth: $vm" \
+        "spice+unix://$SPICE_DIR/$name.sock" >/dev/null 2>&1 &
     disown
 }
 

@@ -1,0 +1,45 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck nftables qemu-utils python3
+      - name: Create test users for the isolation attack suite
+        run: |
+          sudo groupadd -r kstealth || true
+          sudo useradd -r -g kstealth -s /usr/sbin/nologin kstealth || true
+          sudo useradd -m mallory || true
+      - name: Run the full suite
+        run: sudo ATTACKER=mallory tests/run.sh
+
+  build-iso:
+    # Builds the installer ISO so you never need a Linux machine: download it
+    # from this job's Artifacts. Runs on manual dispatch and tags.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install live-build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y live-build
+      - name: Build ISO
+        run: sudo ./build.sh
+      - name: Checksums
+        run: sha256sum kratosos-*.iso | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kratosos-iso
+          path: |
+            kratosos-*.iso
+            SHA256SUMS
+          retention-days: 14

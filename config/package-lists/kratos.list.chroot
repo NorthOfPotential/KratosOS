@@ -65,6 +65,8 @@ libvirt-daemon-system
 libvirt-clients
 virt-viewer
 virt-manager
+cage
+seatd
 ovmf
 cryptsetup
 gnupg

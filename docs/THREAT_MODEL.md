@@ -31,13 +31,38 @@ Tor with a separate persona and separate accounts = both. Stealth Mode is built 
 | Proton VPN app kill switch you have to trust | nftables kill switch, covered by `tests/run.sh`; Gateway traffic can only leave through the tunnel |
 | Turning things off in the wrong order is possible | Off = Workstation first, verified; nothing else proceeds if it won't stop |
 
+## Isolation between your normal session and the persona
+
+Malware running as your **normal desktop user** is the realistic everyday
+threat (a bad download, a malicious document). KratosOS contains it:
+
+- The persona's display runs as a dedicated `kstealth` user in its **own login
+  session on its own VT** (a `cage` kiosk). Your normal session and the persona
+  never share a compositor, clipboard or input path.
+- The display socket is `root:kstealth` `0660`, so only `kstealth` and root can
+  watch the screen or inject keystrokes. Your normal user is "other": no access.
+- The vault (the persona's whole filesystem) is `0700 root` even while unlocked;
+  the VM disks are `0600 root`.
+- `hidepid=2` hides the QEMU processes and the `kstealth` session from your
+  normal user entirely, so even the socket paths don't leak via `ps`.
+- Config, VM definitions and the `kratos` tool are root-owned, so normal-user
+  malware can't weaken the next Stealth session.
+
+`tests/attack_isolation.sh` plays this attacker: as an unprivileged user it
+tries to read the vault and VM disks, open the display socket, read the
+passphrase/undo files, and tamper with the VM definitions, config and tool.
+Every attempt must fail, and the suite is self-checked (it includes a positive
+control proving `kstealth` *can* use the display, and we verified it flips to
+FAIL when a permission is deliberately weakened).
+
 ## What it still does NOT protect against
 
-**The host is still underneath the persona.** KratosOS is a much smaller, cleaner
-host than Windows, but if the host is compromised, the attacker can see the
-Workstation's window and keystrokes. Qubes OS reduces this further with a
-Xen hypervisor and an isolated GUI layer. KratosOS trades some of that for being
-a normal everyday computer. Keep the host updated, and don't install sketchy
+**A root compromise of the host still wins.** The persona runs on this host, so
+malware that gains **root** can see the Workstation's window and keystrokes. The
+isolation above stops your *normal user* from reaching the persona; it does not
+stop root. Qubes OS reduces even the root case with a Xen hypervisor and an
+isolated GUI layer. KratosOS trades that for being a normal everyday computer.
+Keep the host updated, and don't install sketchy
 software on it.
 
 | Threat | Why it remains |
@@ -55,7 +80,8 @@ software on it.
 
 | Vulnerability | What can happen | Mitigation in KratosOS | Your part |
 |---|---|---|---|
-| Host compromise | Host observes the VMs | Hardened minimal host, no telemetry | Keep updated, install little |
+| Normal-user malware observes the persona | Watch screen, inject keys, read vault | Dedicated kstealth user + own session, `hidepid`, root-owned vault/config (tested by `attack_isolation.sh`) | Don't run untrusted code as root |
+| Root compromise of the host | Full access, incl. the VMs | Reduced attack surface only; not eliminated (needs Qubes) | Keep updated, install little |
 | VM escape | Guest attacks host | KVM, no integration devices | Updates |
 | Host artifacts | Evidence VMs existed | Encrypted vault, transient VMs, logs shredded, RAM-only journal, swap off | Full disk encryption at install |
 | VPN failure | Gateway reaches Tor outside VPN | Kill switch at firewall level; optional `STEALTH_REQUIRE_VPN` | Test the kill switch once |

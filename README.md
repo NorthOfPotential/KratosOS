@@ -77,6 +77,11 @@ Full guide: [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ## Build
 
+**No Linux machine?** Push this repo to GitHub and run the **CI** workflow from
+the Actions tab; download the built ISO from its Artifacts. Or build locally in
+WSL2. Full steps, plus how to try it in VirtualBox or from a USB stick without
+installing: [`docs/BUILD-ON-WINDOWS.md`](docs/BUILD-ON-WINDOWS.md).
+
 On Debian 13 / Ubuntu 24.04+:
 
 ```bash
@@ -91,9 +96,12 @@ sudo tests/run.sh
 ```
 
 Runs shellcheck, nftables syntax checks, the Whonix isolation-check tests, the
-Stealth Mode ordering tests (simulated libvirt), migration tests, and
-**functional firewall tests** in a throwaway network namespace. Those watch the
-interface to confirm which packets actually leave the machine in each mode.
+Stealth Mode ordering tests (simulated libvirt), migration tests,
+**functional firewall tests** in a throwaway network namespace (watching the
+interface to confirm which packets actually leave in each mode), and a
+**simulated attack** (`tests/attack_isolation.sh`) in which an unprivileged
+"malware" user tries and fails to reach the persona's screen, disks, secrets
+and config.
 
 ## Layout
 

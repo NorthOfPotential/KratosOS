@@ -21,8 +21,39 @@ install -d -m 755 /var/lib/kratos
 echo normal > /var/lib/kratos/mode
 chmod 755 /usr/local/bin/kratos /usr/local/bin/kratos-tray /usr/local/bin/kratos-panic
 chmod 644 /usr/local/lib/kratos/*.sh /usr/local/lib/kratos/*.tsv
-chmod 755 /usr/local/lib/kratos/harden-whonix.py
+chmod 755 /usr/local/lib/kratos/harden-whonix.py /usr/local/lib/kratos/stealth-seat
 install -d /usr/share/doc/kratos
+
+# ── Dedicated Stealth user (owns the persona display + its own session) ─────
+# System user, no login shell, locked password. The persona viewer runs as
+# this user on its own VT, so malware in your normal desktop session (a
+# different uid) cannot see the persona screen, inject keys, or read the vault.
+getent group kstealth >/dev/null || groupadd -r kstealth
+getent passwd kstealth >/dev/null || \
+    useradd -r -g kstealth -G kvm -s /usr/sbin/nologin -d /var/lib/kratos/stealth-home kstealth
+install -d -m 700 -o kstealth -g kstealth /var/lib/kratos/stealth-home
+
+# ── Hide processes between users ────────────────────────────
+# With hidepid=2 a normal user can't see the QEMU processes, their command
+# lines (which name the display sockets) or the kstealth session at all.
+# Members of the 'proc' group (only root) keep full visibility.
+getent group proc >/dev/null || groupadd -r proc
+mkdir -p /etc/systemd/system/proc-hidepid.service.d
+install -d /etc/systemd/system
+cat > /etc/systemd/system/proc-hidepid.service <<'UNIT'
+[Unit]
+Description=Remount /proc with hidepid=2 (hide other users' processes)
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target
+[Service]
+Type=oneshot
+ExecStart=/bin/mount -o remount,hidepid=invisible,gid=proc /proc
+RemainAfterExit=yes
+[Install]
+WantedBy=sysinit.target
+UNIT
+systemctl enable proc-hidepid.service
 
 # ── USBGuard: allow devices in normal use; Stealth Mode blocks new ones ──
 conf=/etc/usbguard/usbguard-daemon.conf

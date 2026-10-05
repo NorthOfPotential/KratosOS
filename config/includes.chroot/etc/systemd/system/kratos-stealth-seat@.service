@@ -1,0 +1,24 @@
+[Unit]
+Description=KratosOS isolated Stealth display session (%i)
+After=systemd-logind.service
+ConditionPathExists=/run/kratos/spice/%i.sock
+
+[Service]
+User=kstealth
+Group=kstealth
+PAMName=login
+TTYPath=/dev/tty7
+StandardInput=tty
+StandardOutput=journal
+TTYReset=yes
+TTYVHangup=yes
+# Own runtime dir for the Wayland session
+RuntimeDirectory=user/%U
+ExecStart=/usr/local/lib/kratos/stealth-seat %i
+Restart=no
+# This session must never reach the normal user's files
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=graphical.target

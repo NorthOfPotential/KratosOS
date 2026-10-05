@@ -10,7 +10,8 @@ run() { "$@" || status=1; }
 
 step "shellcheck"
 run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
-    $inc/usr/local/lib/kratos/*.sh build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
+    $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
+    build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
 step "nftables syntax"
 tmp="$(mktemp -d)"
@@ -33,6 +34,13 @@ run tests/test_stealth_order.sh
 
 step "migration"
 run tests/test_migrate.sh
+
+step "host/persona isolation (simulated attack)"
+if [[ $EUID -eq 0 ]] && id "${ATTACKER:-mallory}" >/dev/null 2>&1 && id kstealth >/dev/null 2>&1; then
+    run tests/attack_isolation.sh
+else
+    echo "skipped (needs root + 'mallory' and 'kstealth' users)"
+fi
 
 step "firewall behaviour (network namespace)"
 if [[ $EUID -eq 0 ]]; then

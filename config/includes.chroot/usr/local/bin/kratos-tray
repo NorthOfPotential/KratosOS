@@ -95,7 +95,7 @@ class Tray(QSystemTrayIcon):
         self.stealth.triggered.connect(self.toggle_stealth)
         self.menu.addAction(self.stealth)
         self.view = QAction("Open stealth desktop")
-        self.view.triggered.connect(lambda: subprocess.Popen([KRATOS, "stealth", "view"]))
+        self.view.triggered.connect(lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"]))
         self.menu.addAction(self.view)
         self.menu.addSeparator()
 
@@ -164,7 +164,7 @@ class Tray(QSystemTrayIcon):
         if not ok or not pw:
             return
         self._run("Stealth Mode: ON", ["stealth", "on", "--passphrase-stdin"], pw,
-                  on_success=lambda: subprocess.Popen([KRATOS, "stealth", "view"]))
+                  on_success=lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"]))
         del pw
 
     def set_mode(self, mode):
