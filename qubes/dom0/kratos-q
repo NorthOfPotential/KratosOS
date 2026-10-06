@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""kratos-q — KratosOS Stealth Mode driver for a Qubes OS dom0.
+
+This is the "KratosOS on Qubes" path: instead of orchestrating our own libvirt
+VMs on one Linux kernel, it drives Qubes-Whonix, so the isolation boundary is
+the Xen hypervisor and dom0 — the real fix for a host root/hypervisor exploit.
+
+Stealth ON  : ensure sys-whonix (Tor) is up, then launch a fresh DISPOSABLE
+              qube from the kratos-ws template (amnesic persona workstation).
+Stealth OFF : kill and remove that disposable — nothing persists.
+audit       : verify the persona really is sectioned off (netvm = sys-whonix,
+              and the qrexec policy denies clipboard/file/RPC out).
+
+Command construction and the policy audit are pure functions so they can be
+unit-tested off a Qubes host; main() executes them with subprocess. Live use
+requires an actual Qubes OS dom0 with Whonix templates installed.
+"""
+import subprocess
+import sys
+
+POLICY_PATH = "/etc/qubes/policy.d/30-kratos.policy"
+WS_TEMPLATE = "kratos-ws"          # disposable template (tagged kratos-persona)
+WS_LIVE = "kratos-ws-live"         # the running disposable's name
+GATEWAY = "sys-whonix"
+PERSONA_TAG = "kratos-persona"
+PERSONA_APP = "torbrowser"         # launched inside the disposable
+
+# Services that must NOT be allowed out of a persona qube.
+REQUIRED_DENIES = (
+    "qubes.ClipboardPaste",
+    "qubes.Filecopy",
+    "qubes.OpenInVM",
+    "qubes.OpenURL",
+    "qubes.VMShell",
+)
+
+
+# ---- pure command builders (argv lists) ----
+
+def build_stealth_on():
+    return [
+        ["qvm-start", "--skip-if-running", GATEWAY],
+        ["qvm-create", "--class", "DispVM", "--template", WS_TEMPLATE,
+         "--label", "red", WS_LIVE],
+        ["qvm-prefs", WS_LIVE, "netvm", GATEWAY],
+        ["qvm-start", WS_LIVE],
+        ["qvm-run", WS_LIVE, PERSONA_APP],
+    ]
+
+
+def build_stealth_off():
+    # Kill first, then remove, so the disposable's disk is discarded (amnesic).
+    return [
+        ["qvm-kill", WS_LIVE],
+        ["qvm-remove", "-f", WS_LIVE],
+    ]
+
+
+def build_view():
+    return [["qvm-run", WS_LIVE, PERSONA_APP]]
+
+
+def build_provision():
+    return [
+        ["qubesctl", "top.enable", "kratos", "saltenv=user"],
+        ["qubesctl", "--all", "state.apply", "saltenv=user"],
+    ]
+
+
+# ---- pure policy audit ----
+
+def audit_policy(policy_text):
+    """Return a list of problems with the persona isolation policy. Empty = ok.
+
+    Each sensitive service must be denied FROM the persona tag to @anyvm, and
+    no earlier line may allow it (first match wins in qrexec)."""
+    problems = []
+    rules = []
+    for raw in policy_text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        service, _arg, src, dst, action = parts[0], parts[1], parts[2], parts[3], parts[4]
+        rules.append((service, src, dst, action.split()[0]))
+
+    for svc in REQUIRED_DENIES:
+        verdict = None
+        for service, src, dst, action in rules:
+            svc_base = service.split("+", 1)[0]
+            matches = (svc_base == svc or service in ("*", svc)) \
+                and src in (PERSONA_TAG_SEL, "*") \
+                and dst in ("@anyvm", "*")
+            if matches:
+                verdict = action
+                break
+        if verdict != "deny":
+            problems.append(f"{svc}: persona->@anyvm is {verdict or 'not matched'} (must be deny)")
+    return problems
+
+
+PERSONA_TAG_SEL = f"@tag:{PERSONA_TAG}"
+
+
+# ---- executor ----
+
+def run(cmds, dry=False):
+    for argv in cmds:
+        print("+ " + " ".join(argv))
+        if dry:
+            continue
+        r = subprocess.run(argv)
+        if r.returncode != 0:
+            # off-path commands are best-effort; on-path must succeed
+            print(f"  (exit {r.returncode})", file=sys.stderr)
+            return r.returncode
+    return 0
+
+
+def have_qubes():
+    return subprocess.run(["sh", "-c", "command -v qvm-ls >/dev/null"]).returncode == 0
+
+
+def cmd_audit():
+    rc = 0
+    try:
+        with open(POLICY_PATH, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        print(f"audit: policy not installed at {POLICY_PATH}", file=sys.stderr)
+        return 1
+    problems = audit_policy(text)
+    if problems:
+        rc = 1
+        for p in problems:
+            print(f"  FAIL  {p}")
+    else:
+        print("  OK    persona clipboard/file/RPC egress denied by policy")
+    if have_qubes():
+        net = subprocess.run(["qvm-prefs", WS_TEMPLATE, "netvm"],
+                             capture_output=True, text=True).stdout.strip()
+        if net == GATEWAY:
+            print(f"  OK    {WS_TEMPLATE} routes only through {GATEWAY}")
+        else:
+            print(f"  FAIL  {WS_TEMPLATE} netvm is '{net}', expected {GATEWAY}")
+            rc = 1
+    else:
+        print("  note  not on a Qubes dom0; checked policy file only")
+    return rc
+
+
+def main(argv=None):
+    argv = argv if argv is not None else sys.argv[1:]
+    cmd = argv[0] if argv else "status"
+    dry = not have_qubes()
+    if dry and cmd in ("on", "off", "view", "provision"):
+        print("kratos-q: not on a Qubes dom0 — showing the commands that would run:\n")
+    if cmd == "on":
+        return run(build_stealth_on(), dry)
+    if cmd == "off":
+        return run(build_stealth_off(), dry)
+    if cmd == "view":
+        return run(build_view(), dry)
+    if cmd == "provision":
+        return run(build_provision(), dry)
+    if cmd == "audit":
+        return cmd_audit()
+    print(__doc__.splitlines()[0])
+    print("usage: kratos-q {on|off|view|provision|audit}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

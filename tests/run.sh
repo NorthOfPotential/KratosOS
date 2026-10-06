@@ -20,11 +20,15 @@ for f in "$inc"/etc/kratos/modes/*.nft "$inc"/etc/kratos/stealth.nft; do
     sed "s|/run/kratos/vpn.nft|$tmp/defs|" "$f" > "$tmp/x.nft"
     if nft -c -f "$tmp/x.nft"; then echo "ok   $f"; else echo "FAIL $f"; status=1; fi
 done
+# workstation Nym ruleset (uid placeholder substituted)
+sed "s/@NYM_UID@/1000/" workstation/nym/nym.nft > "$tmp/nym.nft"
+if nft -c -f "$tmp/nym.nft"; then echo "ok   workstation/nym/nym.nft"; else echo "FAIL nym.nft"; status=1; fi
 rm -rf "$tmp"
 
 step "python syntax"
 run python3 -m py_compile $inc/usr/local/bin/kratos-tray $inc/usr/local/bin/kratos-decoy $inc/usr/local/lib/kratos/harden-whonix.py $inc/usr/local/lib/kratos/stylo.py && echo ok
 run python3 -m json.tool $inc/etc/firefox/policies/policies.json >/dev/null && echo "ok   policies.json"
+run python3 -c "import ast,sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]" qubes/dom0/kratos-q workstation/nym/kratos-nym && echo "ok   kratos-q, kratos-nym"
 
 step "Whonix isolation check"
 run python3 -m unittest tests.test_harden_whonix
@@ -48,12 +52,22 @@ run python3 -m unittest tests.test_stylo
 step "anti-fingerprint defaults"
 run python3 -m unittest tests.test_fingerprint
 
+step "Qubes layer (driver + persona policy audit)"
+run python3 -m unittest tests.test_qubes
+
 step "boot/firmware integrity"
 run tests/bootcheck_test.sh
 
 step "traffic shaping (network namespace)"
 if [[ $EUID -eq 0 ]]; then
     run unshare -rn bash tests/corr_test.sh
+else
+    echo "skipped (needs root)"
+fi
+
+step "Nym mixnet enforcement (network namespace)"
+if [[ $EUID -eq 0 ]]; then
+    run unshare -n bash tests/nym_test.sh
 else
     echo "skipped (needs root)"
 fi

@@ -1,0 +1,49 @@
+#!/usr/sbin/nft -f
+# Fail-closed firewall for the persona WORKSTATION when using the Nym mixnet.
+#
+# Installs INSIDE the persona workstation (Whonix-Workstation or a Qubes
+# kratos-ws disposable), not on the host. It forces every application through
+# the local Nym SOCKS5 client and drops anything that tries to go direct, the
+# same fail-closed idea as the Tor transparent proxy:
+#
+#   app --SOCKS5--> 127.0.0.1:1080 (nym-socks5-client, uid kratos-nym)
+#                       |
+#                       +--> Nym mixnet  (constant cover traffic + per-message
+#                            random delay = unobservability vs a global adversary)
+#
+# Only the kratos-nym user may open outbound connections. Everything else is
+# dropped, so a misconfigured or malicious app cannot escape the mixnet.
+#
+# NYM_UID is substituted at install time (id -u kratos-nym).
+
+define NYM_UID = @NYM_UID@
+
+table inet kratos_nym
+delete table inet kratos_nym
+
+table inet kratos_nym {
+    chain output {
+        type filter hook output priority filter; policy drop;
+
+        oifname "lo" accept                      # apps reach the SOCKS port here
+        ct state established,related accept
+        meta nfproto ipv6 drop                   # no IPv6 leaks
+
+        # Only the Nym client itself may talk to the network.
+        meta skuid $NYM_UID meta l4proto { tcp, udp } accept
+
+        # DHCP so the workstation can get its (gateway-only) lease.
+        udp sport 68 udp dport 67 accept
+
+        # Everything else is an escape attempt.
+        meta l4proto tcp reject with tcp reset
+        reject
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+    }
+}

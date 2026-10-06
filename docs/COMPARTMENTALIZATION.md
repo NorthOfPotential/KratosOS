@@ -44,18 +44,20 @@ exploit still wins.
 The strongest version of KratosOS is not "KratosOS instead of Qubes," it's
 **KratosOS's usability on top of Qubes' isolation**. The planned path:
 
-1. **KratosOS-on-Qubes profile.** Ship the `kratos` tool, the Stealth
-   orchestration, the OpSec tools and the migration helper as a package that
-   runs on a Qubes host, driving **Qubes-Whonix** (`sys-whonix` gateway +
-   disposable workstation qubes) instead of our own libvirt VMs. You get the
-   Windows-like normal experience in an AppVM and the one-toggle persona, but
-   the isolation boundary is Xen, not one Linux kernel.
+1. **KratosOS-on-Qubes profile — SHIPPED (see `qubes/` and docs/QUBES.md).**
+   A Salt formula, a qrexec persona-isolation policy, and a dom0 driver
+   (`kratos-q`) that drives **Qubes-Whonix** (`sys-whonix` gateway + a
+   disposable workstation qube) instead of our libvirt VMs. The isolation
+   boundary becomes Xen + dom0, not one Linux kernel. Driver and policy logic
+   are unit-tested (`tests/test_qubes.py`); the live dom0 path is not yet
+   exercised in this project.
 2. **Stronger KVM sectioning in the meantime:** move the Gateway and Workstation
    to separate non-root QEMU uids, add seccomp/`-sandbox` confinement, and run
    `swtpm`/microVM profiles to cut the device surface further.
 3. **Verified boot** under both (measured boot + Secure Boot shim) so the host
    you trust is the host that booted.
 
-Until (1) lands, the honest guidance stands: **for a threat model where a
-targeted host exploit is realistic, run Qubes + Whonix today.** KratosOS is the
+The honest guidance stands: **for a threat model where a targeted host
+exploit is realistic, use the Qubes tier (`qubes/`, docs/QUBES.md) — or plain
+Qubes + Whonix — rather than the single-kernel KVM tier.** KratosOS is the
 more usable, lower-assurance cousin, and it says so.

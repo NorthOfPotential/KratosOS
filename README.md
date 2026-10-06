@@ -119,7 +119,9 @@ config/includes.chroot/
   usr/local/bin/kratos-tray      tray icon with the Stealth Mode toggle
   usr/local/lib/kratos/          implementation (stealth.sh, net.sh, ...)
 docs/                            threat model, OpSec, architecture, migration,
-                                 compartmentalization, correlation-resistance
+                                 compartmentalization, correlation-resistance, Qubes
+qubes/                           KratosOS-on-Qubes: Salt formula, qrexec policy, dom0 driver
+workstation/nym/                 Nym mixnet client + fail-closed firewall (installs in the persona VM)
 tests/                           test suite
 ```
 

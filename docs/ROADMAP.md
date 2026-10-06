@@ -27,6 +27,6 @@
 - [x] Stylometry normalizer `kratos stylo` + always-on timing guard in Stealth
 - [x] `kratos bootcheck` — /boot, ESP and TPM-PCR tamper detection
 - [x] Anti-fingerprint audit: defaults must blend (`kratos fingerprint`, tests)
-- [ ] KratosOS-on-Qubes profile (drive Qubes-Whonix instead of local KVM) — the real host-exploit fix
-- [ ] Wire the Nym mixnet mode end-to-end (currently experimental/off)
+- [x] KratosOS-on-Qubes profile (qubes/: Salt + qrexec policy + kratos-q driver) — logic tested; live dom0 run pending
+- [x] Nym mixnet integration (workstation/nym/: config + fail-closed firewall, tested) — live Nym network run pending
 - [ ] Separate non-root QEMU uids + seccomp sandbox per VM

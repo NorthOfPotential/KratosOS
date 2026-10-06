@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""kratos-nym — route persona apps through the Nym mixnet (inside the workstation).
+
+Nym is a Loopix-style mixnet: the client sends a *constant* stream of cover
+traffic and each real message is delayed a random amount through several mix
+nodes, so an observer can't tell when or whether you're communicating
+(unobservability). It is the only option in KratosOS with a real story against
+a GLOBAL traffic-correlation adversary — at the cost of seconds of latency, so
+it suits messaging, not browsing.
+
+  init     write a nym-socks5-client config for a chosen service provider
+  run      exec nym-socks5-client (foreground; use the systemd unit normally)
+  firewall load nym.nft so only the nym user can reach the network (fail-closed)
+
+LIVE USE requires the `nym-socks5-client` binary and a reachable Nym gateway;
+this tool generates the config and enforcement. Point apps at SOCKS5
+127.0.0.1:1080 (Tor Browser: set network.proxy to that, or use the proxied
+profile). See docs/CORRELATION-RESISTANCE.md.
+"""
+import argparse
+import os
+import subprocess
+import sys
+
+SOCKS_PORT = 1080
+CONFIG_DIR = os.path.expanduser("~/.nym/socks5-clients")
+
+
+def build_config(client_id, provider, port=SOCKS_PORT):
+    """Return the TOML config body for nym-socks5-client (subset we pin)."""
+    return (
+        "[socks5]\n"
+        f'listening_port = {port}\n'
+        f'provider_mix_address = "{provider}"\n'
+        "\n[logging]\n"
+        'disabled = true\n'            # no on-disk activity logs in the persona
+        "\n[debug]\n"
+        # Loopix cover traffic ON — this is the whole point; never disable it.
+        "disable_loop_cover_traffic_stream = false\n"
+        "disable_main_poisson_packet_distribution = false\n"
+    )
+
+
+def build_init_cmd(client_id, provider):
+    return ["nym-socks5-client", "init", "--id", client_id, "--provider", provider]
+
+
+def build_run_cmd(client_id):
+    return ["nym-socks5-client", "run", "--id", client_id]
+
+
+def cmd_init(a):
+    if not a.provider:
+        sys.exit("kratos-nym init: --provider <mix-address> is required "
+                 "(a Nym network requester address)")
+    os.makedirs(os.path.join(CONFIG_DIR, a.id), exist_ok=True)
+    cfg = os.path.join(CONFIG_DIR, a.id, "config.toml")
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write(build_config(a.id, a.provider))
+    os.chmod(cfg, 0o600)
+    print(f"wrote {cfg}")
+    if _have("nym-socks5-client"):
+        subprocess.run(build_init_cmd(a.id, a.provider), check=False)
+    else:
+        print("note: nym-socks5-client not installed; config written, install it to run")
+
+
+def cmd_run(a):
+    if not _have("nym-socks5-client"):
+        sys.exit("nym-socks5-client not installed")
+    os.execvp("nym-socks5-client", build_run_cmd(a.id))
+
+
+def cmd_firewall(a):
+    here = os.path.dirname(os.path.abspath(__file__))
+    rules = open(os.path.join(here, "nym.nft"), encoding="utf-8").read()
+    uid = subprocess.run(["id", "-u", "kratos-nym"], capture_output=True, text=True).stdout.strip()
+    if not uid:
+        sys.exit("firewall: user 'kratos-nym' does not exist (create it to run the client)")
+    rules = rules.replace("@NYM_UID@", uid)
+    subprocess.run(["nft", "-f", "-"], input=rules, text=True, check=True)
+    print("nym fail-closed firewall loaded")
+
+
+def _have(prog):
+    return subprocess.run(["sh", "-c", f"command -v {prog} >/dev/null"]).returncode == 0
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pi = sub.add_parser("init"); pi.add_argument("--id", default="kratos"); pi.add_argument("--provider")
+    pr = sub.add_parser("run"); pr.add_argument("--id", default="kratos")
+    sub.add_parser("firewall")
+    a = p.parse_args(argv)
+    {"init": cmd_init, "run": cmd_run, "firewall": cmd_firewall}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    main()

@@ -18,6 +18,7 @@ jobs:
           sudo groupadd -r kstealth || true
           sudo useradd -r -g kstealth -s /usr/sbin/nologin kstealth || true
           sudo useradd -m mallory || true
+          sudo useradd -r kratos-nym || true
       - name: Run the full suite
         run: sudo ATTACKER=mallory tests/run.sh
 

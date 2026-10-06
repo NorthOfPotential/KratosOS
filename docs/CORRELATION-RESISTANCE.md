@@ -59,10 +59,14 @@ unlinkability. The cost is high latency (seconds), so it suits messaging, not
 browsing. In KratosOS this routes the persona through Nym instead of (or in
 front of) Tor.
 
-> **Status: experimental and not yet wired end-to-end.** It needs the Nym client
-> in the Workstation and a mix/exit path; `kratos corr status` warns about this.
-> It is on the roadmap, documented now so the design is honest about where real
-> GPA resistance comes from — a mixnet, not padding on Tor.
+> **Status: integration shipped, live path untested here.** `workstation/nym/`
+> provides `kratos-nym` (writes a nym-socks5-client config with Loopix cover
+> traffic forced ON) and `nym.nft`, a fail-closed workstation firewall that
+> lets ONLY the `kratos-nym` user reach the network — so apps either go through
+> the mixnet or nowhere (tested in `tests/nym_test.sh`). It still needs the
+> real `nym-socks5-client` binary and a reachable Nym gateway, which this
+> project has not run end-to-end. Install it inside the persona workstation
+> (see that folder's header and docs/QUBES.md).
 
 ### 4. Layering (you → VPN → Tor, and beyond)
 KratosOS already supports **you → VPN (host, `mode vpn`) → Tor (Gateway)**: your
