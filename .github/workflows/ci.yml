@@ -32,7 +32,9 @@ jobs:
       - name: Install live-build
         run: |
           sudo apt-get update
-          sudo apt-get install -y live-build
+          # debian-archive-keyring: lets debootstrap verify the Debian (trixie)
+          # Release when building a Debian image on this Ubuntu runner.
+          sudo apt-get install -y live-build debian-archive-keyring
       - name: Build ISO
         run: sudo ./build.sh
       - name: Checksums

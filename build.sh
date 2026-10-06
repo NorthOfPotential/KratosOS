@@ -32,13 +32,24 @@ KERNEL_PARAMS="init_on_alloc=1 init_on_free=1 page_alloc.shuffle=1 slab_nomerge 
 randomize_kstack_offset=on vsyscall=none debugfs=off ipv6.disable=1 intel_iommu=on \
 amd_iommu=force_isolation iommu.strict=1 apparmor=1 security=apparmor quiet splash"
 
-# Note: --image-name and --updates were dropped in current live-build; the
-# security+updates archives are enabled by default, and the output image is
-# named live-image-* which we rename below.
+# Notes:
+#  * --mode debian + explicit Debian mirrors: on an Ubuntu host, live-build
+#    otherwise builds a *ubuntu* system and looks for the 'trixie' suite on
+#    archive.ubuntu.com (where it doesn't exist), failing bootstrap. Forcing
+#    Debian mode and deb.debian.org fixes that regardless of build host.
+#  * --image-name and --updates were dropped in current live-build; the
+#    security+updates archives are on by default. The output is named
+#    live-image-* which we rename below.
 lb config \
+    --mode debian \
     --distribution trixie \
     --architectures amd64 \
     --archive-areas "main contrib non-free non-free-firmware" \
+    --mirror-bootstrap http://deb.debian.org/debian/ \
+    --mirror-chroot http://deb.debian.org/debian/ \
+    --mirror-chroot-security http://deb.debian.org/debian-security/ \
+    --mirror-binary http://deb.debian.org/debian/ \
+    --mirror-binary-security http://deb.debian.org/debian-security/ \
     --binary-images iso-hybrid \
     --debian-installer none \
     --bootappend-live "boot=live components ${KERNEL_PARAMS}" \
