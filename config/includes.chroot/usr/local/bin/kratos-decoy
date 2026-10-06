@@ -13,7 +13,9 @@ adversary and, if the rate/pattern is unusual, it is itself a fingerprint.
 Prefer a mixnet (Nym) for real unobservability. See
 docs/CORRELATION-RESISTANCE.md.
 """
+import os
 import random
+import signal
 import socket
 import sys
 import time
@@ -42,10 +44,30 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dest = (host, int(port))
     payload = bytes(PKT)
+    sent = 0
+
+    # For tests: on exit, report how many packets we paced out. This measures
+    # the decoy's *send rate* without depending on a listener or on loopback
+    # delivery (UDP sendto succeeds whether or not anyone is listening).
+    count_file = os.environ.get("KRATOS_DECOY_COUNT_FILE")
+
+    def report(*_):
+        if count_file:
+            try:
+                with open(count_file, "w") as f:
+                    f.write(str(sent))
+            except OSError:
+                pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, report)
+    signal.signal(signal.SIGINT, report)
+
     next_t = time.monotonic()
     while True:
         try:
             sock.sendto(payload, dest)
+            sent += 1
         except OSError:
             pass
         # Steady average rate, with +/-20% jitter so it isn't a metronome.
