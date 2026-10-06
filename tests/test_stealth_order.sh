@@ -49,7 +49,10 @@ scenario() {
         nft() { echo "nft $*" >> "$log"; }
         systemctl() { :; }
         python3() { return 0; }
-        host_lockdown() { : > "$STEALTH_UNDO"; undo "echo host-restored >> '$log'"; echo "host-lockdown" >> "$log"; }
+        host_lockdown() { : > "$STEALTH_UNDO"; echo "host-lockdown" >> "$log"; }
+        # host_restore's real argv-dispatch is covered by tests/test_undo_safe.sh;
+        # here we only need to observe WHEN it runs relative to the VM/vault steps.
+        host_restore() { echo "host-restored" >> "$log"; }
         vault_open() { echo "vault-open" >> "$log"; }
         vault_close() { echo "vault-close" >> "$log"; }
         vault_is_open() { return 0; }

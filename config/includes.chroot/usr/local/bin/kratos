@@ -3,6 +3,19 @@
 # kratos - KratosOS privacy & Stealth Mode control tool
 set -euo pipefail
 
+# ── Trusted execution environment ───────────────────────────────────────────
+# This tool runs as root (via pkexec/sudo). pkexec and Debian's sudo already
+# sanitise the environment, but we reconstruct a known-good one here too, so a
+# fixed PATH and the absence of loader/interpreter hijack variables never
+# depend on how we were invoked. Closes the $PATH-attack and
+# environment-injection classes regardless of caller.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
+      LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
+      PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONWARNINGS \
+      PERL5LIB PERLLIB RUBYLIB \
+      LIBVIRT_DEFAULT_URI 2>/dev/null || true
+
 KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 
 # shellcheck source=common.sh

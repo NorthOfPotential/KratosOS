@@ -124,6 +124,7 @@ corr_main() {
         status) corr_status ;;
         shape)
             need_root corr shape
+            serialize
             case "${1:-}" in
                 on) corr_shape_on ;;
                 off) corr_shape_off ;;

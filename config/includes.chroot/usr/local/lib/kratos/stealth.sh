@@ -117,6 +117,7 @@ stealth_setup() {
         esac
     done
     need_root stealth setup
+    serialize
     load_config
     need_cmd gpg tar xz qemu-img virsh cryptsetup python3
     [[ -r "$archive" ]] || die "usage: kratos stealth setup <Whonix-*.libvirt.xz> [--sig FILE.asc] [--key derivative.asc]
@@ -180,7 +181,15 @@ stealth_reset_overlay() {
 
 # ── Host lockdown ───────────────────────────────────────────
 
+# Record an undo step as a whitespace-separated argv line. It is replayed by
+# host_restore as a real argv array (never through a shell), so nothing in the
+# line is ever word-expanded, glob-expanded or command-substituted.
 undo() { printf '%s\n' "$*" >> "$STEALTH_UNDO"; }
+
+# The only programs host_restore is ever allowed to run to undo a lockdown.
+# A line whose first word isn't here is refused, not executed — so even a
+# corrupted undo log can't be turned into arbitrary root commands.
+_UNDO_ALLOWED=" swapon systemctl rfkill rm modprobe usbguard sysctl "
 
 host_lockdown() {
     : > "$STEALTH_UNDO"
@@ -249,9 +258,17 @@ host_lockdown() {
 
 host_restore() {
     [[ -r "$STEALTH_UNDO" ]] || return 0
-    local cmd
+    local cmd parts
     while IFS= read -r cmd; do
-        bash -c "$cmd" || warn "could not undo: $cmd"
+        [[ -n "$cmd" ]] || continue
+        # Split on whitespace into argv; run the array directly, no shell.
+        read -ra parts <<< "$cmd"
+        [[ ${#parts[@]} -gt 0 ]] || continue
+        if [[ "$_UNDO_ALLOWED" != *" ${parts[0]} "* ]]; then
+            warn "refusing to run unexpected undo step: $cmd"
+            continue
+        fi
+        "${parts[@]}" || warn "could not undo: $cmd"
     done < <(tac "$STEALTH_UNDO")
     rm -f "$STEALTH_UNDO"
 }
@@ -361,6 +378,7 @@ give_display() {
 
 stealth_on() {
     need_root stealth on
+    serialize
     load_config
     need_cmd virsh cryptsetup nft python3
     stealth_is_active && die "Stealth Mode is already on"
@@ -425,6 +443,7 @@ stealth_off_steps() {
 
 stealth_off() {
     need_root stealth off
+    serialize
     load_config
     if ! stealth_is_active && ! vault_is_open; then
         info "Stealth Mode is already off."
@@ -470,6 +489,7 @@ stealth_view() {
 
 stealth_reset() {
     need_root stealth reset
+    serialize
     load_config
     stealth_is_active && die "turn Stealth Mode off first"
     confirm "Erase everything in the Workstation and restore a clean image?" || exit 0

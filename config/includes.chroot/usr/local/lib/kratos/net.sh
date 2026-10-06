@@ -53,6 +53,7 @@ net_mode() {
     local mode="${1:-}"
     is_valid_mode "$mode" || die "usage: kratos mode {${KRATOS_MODES[*]}}"
     need_root mode "$mode"
+    serialize
     install -d -m 755 "$KRATOS_RUN" "$KRATOS_STATE"
 
     info "Switching to ${BOLD}$mode${RESET} (network blocked during the switch)..."
@@ -93,6 +94,7 @@ net_restore() {
 net_vpn_import() {
     local src="${1:-}"
     need_root vpn-import "$src"
+    serialize
     [[ -r "$src" ]] || die "usage: kratos vpn-import <wireguard.conf>"
     if ! grep -qi '^\[Interface\]' "$src" || ! grep -qi '^\[Peer\]' "$src"; then
         die "$src doesn't look like a WireGuard config"

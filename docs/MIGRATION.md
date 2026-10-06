@@ -37,6 +37,7 @@ kratos migrate --from /media/$USER/<drive>/KratosExport
 ```
 
 - Every file is checked against the SHA-256 manifest made on Windows. If anything differs, it says so. **Keep your backups** until you've checked.
+  - What this catches: disk corruption, incomplete copies, bit-rot on the transfer drive — anything that changed a file but not the manifest. It is **not** an authenticity guarantee: the manifest lives next to the files, so someone who can alter the drive could change a file *and* its recorded hash together and the check would still pass. Treat the manifest as integrity-against-accidents, and only import from a drive you physically control.
 - Bookmarks are put in `~/Browser bookmarks/`. Import them in Firefox: Bookmarks → Manage → Import.
 - Add `--scrub` to strip metadata (GPS etc.) from photos and documents as they're imported.
 

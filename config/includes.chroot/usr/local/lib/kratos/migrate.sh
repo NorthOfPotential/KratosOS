@@ -37,14 +37,18 @@ migrate_mount() {
     install -d -m 700 "$mnt" "$KRATOS_RUN/migrate/bitlocker"
     if [[ "$fstype" == BitLocker ]]; then
         need_cmd dislocker
-        info "BitLocker volume: enter your Windows password or 48-digit recovery key." >&2
-        local key
-        read -r -s -p "Password or recovery key: " key; echo >&2
-        if [[ "$key" =~ ^[0-9]{6}(-[0-9]{6}){7}$ ]]; then
-            dislocker -V "$dev" -p"$key" -r -- "$KRATOS_RUN/migrate/bitlocker" >&2
-        else
-            dislocker -V "$dev" -u"$key" -r -- "$KRATOS_RUN/migrate/bitlocker" >&2
-        fi || die "could not unlock BitLocker"
+        # Let dislocker read the secret itself (bare -p/-u prompt for it on the
+        # terminal), so the Windows password / recovery key is NEVER placed on
+        # dislocker's command line or held in a shell variable — it can't leak
+        # through /proc/<pid>/cmdline, the process list or a core dump.
+        local kind
+        info "BitLocker volume on $dev." >&2
+        printf 'Unlock with your Windows (p)assword or a 48-digit (r)ecovery key? [p/r] ' >&2
+        read -r kind
+        case "$kind" in
+            r|R|recovery) dislocker -V "$dev" -u -r -- "$KRATOS_RUN/migrate/bitlocker" >&2 ;;
+            *)            dislocker -V "$dev" -p -r -- "$KRATOS_RUN/migrate/bitlocker" >&2 ;;
+        esac || die "could not unlock BitLocker"
         mount -o ro,loop "$KRATOS_RUN/migrate/bitlocker/dislocker-file" "$mnt"
     else
         # Read-only works even if Windows was hibernated / used Fast Startup

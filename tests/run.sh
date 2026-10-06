@@ -36,6 +36,12 @@ run python3 -m unittest tests.test_harden_whonix
 step "Stealth Mode on/off ordering"
 run tests/test_stealth_order.sh
 
+step "config parser (never executes config as code)"
+run tests/test_config.sh
+
+step "host-lockdown undo replay (injection-safe argv)"
+run tests/test_undo_safe.sh
+
 step "migration"
 run tests/test_migrate.sh
 

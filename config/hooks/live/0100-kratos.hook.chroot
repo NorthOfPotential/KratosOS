@@ -24,6 +24,22 @@ chmod 644 /usr/local/lib/kratos/*.sh /usr/local/lib/kratos/*.tsv
 chmod 755 /usr/local/lib/kratos/harden-whonix.py /usr/local/lib/kratos/stealth-seat
 install -d /usr/share/doc/kratos
 
+# ── Lock down everything the privileged tool reads or runs ──────────────────
+# The kratos tool runs as root (via polkit). If any script it sources/execs, or
+# any config/ruleset it loads, were writable by a normal user or group, that
+# would be instant local root. Force strict root ownership and no group/other
+# write bits, independent of whatever modes the files carried in git.
+chown -R root:root /etc/kratos /usr/local/lib/kratos 2>/dev/null || true
+chown root:root /usr/local/bin/kratos /usr/local/bin/kratos-tray \
+    /usr/local/bin/kratos-panic /usr/local/bin/kratos-decoy \
+    /usr/share/polkit-1/actions/org.kratos.policy 2>/dev/null || true
+find /etc/kratos -type d -exec chmod 755 {} +
+find /etc/kratos -type f -exec chmod 644 {} +
+chmod 644 /usr/share/polkit-1/actions/org.kratos.policy
+# Ship only audited source: drop any stale Python bytecode.
+find /usr/local/lib/kratos /usr/local/bin -name '__pycache__' -type d -prune \
+    -exec rm -rf {} + 2>/dev/null || true
+
 # ── Dedicated Stealth user (owns the persona display + its own session) ─────
 # System user, no login shell, locked password. The persona viewer runs as
 # this user on its own VT, so malware in your normal desktop session (a
