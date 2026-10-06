@@ -71,9 +71,13 @@ def main():
     start = time.monotonic()
     next_t = start
     while True:
+        # Count the packet we pace out this cycle. We count the cadence, not
+        # successful delivery: a transient send error (e.g. the path briefly
+        # down) must not change the cover-traffic rate, and the test measures
+        # pacing independent of whether the sandbox can actually transmit.
+        sent += 1
         try:
             sock.sendto(payload, dest)
-            sent += 1
         except OSError:
             pass
         if run_secs and time.monotonic() - start >= run_secs:

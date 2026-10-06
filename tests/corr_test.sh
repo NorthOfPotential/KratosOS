@@ -29,8 +29,9 @@ tc qdisc del dev lo root 2>/dev/null
 if tc qdisc show dev lo | grep -q 'tbf\|netem'; then flunk "qdisc not removed"; else pass "shaping removes cleanly"; fi
 
 echo "— decoy (cover traffic) holds a steady rate —"
-# Measure the decoy's OWN send count (UDP sendto succeeds with no listener),
-# so the check tests pacing, not network delivery — robust on any runner.
+# Measure the decoy's OWN paced-packet count, so the check tests pacing, not
+# network delivery — robust on any runner (loopback may be down in the netns).
+ip link set lo up 2>/dev/null || true
 countf="$(mktemp)"
 # The decoy bounds its own run (KRATOS_DECOY_SECONDS) and writes the count on
 # normal exit; timeout is just a safety net so a hang can't wedge the suite.
