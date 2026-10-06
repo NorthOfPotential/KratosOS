@@ -116,6 +116,36 @@ done
 # kratos-look autostart also applies it live).
 update-mime-database /usr/share/mime >/dev/null 2>&1 || true
 
+# ── Plymouth boot splash (KratosOS) ─────────────────────────────────────────
+# Derive from the stock "spinner" theme so the tested boot animation AND the
+# LUKS passphrase prompt keep working; we only swap its watermark for the
+# KratosOS logo and repoint the paths. If spinner isn't present the splash is
+# simply left at the default — the build never fails over branding.
+if [ -d /usr/share/plymouth/themes/spinner ]; then
+    rm -rf /usr/share/plymouth/themes/kratos
+    cp -rT /usr/share/plymouth/themes/spinner /usr/share/plymouth/themes/kratos
+    [ -f /usr/share/kratos-assets/plymouth-logo.png ] \
+        && cp /usr/share/kratos-assets/plymouth-logo.png /usr/share/plymouth/themes/kratos/watermark.png
+    if [ -f /usr/share/plymouth/themes/kratos/spinner.plymouth ]; then
+        mv /usr/share/plymouth/themes/kratos/spinner.plymouth \
+           /usr/share/plymouth/themes/kratos/kratos.plymouth
+        sed -i -e 's/^Name=.*/Name=KratosOS/' \
+               -e 's/^Description=.*/Description=KratosOS boot splash/' \
+               -e 's#themes/spinner#themes/kratos#g' \
+               /usr/share/plymouth/themes/kratos/kratos.plymouth
+        # Ensure the KratosOS logo is shown as the watermark.
+        grep -q '^WatermarkImage=' /usr/share/plymouth/themes/kratos/kratos.plymouth \
+            || echo 'WatermarkImage=watermark.png' >> /usr/share/plymouth/themes/kratos/kratos.plymouth
+    fi
+    if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+        plymouth-set-default-theme kratos || true
+    else
+        install -d /etc/plymouth
+        printf '[Daemon]\nTheme=kratos\n' > /etc/plymouth/plymouthd.conf
+    fi
+    update-initramfs -u 2>/dev/null || true
+fi
+
 # ── Flathub for apps (Spotify, Discord, Steam, ...) ─────────
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 

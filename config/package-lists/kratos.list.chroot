@@ -34,6 +34,11 @@ keepassxc
 calamares
 calamares-settings-debian
 
+# ── Boot splash (KratosOS Plymouth theme) ───────────────────────
+plymouth
+plymouth-themes
+plymouth-label
+
 # ── Privacy / network ────────────────────────────────────────────
 nftables
 systemd-resolved

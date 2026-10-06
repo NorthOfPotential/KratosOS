@@ -13,11 +13,18 @@ wp=/usr/share/wallpapers/KratosOS/contents/images/1920x1080.png
 # Give plasmashell a moment to register on the session bus.
 sleep 5
 
-apply() { command -v "$1" >/dev/null 2>&1 && "$@" >/dev/null 2>&1 || true; }
+# Run a Plasma tool if it exists; never fail the script if it's missing or errors.
+apply() {
+    command -v "$1" >/dev/null 2>&1 || return 0
+    "$@" >/dev/null 2>&1 || true
+}
 apply plasma-apply-lookandfeel -a org.kde.breezedark.desktop
 apply plasma-apply-desktoptheme breeze-dark
-apply plasma-apply-colorscheme BreezeDark
-[ -f "$wp" ] && apply plasma-apply-wallpaperimage "$wp"
+# KratosOS Dark = Breeze Dark with a hacker-green accent/selection.
+apply plasma-apply-colorscheme KratosOSDark
+if [ -f "$wp" ]; then
+    apply plasma-apply-wallpaperimage "$wp"
+fi
 
 mkdir -p "$(dirname "$marker")" 2>/dev/null || true
 : > "$marker" 2>/dev/null || true
