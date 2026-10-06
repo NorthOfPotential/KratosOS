@@ -32,6 +32,9 @@ KERNEL_PARAMS="init_on_alloc=1 init_on_free=1 page_alloc.shuffle=1 slab_nomerge 
 randomize_kstack_offset=on vsyscall=none debugfs=off ipv6.disable=1 intel_iommu=on \
 amd_iommu=force_isolation iommu.strict=1 apparmor=1 security=apparmor quiet splash"
 
+# Note: --image-name and --updates were dropped in current live-build; the
+# security+updates archives are enabled by default, and the output image is
+# named live-image-* which we rename below.
 lb config \
     --distribution trixie \
     --architectures amd64 \
@@ -42,13 +45,19 @@ lb config \
     --iso-application "KratosOS" \
     --iso-publisher "KratosOS project" \
     --iso-volume "KratosOS" \
-    --image-name kratosos \
-    --security true \
-    --updates true \
     --memtest none
 
 lb build
 
+# live-build writes live-image-amd64.hybrid.iso; publish it under our name.
+out="kratosos-amd64.hybrid.iso"
+built=""
+for f in "$out" live-image-*.hybrid.iso kratosos-*.iso; do
+    [ -f "$f" ] && { built="$f"; break; }
+done
+[ -n "$built" ] || { echo "build produced no ISO" >&2; exit 1; }
+[ "$built" = "$out" ] || mv -f "$built" "$out"
+
 echo
-echo "Built: $(ls -1 kratosos-*.iso)"
-sha256sum kratosos-*.iso | tee SHA256SUMS
+echo "Built: $out"
+sha256sum "$out" | tee SHA256SUMS

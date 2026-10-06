@@ -30,6 +30,7 @@ cleanup() { kill "${LISTENERS[@]}" 2>/dev/null; umount "$tmp/state/vault" 2>/dev
 trap cleanup EXIT
 
 export KRATOS_ETC="$tmp/etc" KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run" KRATOS_LIB="$lib"
+export STAGE_TOOL="$tmp/bin/kratos"
 mkdir -p "$KRATOS_ETC" "$KRATOS_STATE" "$KRATOS_RUN"
 
 # ── Bring Stealth Mode "up" using the real permission code ─────────────────
@@ -86,6 +87,11 @@ build_live_system() {
     echo "STEALTH_DISABLE_SWAP=yes" > "$KRATOS_ETC/kratos.conf"
     echo "correct horse battery staple" > "$STEALTH_UNDO.secret"
     chmod 600 "$STEALTH_UNDO.secret"
+    # A stand-in for the installed kratos tool, root-owned, to test that
+    # attacker malware cannot replace it (without writing into the repo).
+    install -d -m 755 "$tmp/bin"
+    install -m 755 /dev/null "$tmp/bin/kratos"
+    echo "#!/bin/sh" > "$tmp/bin/kratos"
 }
 
 
@@ -97,6 +103,19 @@ echo
 # ── Attack helpers ─────────────────────────────────────────────────────────
 # Run a command as the attacker; returns its exit status.
 as_attacker() { runuser -u "$ATTACKER" -- "$@"; }
+# Try to connect to a UNIX socket as a given user, using an INLINE program so
+# the result depends only on the socket's permissions — never on whether that
+# user can traverse the repo checkout to read a script file. (On CI the repo
+# lives under a path system users can't traverse; reading a probe script there
+# would make every "blocked" check pass vacuously.)
+connect_as() { # $1 user  $2 socket-path
+    runuser -u "$1" -- python3 -c 'import socket,sys
+s=socket.socket(socket.AF_UNIX)
+try:
+    s.connect(sys.argv[1]); print("CONNECTED")
+except OSError as e:
+    sys.exit(1)' "$2"
+}
 # A blocked attack: command fails OR produces no secret output.
 blocked() {
     local desc="$1"; shift
@@ -125,8 +144,8 @@ no_secret "read the encrypted vault image"         as_attacker cat "$KRATOS_STAT
 no_secret "grep secrets out of the vault image"    as_attacker grep -a "horse battery" "$KRATOS_STATE/stealth.vault"
 
 echo "— Attacks on the persona display (watch screen / inject keys) —"
-blocked  "open the Workstation SPICE socket"       as_attacker python3 "$here/attack_connect_socket.py" "$KRATOS_RUN/spice/kx-ws.sock"
-blocked  "open the Gateway SPICE socket"           as_attacker python3 "$here/attack_connect_socket.py" "$KRATOS_RUN/spice/kx-gw.sock"
+blocked  "open the Workstation SPICE socket"       connect_as "$ATTACKER" "$KRATOS_RUN/spice/kx-ws.sock"
+blocked  "open the Gateway SPICE socket"           connect_as "$ATTACKER" "$KRATOS_RUN/spice/kx-gw.sock"
 blocked  "enter the SPICE socket directory"        as_attacker ls "$KRATOS_RUN/spice"
 
 echo "— Attacks on secrets and control files —"
@@ -137,10 +156,10 @@ echo "— Tampering attacks (subvert isolation for next start) —"
 blocked  "overwrite a VM definition"               as_attacker sh -c "echo pwned > '$KRATOS_STATE/vault/libvirt/kx-ws.xml'"
 blocked  "drop a malicious VM definition"          as_attacker sh -c "echo evil > '$KRATOS_STATE/vault/libvirt/evil.xml'"
 blocked  "rewrite kratos.conf to disable lockdown" as_attacker sh -c "echo STEALTH_DISABLE_SWAP=no >> '$KRATOS_ETC/kratos.conf'"
-blocked  "replace the kratos tool"                 as_attacker sh -c "echo '#!/bin/sh' > '$lib/stealth.sh'"
+blocked  "replace the kratos tool"                 as_attacker sh -c "echo '#!/bin/sh' > '$STAGE_TOOL'"
 
 echo "— Positive control: the intended user CAN use the display —"
-if runuser -u "$STEALTH_USER" -- python3 "$here/attack_connect_socket.py" "$KRATOS_RUN/spice/kx-ws.sock" >/dev/null 2>&1; then
+if connect_as "$STEALTH_USER" "$KRATOS_RUN/spice/kx-ws.sock" >/dev/null 2>&1; then
     echo "  PASS  $STEALTH_USER can open the persona display (isolation is not vacuous)"
 else
     echo "  FAIL  $STEALTH_USER CANNOT open the display — Stealth Mode would be unusable"; fail=1
