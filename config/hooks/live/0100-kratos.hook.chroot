@@ -106,11 +106,13 @@ done
 for b in /usr/share/calamares/branding/*/branding.desc \
          /etc/calamares/branding/*/branding.desc; do
     [ -f "$b" ] || continue
-    sed -i -E 's/^([[:space:]]*productName:[[:space:]]*).*/\1KratosOS/; \
-               s/^([[:space:]]*shortProductName:[[:space:]]*).*/\1KratosOS/; \
-               s/^([[:space:]]*shortVersionedName:[[:space:]]*).*/\1"KratosOS 13"/; \
-               s/^([[:space:]]*versionedName:[[:space:]]*).*/\1"KratosOS 13 (trixie)"/; \
-               s/^([[:space:]]*bootloaderEntryName:[[:space:]]*).*/\1KratosOS/' "$b"
+    sed -i -E \
+        -e 's/^([[:space:]]*productName:[[:space:]]*).*/\1KratosOS/' \
+        -e 's/^([[:space:]]*shortProductName:[[:space:]]*).*/\1KratosOS/' \
+        -e 's/^([[:space:]]*shortVersionedName:[[:space:]]*).*/\1"KratosOS 13"/' \
+        -e 's/^([[:space:]]*versionedName:[[:space:]]*).*/\1"KratosOS 13 (trixie)"/' \
+        -e 's/^([[:space:]]*bootloaderEntryName:[[:space:]]*).*/\1KratosOS/' \
+        "$b"
 done
 # Default KDE wallpaper for brand-new user profiles (best-effort; the
 # kratos-look autostart also applies it live).
