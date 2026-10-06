@@ -32,8 +32,12 @@ echo "— decoy (cover traffic) holds a steady rate —"
 # Measure the decoy's OWN send count (UDP sendto succeeds with no listener),
 # so the check tests pacing, not network delivery — robust on any runner.
 countf="$(mktemp)"
-KRATOS_DECOY_COUNT_FILE="$countf" timeout -s TERM 2.1 python3 "$decoy" 127.0.0.1:51999 1mbit 2>/dev/null || true
-got="$(cat "$countf" 2>/dev/null || echo 0)"
+# The decoy bounds its own run (KRATOS_DECOY_SECONDS) and writes the count on
+# normal exit; timeout is just a safety net so a hang can't wedge the suite.
+KRATOS_DECOY_COUNT_FILE="$countf" KRATOS_DECOY_SECONDS=2 \
+    timeout 10 python3 "$decoy" 127.0.0.1:51999 1mbit 2>/dev/null || true
+got="$(cat "$countf" 2>/dev/null)"
+[ -n "$got" ] || got=0
 rm -f "$countf"
 # ~1mbit / (1200B*8) ≈ 104 pps → ~208 in ~2s; allow generous scheduler slack.
 if [[ "$got" =~ ^[0-9]+$ && "$got" -ge 100 && "$got" -le 400 ]]; then

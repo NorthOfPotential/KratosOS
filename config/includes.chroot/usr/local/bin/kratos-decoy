@@ -46,30 +46,38 @@ def main():
     payload = bytes(PKT)
     sent = 0
 
-    # For tests: on exit, report how many packets we paced out. This measures
-    # the decoy's *send rate* without depending on a listener or on loopback
-    # delivery (UDP sendto succeeds whether or not anyone is listening).
+    # For tests: measure the decoy's *send rate* without depending on a
+    # listener or on loopback delivery (UDP sendto succeeds whether or not
+    # anyone is listening). KRATOS_DECOY_SECONDS bounds the run and the count
+    # is written on NORMAL exit — no signal/timeout interaction to be fragile.
     count_file = os.environ.get("KRATOS_DECOY_COUNT_FILE")
+    run_secs = float(os.environ.get("KRATOS_DECOY_SECONDS", "0") or "0")
 
     def report(*_):
         if count_file:
             try:
                 with open(count_file, "w") as f:
                     f.write(str(sent))
+                    f.flush()
+                    os.fsync(f.fileno())
             except OSError:
                 pass
         sys.exit(0)
 
+    # Still honour a kill signal (normal operation runs forever).
     signal.signal(signal.SIGTERM, report)
     signal.signal(signal.SIGINT, report)
 
-    next_t = time.monotonic()
+    start = time.monotonic()
+    next_t = start
     while True:
         try:
             sock.sendto(payload, dest)
             sent += 1
         except OSError:
             pass
+        if run_secs and time.monotonic() - start >= run_secs:
+            report()
         # Steady average rate, with +/-20% jitter so it isn't a metronome.
         next_t += interval * random.uniform(0.8, 1.2)
         delay = next_t - time.monotonic()
