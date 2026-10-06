@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Traffic-shaping / decoy tests. Run as root in a network namespace
-# (tests/run.sh uses unshare -rn). Validates the tc qdisc the shaper installs
-# and that the decoy generator holds a steady rate.
+# Traffic-shaping tests. Run as root in a network namespace (tests/run.sh uses
+# unshare -rn). Validates the tc qdiscs the shaper installs and removes. The
+# decoy's rate math is covered deterministically by tests/test_decoy.py.
 set -uo pipefail
-here="$(cd "$(dirname "$0")" && pwd)"
-decoy="$here/../config/includes.chroot/usr/local/bin/kratos-decoy"
 fail=0
 pass() { echo "  PASS  $1"; }
 flunk() { echo "  FAIL  $1"; fail=1; }
@@ -28,24 +26,9 @@ fi
 tc qdisc del dev lo root 2>/dev/null
 if tc qdisc show dev lo | grep -q 'tbf\|netem'; then flunk "qdisc not removed"; else pass "shaping removes cleanly"; fi
 
-echo "— decoy (cover traffic) holds a steady rate —"
-# Measure the decoy's OWN paced-packet count, so the check tests pacing, not
-# network delivery — robust on any runner (loopback may be down in the netns).
-ip link set lo up 2>/dev/null || true
-countf="$(mktemp)"
-# The decoy bounds its own run (KRATOS_DECOY_SECONDS) and writes the count on
-# normal exit; timeout is just a safety net so a hang can't wedge the suite.
-KRATOS_DECOY_COUNT_FILE="$countf" KRATOS_DECOY_SECONDS=2 \
-    timeout 10 python3 "$decoy" 127.0.0.1:51999 1mbit 2>/dev/null || true
-got="$(cat "$countf" 2>/dev/null)"
-[ -n "$got" ] || got=0
-rm -f "$countf"
-# ~1mbit / (1200B*8) ≈ 104 pps → ~208 in ~2s; allow generous scheduler slack.
-if [[ "$got" =~ ^[0-9]+$ && "$got" -ge 100 && "$got" -le 400 ]]; then
-    pass "decoy paces ~1mbit ($got packets sent in ~2s)"
-else
-    flunk "decoy rate off ($got packets in ~2s, expected 100–400)"
-fi
+# The decoy's cover-traffic RATE is pure math (parse_rate + packet size) and is
+# covered deterministically by tests/test_decoy.py — no fragile subprocess /
+# loopback / timeout integration here.
 
 echo
 if (( fail )); then echo "SHAPING TESTS FAILED"; else echo "shaping tests passed"; fi

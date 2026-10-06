@@ -49,6 +49,9 @@ fi
 step "stylometry normalizer"
 run python3 -m unittest tests.test_stylo
 
+step "decoy rate math"
+run python3 -m unittest tests.test_decoy
+
 step "anti-fingerprint defaults"
 run python3 -m unittest tests.test_fingerprint
 
