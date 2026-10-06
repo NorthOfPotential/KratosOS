@@ -1,0 +1,10 @@
+PRETTY_NAME="KratosOS (Debian 13 trixie)"
+NAME="KratosOS"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+ID=kratos
+ID_LIKE=debian
+HOME_URL="https://github.com/NorthOfPotential/KratosOS"
+SUPPORT_URL="https://github.com/NorthOfPotential/KratosOS"
+BUG_REPORT_URL="https://github.com/NorthOfPotential/KratosOS/issues"

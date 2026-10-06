@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Apply the KratosOS desktop look (dark Breeze + KratosOS wallpaper) once per
+# user. Guarded by a marker so it sets the defaults on first login but never
+# overrides a choice the user makes afterwards. Best-effort: if a Plasma tool
+# is missing or the shell isn't ready, it simply leaves the default in place.
+set -uo pipefail
+
+marker="${XDG_CONFIG_HOME:-$HOME/.config}/kratos-look-applied"
+[ -e "$marker" ] && exit 0
+
+wp=/usr/share/wallpapers/KratosOS/contents/images/1920x1080.png
+
+# Give plasmashell a moment to register on the session bus.
+sleep 5
+
+apply() { command -v "$1" >/dev/null 2>&1 && "$@" >/dev/null 2>&1 || true; }
+apply plasma-apply-lookandfeel -a org.kde.breezedark.desktop
+apply plasma-apply-desktoptheme breeze-dark
+apply plasma-apply-colorscheme BreezeDark
+[ -f "$wp" ] && apply plasma-apply-wallpaperimage "$wp"
+
+mkdir -p "$(dirname "$marker")" 2>/dev/null || true
+: > "$marker" 2>/dev/null || true

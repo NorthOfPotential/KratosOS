@@ -89,6 +89,33 @@ CONF
 # ── Sandbox common apps with Firejail ───────────────────────
 firecfg >/dev/null 2>&1 || true
 
+# ── Branding: make the installer and look say KratosOS, not Debian ──────────
+chmod 755 /usr/local/bin/kratos-apply-look 2>/dev/null || true
+# Rename the installer launcher ("Install Debian" -> "Install KratosOS").
+for d in /usr/share/applications/calamares*.desktop \
+         /usr/share/applications/install-debian.desktop; do
+    [ -f "$d" ] || continue
+    sed -i -e 's/^Name=.*/Name=Install KratosOS/' \
+           -e '/^Name\[/d' \
+           -e 's/^Comment=.*/Comment=Install KratosOS to this computer/' \
+           -e '/^Comment\[/d' \
+           -e 's/^GenericName=.*/GenericName=Install KratosOS/' \
+           -e '/^GenericName\[/d' "$d"
+done
+# Calamares in-app product name (edit whatever branding the package shipped).
+for b in /usr/share/calamares/branding/*/branding.desc \
+         /etc/calamares/branding/*/branding.desc; do
+    [ -f "$b" ] || continue
+    sed -i -E 's/^([[:space:]]*productName:[[:space:]]*).*/\1KratosOS/; \
+               s/^([[:space:]]*shortProductName:[[:space:]]*).*/\1KratosOS/; \
+               s/^([[:space:]]*shortVersionedName:[[:space:]]*).*/\1"KratosOS 13"/; \
+               s/^([[:space:]]*versionedName:[[:space:]]*).*/\1"KratosOS 13 (trixie)"/; \
+               s/^([[:space:]]*bootloaderEntryName:[[:space:]]*).*/\1KratosOS/' "$b"
+done
+# Default KDE wallpaper for brand-new user profiles (best-effort; the
+# kratos-look autostart also applies it live).
+update-mime-database /usr/share/mime >/dev/null 2>&1 || true
+
 # ── Flathub for apps (Spotify, Discord, Steam, ...) ─────────
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 

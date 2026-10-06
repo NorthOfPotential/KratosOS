@@ -10,6 +10,7 @@ run() { "$@" || status=1; }
 
 step "shellcheck"
 run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
+    $inc/usr/local/bin/kratos-apply-look \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
     build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
@@ -35,6 +36,9 @@ run python3 -m unittest tests.test_harden_whonix
 
 step "Stealth Mode on/off ordering"
 run tests/test_stealth_order.sh
+
+step "branding (KratosOS identity, wallpaper, installer rename)"
+run tests/test_branding.sh
 
 step "config parser (never executes config as code)"
 run tests/test_config.sh
