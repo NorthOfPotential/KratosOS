@@ -26,5 +26,15 @@ if [ -f "$wp" ]; then
     apply plasma-apply-wallpaperimage "$wp"
 fi
 
+# Screen lock: auto-lock is shipped OFF (/etc/xdg/kscreenlockerrc) so the
+# passwordless live user can never be locked out. On an INSTALLED system the
+# user has a real password, so restore auto-lock for them on this first login.
+if ! grep -qw boot=live /proc/cmdline 2>/dev/null && [ ! -e /run/live/medium ]; then
+    if command -v kwriteconfig6 >/dev/null 2>&1; then
+        kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock true 2>/dev/null || true
+        kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume true 2>/dev/null || true
+    fi
+fi
+
 mkdir -p "$(dirname "$marker")" 2>/dev/null || true
 : > "$marker" 2>/dev/null || true

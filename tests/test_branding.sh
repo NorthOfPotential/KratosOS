@@ -115,5 +115,19 @@ grep -q 'plymouth-set-default-theme kratos' "$hook" \
     && pass "build hook builds + enables the KratosOS Plymouth theme" \
     || flunk "Plymouth theme build missing from hook"
 
+# ── Screen lock: off by default (passwordless live user), on when installed ─
+kscr="$inc/etc/xdg/kscreenlockerrc"
+if grep -q '^Autolock=false' "$kscr" 2>/dev/null; then
+    pass "auto screen-lock is disabled by default (live user has no password)"
+else
+    flunk "kscreenlockerrc does not disable auto-lock"
+fi
+if grep -q 'Autolock true' "$inc/usr/local/bin/kratos-apply-look" \
+   && grep -q 'boot=live' "$inc/usr/local/bin/kratos-apply-look"; then
+    pass "apply-look restores auto-lock on installed systems only"
+else
+    flunk "apply-look does not re-enable auto-lock for installed systems"
+fi
+
 echo
 if (( fail )); then echo "BRANDING TESTS FAILED"; exit 1; else echo "branding assets OK"; exit 0; fi

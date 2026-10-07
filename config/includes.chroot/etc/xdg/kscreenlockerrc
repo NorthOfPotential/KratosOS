@@ -1,0 +1,8 @@
+# KratosOS: the amnesic live user has NO password, so an automatic screen lock
+# would lock the user out with no way back in. Auto-lock is therefore OFF by
+# default here. On an INSTALLED system the user sets a password at install, so
+# kratos-apply-look re-enables auto-lock for them on first login.
+[Daemon]
+Autolock=false
+LockOnResume=false
+Timeout=5
