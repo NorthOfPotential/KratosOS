@@ -1,28 +1,54 @@
-# ── Base desktop ─────────────────────────────────────────────
-task-gnome-desktop
-gnome-tweaks
+# ── Desktop (KDE Plasma: taskbar, start menu, Windows-like) ─────
+task-kde-desktop
+plasma-discover-backend-flatpak
+flatpak
+sddm
+konsole
+dolphin
+okular
+ark
+kate
+gwenview
+kde-spectacle
 network-manager
-network-manager-gnome
+plasma-nm
+bluedevil
+pipewire-audio
 firmware-linux-free
 firmware-misc-nonfree
 firmware-iwlwifi
 firmware-realtek
 firmware-atheros
+firmware-amd-graphics
+intel-microcode
+amd64-microcode
 
-# ── Anonymity / network ──────────────────────────────────────
-tor
-torbrowser-launcher
-obfs4proxy
-snowflake-client
+# ── Everyday apps ────────────────────────────────────────────────
+firefox-esr
+thunderbird
+libreoffice
+vlc
+keepassxc
+
+# ── Installer (full-disk encryption) ─────────────────────────────
+calamares
+calamares-settings-debian
+
+# ── Boot splash (KratosOS Plymouth theme) ───────────────────────
+plymouth
+plymouth-themes
+plymouth-label
+
+# ── Privacy / network ────────────────────────────────────────────
+nftables
+systemd-resolved
 wireguard
 wireguard-tools
-nftables
-macchanger
-onionshare
+ethtool
+rfkill
 curl
-torsocks
 
-# ── Defense ──────────────────────────────────────────────────
+# ── Defense ──────────────────────────────────────────────────────
 apparmor
 apparmor-profiles
 apparmor-profiles-extra
@@ -34,30 +60,32 @@ clamav-daemon
 clamav-freshclam
 rkhunter
 usbguard
-aide
+pkexec
+polkitd
 
-# ── Virtualization ───────────────────────────────────────────
+# ── Stealth Mode (KVM + Whonix) ──────────────────────────────────
 qemu-system-x86
 qemu-utils
+libvirt-daemon-system
+libvirt-clients
+virt-viewer
+virt-manager
+cage
+seatd
 ovmf
-
-# ── Encryption / OpSec tools ─────────────────────────────────
 cryptsetup
-keepassxc
 gnupg
-kleopatra
+xz-utils
+python3
+python3-pyqt6
+
+# ── OpSec tools ──────────────────────────────────────────────────
 mat2
 secure-delete
-wipe
-pwgen
 diceware
-xclip
+pwgen
 
-# ── Windows migration ────────────────────────────────────────
+# ── Windows migration ────────────────────────────────────────────
 ntfs-3g
 dislocker
 rsync
-pv
-
-# ── Communication ────────────────────────────────────────────
-thunderbird

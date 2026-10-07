@@ -1,0 +1,32 @@
+## KratosOS persona isolation policy for Qubes OS (qrexec, 4.1+ format).
+##
+## Installed to dom0 as /etc/qubes/policy.d/30-kratos.policy. It runs BEFORE
+## the default 90-* policies, so these denies win. Every qube that holds the
+## persona carries the tag 'kratos-persona' (set by the Salt formula). The
+## rule is simple and total: nothing crosses out of a persona qube.
+##
+## This is the Qubes-native version of KratosOS's "nothing leaves the persona"
+## rule, enforced by dom0 (the trusted base) instead of by the host kernel.
+
+## ---- Clipboard: no copy OUT of a persona qube, to anywhere ----
+qubes.ClipboardPaste  *  @tag:kratos-persona  @anyvm        deny
+## (Pasting INTO the persona is also denied, to stop accidental cross-contamination.)
+qubes.ClipboardPaste  *  @anyvm               @tag:kratos-persona  deny
+
+## ---- File copy / move: none in either direction ----
+qubes.Filecopy        *  @tag:kratos-persona  @anyvm        deny
+qubes.Filecopy        *  @anyvm               @tag:kratos-persona  deny
+
+## ---- "Open in VM" / "Open URL": a persona qube can't hand files or links out ----
+qubes.OpenInVM        *  @tag:kratos-persona  @anyvm        deny
+qubes.OpenURL         *  @tag:kratos-persona  @anyvm        deny
+qubes.OpenInVM        *  @anyvm               @tag:kratos-persona  deny
+qubes.OpenURL         *  @anyvm               @tag:kratos-persona  deny
+
+## ---- No inter-qube RPC / admin from or to the persona ----
+qubes.VMShell         *  @tag:kratos-persona  @anyvm        deny
+qubes.VMRootShell     *  @tag:kratos-persona  @anyvm        deny
+admin.vm.*            *  @tag:kratos-persona  @anyvm        deny
+
+## ---- Updates for the persona go ONLY through the Whonix updates proxy ----
+qubes.UpdatesProxy    *  @tag:kratos-persona  @default      allow target=sys-whonix

@@ -1,0 +1,8 @@
+{
+    "KPlugin": {
+        "Id": "KratosOS",
+        "Name": "KratosOS",
+        "License": "CC0-1.0",
+        "Authors": [{ "Name": "KratosOS project" }]
+    }
+}

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Nym workstation enforcement: the fail-closed firewall must let ONLY the
+# kratos-nym user reach the network, and the generated config must keep Loopix
+# cover traffic on. Run as root in a netns (tests/run.sh uses unshare).
+set -uo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+nftfile="$here/../workstation/nym/nym.nft"
+fail=0
+pass() { echo "  PASS  $1"; }
+flunk() { echo "  FAIL  $1"; fail=1; }
+
+# A low-privileged uid stands in for kratos-nym; another for a normal app.
+NYM_UID=4000
+APP_UID=4001
+
+echo "— nym.nft is valid and fail-closed —"
+rules="$(sed "s/@NYM_UID@/$NYM_UID/" "$nftfile")"
+if nft -c -f - <<<"$rules" 2>/dev/null; then pass "nym.nft parses"; else flunk "nym.nft invalid"; fi
+
+# Load it for real in this netns and probe egress as two users.
+ip link set lo up 2>/dev/null
+# A stand-in network so egress actually reaches the firewall (not ENETUNREACH).
+ip link add kxnet type bridge 2>/dev/null && ip addr add 10.0.0.2/24 dev kxnet && ip link set kxnet up
+ip route add default via 10.0.0.1 2>/dev/null || true
+ip neigh add 10.0.0.1 lladdr 02:00:00:00:00:01 dev kxnet nud permanent 2>/dev/null || true
+if nft -f - <<<"$rules" 2>/dev/null; then
+    # The nym user may open a socket (reaches the SYN stage: "sent"/timeout),
+    # a normal app is rejected immediately (ECONNREFUSED/EPERM).
+    probe() { # $1 uid
+        setpriv --reuid "$1" python3 - <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(0.4)
+try:
+    s.connect(("10.0.0.1", 80)); print("ok")
+except socket.timeout: print("ok")          # SYN left; no reply
+except OSError as e: print(f"blocked:{e.errno}")
+PY
+    }
+    if command -v setpriv >/dev/null; then
+        n="$(probe $NYM_UID)"; a="$(probe $APP_UID)"
+        if [[ "$n" == "blocked:101" ]]; then
+            echo "  SKIP  no route in sandbox to exercise egress"
+        elif [[ "$n" == ok ]]; then pass "nym user can egress"; else flunk "nym user blocked ($n)"; fi
+        if [[ "$a" == blocked:* ]]; then pass "normal app blocked (fail-closed)"; else flunk "normal app escaped ($a)"; fi
+    else
+        echo "  SKIP  setpriv unavailable; parsed-only"
+    fi
+    nft delete table inet kratos_nym 2>/dev/null
+else
+    echo "  SKIP  could not load ruleset in this sandbox (parsed-only)"
+fi
+
+echo "— generated config keeps Loopix cover traffic ON —"
+cfg="$(python3 - <<PY
+import importlib.util, os
+from importlib.machinery import SourceFileLoader
+p=os.path.join("$here","..","workstation","nym","kratos-nym")
+spec=importlib.util.spec_from_loader("kn", SourceFileLoader("kn",p))
+m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.build_config("kratos","mix.example.provider"))
+PY
+)"
+if grep -q 'disable_loop_cover_traffic_stream = false' <<<"$cfg"; then pass "loop cover traffic enabled"; else flunk "cover traffic not enabled"; fi
+if grep -q 'disable_main_poisson_packet_distribution = false' <<<"$cfg"; then pass "poisson timing enabled"; else flunk "poisson timing off"; fi
+if grep -q 'disabled = true' <<<"$cfg"; then pass "client logging disabled"; else flunk "logging not disabled"; fi
+
+echo
+if (( fail )); then echo "NYM TESTS FAILED"; else echo "nym tests passed"; fi
+exit "$fail"

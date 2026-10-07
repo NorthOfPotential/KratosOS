@@ -1,0 +1,5 @@
+# Debian security updates for the installed KratosOS system.
+# The ISO is built with live-build's security archive disabled (its old suite
+# naming 404s during build), so this ships the correct modern suite
+# (trixie-security) in the image itself. apt picks up security updates here.
+deb http://deb.debian.org/debian-security trixie-security main contrib non-free non-free-firmware

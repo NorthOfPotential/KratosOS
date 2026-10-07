@@ -1,0 +1,26 @@
+# regex (matched against Windows installed-software list)	KratosOS replacement
+Microsoft Office|Microsoft 365	LibreOffice (installed); OnlyOffice via Flatpak for closer .docx fidelity
+Google Chrome|Microsoft Edge	Firefox (installed, privacy-hardened)
+Adobe Acrobat|Adobe Reader	Okular (installed)
+Photoshop	GIMP or Krita (Discover / Flatpak)
+Lightroom	darktable (Discover / Flatpak)
+Premiere|DaVinci Resolve	Kdenlive (Discover), or DaVinci Resolve for Linux
+Spotify	Spotify (Flatpak)
+Discord	Discord (Flatpak)
+Steam	Steam (Flatpak), Windows games run through Proton
+Epic Games|GOG Galaxy	Heroic Games Launcher (Flatpak)
+VLC	VLC (installed)
+7-Zip|WinRAR	Ark (installed)
+Notepad\+\+	Kate (installed)
+Visual Studio Code	VS Code or VSCodium (Flatpak)
+KeePass|Bitwarden|1Password	KeePassXC (installed) or Bitwarden (Flatpak)
+Thunderbird|Outlook	Thunderbird (installed)
+Zoom	Zoom (Flatpak)
+Microsoft Teams	Teams in the browser
+Signal	Signal (Flatpak)
+Telegram	Telegram (Flatpak)
+OBS Studio	OBS Studio (Flatpak)
+Bitdefender|Norton|McAfee|Avast|Kaspersky	Built in: ClamAV, AppArmor, Firejail, USBGuard, firewall
+Proton VPN|NordVPN|Mullvad	WireGuard config + `kratos vpn-import` (kill switch built in)
+VirtualBox|VMware	virt-manager (KVM)
+iTunes	Rhythmbox / Strawberry; iPhone backup via libimobiledevice

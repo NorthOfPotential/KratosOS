@@ -1,0 +1,4 @@
+#!/bin/sh
+# Panic button entry point. Polkit lets the active desktop user run this
+# without a password (see org.kratos.policy), so it can't wait on a prompt.
+exec /usr/local/bin/kratos panic

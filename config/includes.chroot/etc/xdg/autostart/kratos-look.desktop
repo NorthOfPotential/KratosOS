@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=KratosOS look
+Comment=Apply the KratosOS desktop theme and wallpaper on first login
+Exec=/usr/local/bin/kratos-apply-look
+Icon=preferences-desktop-wallpaper
+X-KDE-autostart-phase=2
+OnlyShowIn=KDE;
+NoDisplay=true

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Launch the persona display in an isolated kiosk session as the kstealth user.
+# Started by kratos-stealth-seat@<vm>.service. Runs a single-application Wayland
+# compositor (cage) showing only remote-viewer connected to one VM's SPICE
+# socket. Nothing from the normal desktop shares this compositor, clipboard or
+# input. Switch to it with Ctrl+Alt+F7 and back to normal with Ctrl+Alt+F1.
+set -euo pipefail
+
+vm="${1:-kx-ws}"
+sock="/run/kratos/spice/${vm}.sock"
+[[ -S "$sock" ]] || { echo "stealth-seat: no display socket $sock" >&2; exit 1; }
+
+XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export XDG_RUNTIME_DIR
+export WLR_LIBINPUT_NO_DEVICES=0
+
+exec cage -- remote-viewer \
+    --title "KratosOS Stealth" \
+    --full-screen \
+    "spice+unix://${sock}"

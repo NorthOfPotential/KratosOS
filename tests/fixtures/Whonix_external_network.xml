@@ -1,0 +1,7 @@
+<network>
+  <name>Whonix-External</name>
+  <uuid>f3b5a3b0-0000-4000-8000-0000000000aa</uuid>
+  <forward mode="nat"/>
+  <bridge name="virbr1" stp="on" delay="0"/>
+  <ip address="10.0.2.2" netmask="255.255.255.0"/>
+</network>

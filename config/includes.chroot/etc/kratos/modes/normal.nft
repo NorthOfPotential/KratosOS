@@ -1,0 +1,36 @@
+#!/usr/sbin/nft -f
+# KratosOS network mode: normal
+#
+# Everyday use. Outbound traffic goes directly to the internet; nothing can
+# connect in. LAN discovery protocols that announce the machine are blocked.
+# Forwarding (used only by Stealth Mode's Gateway VM) is allowed only for
+# packets the kratos_stealth table has marked.
+
+define STEALTH_MARK = 0x4b52
+
+table inet kratos
+delete table inet kratos
+
+table inet kratos {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        udp sport 67 udp dport 68 accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        meta mark $STEALTH_MARK accept
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+        meta nfproto ipv6 drop
+        # Don't announce this machine on the local network
+        udp dport { 137, 138, 1900, 3702, 5353, 5355 } drop
+        # Windows file sharing never goes to the internet (it leaks credential hashes)
+        tcp dport { 139, 445 } oifname != "lo" ip daddr != { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } drop
+    }
+}

@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""KratosOS tray: Stealth Mode toggle, network mode, status and panic button."""
+import os
+import subprocess
+import sys
+
+from PyQt6.QtCore import QProcess, QTimer
+from PyQt6.QtGui import QAction, QActionGroup, QFont, QIcon
+from PyQt6.QtWidgets import (
+    QApplication, QDialog, QDialogButtonBox, QInputDialog, QLineEdit, QMenu,
+    QMessageBox, QPlainTextEdit, QSystemTrayIcon, QVBoxLayout,
+)
+
+KRATOS = "/usr/local/bin/kratos"
+STEALTH_FLAG = "/run/kratos/stealth.active"
+MODE_FILE = "/var/lib/kratos/mode"
+MODES = (("normal", "Normal"), ("vpn", "VPN (kill switch)"), ("offline", "Offline"))
+
+
+def stealth_active():
+    return os.path.exists(STEALTH_FLAG)
+
+
+def current_mode():
+    try:
+        with open(MODE_FILE) as f:
+            return f.read().strip() or "normal"
+    except OSError:
+        return "normal"
+
+
+class LogDialog(QDialog):
+    """Runs a privileged kratos command and streams its output."""
+
+    def __init__(self, title, args, stdin_data=None, on_success=None):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.resize(640, 420)
+        self.on_success = on_success
+        self.out = QPlainTextEdit(readOnly=True)
+        self.out.setFont(QFont("monospace"))
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.buttons.rejected.connect(self.close)
+        self.buttons.setEnabled(False)
+        lay = QVBoxLayout(self)
+        lay.addWidget(self.out)
+        lay.addWidget(self.buttons)
+
+        env = dict(os.environ, NO_COLOR="1")
+        self.proc = QProcess(self)
+        self.proc.setProcessEnvironment(_qenv(env))
+        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self._read)
+        self.proc.finished.connect(self._done)
+        self.proc.start("pkexec", [KRATOS, *args])
+        if stdin_data is not None:
+            self.proc.write(stdin_data.encode() + b"\n")
+        self.proc.closeWriteChannel()
+
+    def _read(self):
+        text = bytes(self.proc.readAllStandardOutput()).decode(errors="replace")
+        self.out.appendPlainText(_strip_ansi(text.rstrip("\n")))
+
+    def _done(self, code, _status):
+        self.buttons.setEnabled(True)
+        self.out.appendPlainText("\n✔ Done." if code == 0 else f"\n✘ Failed (exit {code}).")
+        if code == 0 and self.on_success:
+            self.on_success()
+
+
+def _qenv(env):
+    from PyQt6.QtCore import QProcessEnvironment
+    q = QProcessEnvironment()
+    for k, v in env.items():
+        q.insert(k, v)
+    return q
+
+
+def _strip_ansi(s):
+    import re
+    return re.sub(r"\x1b\[[0-9;]*m", "", s)
+
+
+class Tray(QSystemTrayIcon):
+    def __init__(self):
+        super().__init__()
+        self.dialog = None
+        self.menu = QMenu()
+
+        self.header = QAction("KratosOS", enabled=False)
+        self.menu.addAction(self.header)
+        self.menu.addSeparator()
+
+        self.stealth = QAction("Stealth Mode", checkable=True)
+        self.stealth.triggered.connect(self.toggle_stealth)
+        self.menu.addAction(self.stealth)
+        self.view = QAction("Open stealth desktop")
+        self.view.triggered.connect(lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"]))
+        self.menu.addAction(self.view)
+        self.menu.addSeparator()
+
+        net = self.menu.addMenu("Network")
+        self.mode_group = QActionGroup(net)
+        self.mode_actions = {}
+        for key, label in MODES:
+            a = QAction(label, checkable=True)
+            a.triggered.connect(lambda _c, k=key: self.set_mode(k))
+            self.mode_group.addAction(a)
+            net.addAction(a)
+            self.mode_actions[key] = a
+
+        status = QAction("Status…")
+        status.triggered.connect(self.show_status)
+        self.menu.addAction(status)
+        self.menu.addSeparator()
+
+        panic = QAction("PANIC: kill everything and power off")
+        panic.triggered.connect(self.panic)
+        self.menu.addAction(panic)
+
+        self.setContextMenu(self.menu)
+        self.activated.connect(self._clicked)
+        self.timer = QTimer(timeout=self.refresh, interval=2000)
+        self.timer.start()
+        self.refresh()
+        self.show()
+
+    def refresh(self):
+        on = stealth_active()
+        mode = current_mode()
+        self.stealth.setChecked(on)
+        self.view.setEnabled(on)
+        for key, a in self.mode_actions.items():
+            a.setChecked(key == mode)
+        state = "STEALTH ON" if on else "Normal"
+        self.header.setText(f"KratosOS: {state} · network: {mode}")
+        self.setIcon(QIcon.fromTheme("security-high" if on else "security-medium"))
+        self.setToolTip(f"KratosOS: {state}\nNetwork: {mode}")
+
+    def _clicked(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.contextMenu().popup(self.geometry().center())
+
+    def _run(self, title, args, stdin_data=None, on_success=None):
+        self.dialog = LogDialog(title, args, stdin_data, on_success)
+        self.dialog.finished.connect(self.refresh)
+        self.dialog.show()
+
+    def toggle_stealth(self):
+        if stealth_active():
+            self.stealth.setChecked(True)
+            ok = QMessageBox.question(
+                None, "Turn off Stealth Mode",
+                "The Workstation will be shut down FIRST, then the Gateway.\n"
+                "Then VM logs are wiped, the vault is locked and the host is restored.\n\n"
+                "Save your work inside the Workstation before continuing.",
+            )
+            if ok == QMessageBox.StandardButton.Yes:
+                self._run("Stealth Mode: OFF", ["stealth", "off"])
+            return
+        self.stealth.setChecked(False)
+        pw, ok = QInputDialog.getText(
+            None, "Stealth Mode", "Stealth vault passphrase:", QLineEdit.EchoMode.Password)
+        if not ok or not pw:
+            return
+        self._run("Stealth Mode: ON", ["stealth", "on", "--passphrase-stdin"], pw,
+                  on_success=lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"]))
+        del pw
+
+    def set_mode(self, mode):
+        if mode != current_mode():
+            self._run(f"Network: {mode}", ["mode", mode])
+
+    def show_status(self):
+        out = subprocess.run([KRATOS, "status"], capture_output=True, text=True,
+                             env=dict(os.environ, NO_COLOR="1"))
+        QMessageBox.information(None, "KratosOS status", _strip_ansi(out.stdout + out.stderr))
+
+    def panic(self):
+        ok = QMessageBox.warning(
+            None, "PANIC", "Kill the stealth VMs, lock the vault, cut the network and power off NOW?\n"
+            "Unsaved work everywhere will be lost.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ok == QMessageBox.StandardButton.Yes:
+            subprocess.Popen(["pkexec", "/usr/local/bin/kratos-panic"])
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        print("kratos-tray: no system tray available", file=sys.stderr)
+        return 1
+    _tray = Tray()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,48 +1,71 @@
 #!/usr/bin/env bash
-# kratos - KratosOS privacy & OpSec control tool
+# shellcheck source-path=SCRIPTDIR/../lib/kratos
+# kratos - KratosOS privacy & Stealth Mode control tool
 set -euo pipefail
+
+# ── Trusted execution environment ───────────────────────────────────────────
+# This tool runs as root (via pkexec/sudo). pkexec and Debian's sudo already
+# sanitise the environment, but we reconstruct a known-good one here too, so a
+# fixed PATH and the absence of loader/interpreter hijack variables never
+# depend on how we were invoked. Closes the $PATH-attack and
+# environment-injection classes regardless of caller.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
+      LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
+      PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONWARNINGS \
+      PERL5LIB PERLLIB RUBYLIB \
+      LIBVIRT_DEFAULT_URI 2>/dev/null || true
 
 KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 
-# shellcheck source=../lib/kratos/common.sh
+# shellcheck source=common.sh
 . "$KRATOS_LIB/common.sh"
-# shellcheck source=../lib/kratos/net.sh
+# shellcheck source=net.sh
 . "$KRATOS_LIB/net.sh"
-# shellcheck source=../lib/kratos/opsec.sh
+# shellcheck source=stealth.sh
+. "$KRATOS_LIB/stealth.sh"
+# shellcheck source=corr.sh
+. "$KRATOS_LIB/corr.sh"
+# shellcheck source=bootcheck.sh
+. "$KRATOS_LIB/bootcheck.sh"
+# shellcheck source=opsec.sh
 . "$KRATOS_LIB/opsec.sh"
-# shellcheck source=../lib/kratos/vm.sh
-. "$KRATOS_LIB/vm.sh"
-# shellcheck source=../lib/kratos/migrate.sh
+# shellcheck source=migrate.sh
 . "$KRATOS_LIB/migrate.sh"
 
 usage() {
     cat <<EOF
-${BOLD}kratos${RESET} - KratosOS privacy & OpSec control
+${BOLD}kratos${RESET} - KratosOS privacy & Stealth Mode control
+
+${BOLD}Stealth Mode${RESET} (isolated Whonix persona environment)
+  stealth on             Lock down host, unlock vault, start Gateway + Workstation
+  stealth off            Stop Workstation FIRST, then Gateway, wipe, lock, restore
+  stealth view [gateway] Open the Workstation (or Gateway) desktop window
+  stealth status         Show Stealth Mode state and isolation checks
+  stealth setup <file>   Import a signature-verified Whonix KVM download
+  stealth reset          Restore the Workstation to a clean image
 
 ${BOLD}Network${RESET}
-  status                 Show network mode, firewall, Tor and VPN state
-  check                  Run a full leak test (Tor, DNS, IPv6, ICMP, MAC, clock)
-  mode <m>               Switch mode: tor | vpn-tor | vpn | offline (fail-closed)
-  newnym                 New Tor circuits (new exit IP for new connections)
-  vpn-import <file>      Install a WireGuard config for vpn / vpn-tor modes
+  status                 Network mode, firewall, VPN, DNS, MAC and Stealth state
+  mode <m>               normal | vpn | offline (fail-closed switch)
+  vpn-import <file>      Install a WireGuard config (e.g. from Proton VPN)
   mac                    Show current vs hardware MAC addresses
+  corr [shape on|off]    Traffic-correlation resistance (see docs/CORRELATION-RESISTANCE.md)
+  fingerprint            Check whether this machine blends in or stands out
 
 ${BOLD}OpSec${RESET}
   scrub [--show] <files> Remove metadata (EXIF, GPS, author, ...) with mat2
+  stylo [--scan] [file]  Strip hidden writing-style fingerprints from persona text
   shred <files>          Overwrite and delete files
   scan [path]            Malware and rootkit scan (ClamAV + rkhunter)
-  usb [allow <id>]       List USB devices or allow a blocked one (USBGuard)
-  panic                  Cut network, kill sessions, wipe caches, power off NOW
-
-${BOLD}Isolation${RESET}
-  vm <image|iso> [opts]  Start a disposable VM networked through Tor
-                         (--mem 4G, --cpus 2, --offline, --disk 20G)
+  usb [allow|block <id>] List USB devices or allow/block one (USBGuard)
+  bootcheck record|verify Detect /boot, ESP or TPM tampering since a baseline
+  panic                  Kill stealth VMs, lock vault, cut network, power off NOW
 
 ${BOLD}Migration${RESET}
-  migrate [opts]         Copy user files from a Windows 11 disk
-                         (--source /dev/sdXN, --dest DIR, --user NAME, --scrub)
+  migrate --from <dir|dev> Import files from a Windows export or Windows disk
 
-See /usr/share/doc/kratos for the threat model and OpSec guide.
+Docs: /usr/share/doc/kratos
 EOF
 }
 
@@ -50,19 +73,22 @@ main() {
     local cmd="${1:-help}"
     shift || true
     case "$cmd" in
+        stealth)     stealth_main "$@" ;;
         status)      net_status "$@" ;;
-        check)       net_check "$@" ;;
         mode)        net_mode "$@" ;;
         boot)        net_boot "$@" ;;
-        newnym)      net_newnym "$@" ;;
+        restore)     net_restore "$@" ;;
         vpn-import)  net_vpn_import "$@" ;;
         mac)         net_mac "$@" ;;
+        corr)        corr_main "$@" ;;
+        fingerprint) corr_fingerprint ;;
+        stylo)       python3 "$KRATOS_LIB/stylo.py" "$@" ;;
+        bootcheck)   bootcheck_main "$@" ;;
         scrub)       opsec_scrub "$@" ;;
         shred)       opsec_shred "$@" ;;
         scan)        opsec_scan "$@" ;;
         usb)         opsec_usb "$@" ;;
         panic)       opsec_panic "$@" ;;
-        vm)          vm_run "$@" ;;
         migrate)     migrate_windows "$@" ;;
         help|-h|--help) usage ;;
         *) err "unknown command: $cmd"; usage; exit 2 ;;

@@ -1,0 +1,58 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck nftables qemu-utils python3
+      - name: Create test users for the isolation attack suite
+        run: |
+          sudo groupadd -r kstealth || true
+          sudo useradd -r -g kstealth -s /usr/sbin/nologin kstealth || true
+          sudo useradd -m mallory || true
+          sudo useradd -r kratos-nym || true
+      - name: Run the full suite
+        run: sudo ATTACKER=mallory tests/run.sh
+
+  build-iso:
+    # Builds the installer ISO so you never need a Linux machine: download it
+    # from this job's Artifacts. Runs on manual dispatch and tags.
+    #
+    # Built inside a Debian trixie container using Debian's OWN live-build, not
+    # the Ubuntu runner's (whose live-build is too old for a modern Debian
+    # target and fails on suite names / index paths). Matching the tool to the
+    # target is what makes the build reliable. --privileged: live-build needs
+    # mount, chroot and loop devices.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+      options: --privileged
+    steps:
+      - name: Install build tooling
+        run: |
+          apt-get update
+          # git for checkout; live-build + the image tools it drives.
+          apt-get install -y --no-install-recommends \
+            live-build debootstrap git ca-certificates xorriso \
+            squashfs-tools dosfstools mtools
+      - uses: actions/checkout@v4
+      - name: Build ISO
+        run: ./build.sh          # already root in the container; no sudo
+      - name: Checksums
+        run: sha256sum kratosos-*.iso | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kratosos-iso
+          path: |
+            kratosos-*.iso
+            SHA256SUMS
+          retention-days: 14

@@ -1,0 +1,6 @@
+# KratosOS Salt top file (user saltenv). Apply with:
+#   sudo qubesctl top.enable kratos saltenv=user
+#   sudo qubesctl --all state.apply saltenv=user
+base:
+  dom0:
+    - kratos

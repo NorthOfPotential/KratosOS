@@ -1,0 +1,13 @@
+[Unit]
+Description=KratosOS network mode (brings up the VPN once the network is online)
+After=network-online.target kratos-firewall.service
+Wants=network-online.target
+Requires=kratos-firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/kratos restore
+
+[Install]
+WantedBy=multi-user.target
