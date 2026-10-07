@@ -197,28 +197,60 @@ undo() { printf '%s\n' "$*" >> "$STEALTH_UNDO"; }
 # corrupted undo log can't be turned into arbitrary root commands.
 _UNDO_ALLOWED=" swapon systemctl rfkill rm modprobe usbguard sysctl "
 
+# Is a named host-lockdown protection REQUIRED (Stealth refuses to start unless
+# it is actually applied) rather than best-effort? Driven by STEALTH_REQUIRE, a
+# comma-separated list drawn from: swap sleep bluetooth camera usb scan mac.
+_stealth_required() {
+    local IFS=',' t
+    for t in ${STEALTH_REQUIRE:-}; do
+        [[ "$t" == "$1" ]] && return 0
+    done
+    return 1
+}
+
+# A requested protection could not be fully applied. If the user listed it in
+# STEALTH_REQUIRE, fail closed (die -> stealth_on rolls the lockdown back); if
+# not, it is best-effort, so warn and carry on. This keeps "I asked for X and
+# Stealth started" from silently meaning "X isn't actually in force".
+_protect_failed() {   # <token> <message...>
+    local token="$1"; shift
+    if _stealth_required "$token"; then
+        die "required protection '$token' is not in force: $* — refusing to start (edit STEALTH_REQUIRE to make it best-effort)"
+    fi
+    warn "$* (best-effort; add '$token' to STEALTH_REQUIRE to make this fatal)"
+}
+
 host_lockdown() {
     : > "$STEALTH_UNDO"
     chmod 600 "$STEALTH_UNDO"
 
     if [[ "$STEALTH_DISABLE_SWAP" == yes && -n "$(swapon --noheadings --show 2>/dev/null)" ]]; then
-        swapoff -a || die "not enough free RAM to disable swap; close some programs"
-        undo "swapon -a"
-        ok "swap off"
+        if swapoff -a; then
+            undo "swapon -a"
+            ok "swap off"
+        else
+            _protect_failed swap "not enough free RAM to disable swap; close some programs (VM memory could be swapped to disk)"
+        fi
     fi
     if [[ "$STEALTH_BLOCK_SLEEP" == yes ]]; then
         local targets="sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target"
         # shellcheck disable=SC2086
-        systemctl mask --runtime --quiet $targets
-        undo "systemctl unmask --runtime --quiet $targets"
-        ok "suspend/hibernate blocked"
-    fi
-    if [[ "$STEALTH_BLOCK_BLUETOOTH" == yes ]] && command -v rfkill >/dev/null; then
-        if rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: no'; then
-            rfkill block bluetooth
-            undo "rfkill unblock bluetooth"
+        if systemctl mask --runtime --quiet $targets; then
+            undo "systemctl unmask --runtime --quiet $targets"
+            ok "suspend/hibernate blocked"
+        else
+            _protect_failed sleep "could not block suspend/hibernate (VM RAM and keys could reach disk on sleep)"
         fi
-        ok "bluetooth off"
+    fi
+    if [[ "$STEALTH_BLOCK_BLUETOOTH" == yes ]]; then
+        if ! command -v rfkill >/dev/null; then
+            _protect_failed bluetooth "rfkill is not installed, so Bluetooth could not be disabled"
+        elif rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: no'; then
+            if rfkill block bluetooth; then undo "rfkill unblock bluetooth"; ok "bluetooth off"
+            else _protect_failed bluetooth "rfkill could not block Bluetooth"; fi
+        else
+            ok "bluetooth off"
+        fi
     fi
     if [[ "$STEALTH_BLOCK_CAMERA" == yes ]]; then
         install -d /run/modprobe.d
@@ -229,16 +261,22 @@ host_lockdown() {
                 undo "modprobe uvcvideo"
                 ok "camera off"
             else
-                warn "camera is in use and could not be disabled; close apps using it"
+                _protect_failed camera "camera is in use and could not be disabled; close apps using it"
             fi
+        else
+            ok "camera off"
         fi
     fi
-    if [[ "$STEALTH_BLOCK_NEW_USB" == yes ]] && systemctl is-active --quiet usbguard; then
-        local prev
-        prev="$(usbguard get-parameter ImplicitPolicyTarget 2>/dev/null || echo allow)"
-        usbguard set-parameter ImplicitPolicyTarget block >/dev/null
-        undo "usbguard set-parameter ImplicitPolicyTarget $prev"
-        ok "new USB devices blocked"
+    if [[ "$STEALTH_BLOCK_NEW_USB" == yes ]]; then
+        if systemctl is-active --quiet usbguard; then
+            local prev
+            prev="$(usbguard get-parameter ImplicitPolicyTarget 2>/dev/null || echo allow)"
+            usbguard set-parameter ImplicitPolicyTarget block >/dev/null
+            undo "usbguard set-parameter ImplicitPolicyTarget $prev"
+            ok "new USB devices blocked"
+        else
+            _protect_failed usb "usbguard is not running, so newly plugged USB devices are NOT blocked"
+        fi
     fi
     if [[ "$STEALTH_ONACCESS_SCAN" == yes ]] && ! systemctl is-active --quiet clamav-clamonacc; then
         # clamd needs ~1 GB RAM for signatures, so it only runs in Stealth Mode
@@ -246,17 +284,21 @@ host_lockdown() {
             undo "systemctl stop clamav-clamonacc clamav-daemon"
             ok "on-access malware scanning on"
         else
-            warn "could not start on-access malware scanning"
+            _protect_failed scan "could not start on-access malware scanning"
         fi
     fi
-    if [[ "$STEALTH_NEW_MAC" == yes ]] && command -v nmcli >/dev/null; then
-        local uuid
-        local ctype
-        while IFS=: read -r uuid ctype; do
-            [[ "$ctype" == *wireless* || "$ctype" == *ethernet* ]] || continue
-            nmcli -w 20 connection up "$uuid" >/dev/null 2>&1 || true
-        done < <(nmcli -t -f UUID,TYPE connection show --active)
-        ok "reconnected with a fresh random MAC"
+    if [[ "$STEALTH_NEW_MAC" == yes ]]; then
+        if command -v nmcli >/dev/null; then
+            local uuid
+            local ctype
+            while IFS=: read -r uuid ctype; do
+                [[ "$ctype" == *wireless* || "$ctype" == *ethernet* ]] || continue
+                nmcli -w 20 connection up "$uuid" >/dev/null 2>&1 || true
+            done < <(nmcli -t -f UUID,TYPE connection show --active)
+            ok "reconnected with a fresh random MAC"
+        else
+            _protect_failed mac "NetworkManager (nmcli) not available, so MAC was not refreshed"
+        fi
     fi
     # libvirt turns forwarding on for the Gateway's NAT; turn it back off after
     undo "sysctl -qw net.ipv4.ip_forward=0"

@@ -39,6 +39,9 @@ run python3 -m unittest tests.test_harden_whonix
 step "Stealth Mode on/off ordering"
 run tests/test_stealth_order.sh
 
+step "Stealth required vs best-effort protections"
+run tests/test_stealth_require.sh
+
 step "branding (KratosOS identity, wallpaper, installer rename)"
 run tests/test_branding.sh
 
