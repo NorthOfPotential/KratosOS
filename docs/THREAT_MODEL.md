@@ -141,3 +141,8 @@ and a disposable Workstation option.
   meant to detect. Real assurance needs Secure/measured boot, signed boot chain,
   TPM-sealed measurements and anti-evil-maid — out of scope for the current
   baseline.
+- **sVirt confinement is asserted in XML, not yet verified live.** The Whonix
+  hardener requires a dynamic relabeling `<seclabel>` (per-VM AppArmor/SELinux)
+  and refuses VMs without it, but that proves the XML *requests* confinement.
+  Verifying the effective label on the running QEMU process
+  (`ps -eZ`/`aa-status`) is a live-system integration check.
