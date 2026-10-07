@@ -67,7 +67,14 @@ vault_open() {
 vault_close() {
     sync
     if mountpoint -q "$VAULT_MNT"; then
-        umount "$VAULT_MNT" || umount -l "$VAULT_MNT"
+        # Normal shutdown is FAIL-CLOSED: a busy mount is an error to surface,
+        # not something to hide behind a lazy unmount (which detaches the name
+        # while references — and the plaintext mapping — may still be live).
+        # Lazy unmount is reserved for the panic path (stealth_kill).
+        if ! umount "$VAULT_MNT"; then
+            bad "vault is still busy; refusing to lazy-unmount (run 'kratos panic' to force it down)"
+            return 1
+        fi
     fi
     if vault_is_open; then
         cryptsetup close "$VAULT_MAPPER" || { bad "vault could not be locked"; return 1; }
@@ -224,19 +231,39 @@ host_lockdown() {
     : > "$STEALTH_UNDO"
     chmod 600 "$STEALTH_UNDO"
 
-    if [[ "$STEALTH_DISABLE_SWAP" == yes && -n "$(swapon --noheadings --show 2>/dev/null)" ]]; then
-        if swapoff -a; then
-            undo "swapon -a"
-            ok "swap off"
-        else
-            _protect_failed swap "not enough free RAM to disable swap; close some programs (VM memory could be swapped to disk)"
+    if [[ "$STEALTH_DISABLE_SWAP" == yes ]]; then
+        local active_swaps sw
+        active_swaps="$(swapon --noheadings --show=NAME 2>/dev/null)"
+        if [[ -n "$active_swaps" ]]; then
+            if swapoff -a; then
+                # Re-enable ONLY the swaps that were actually active, not every
+                # fstab entry (finding 21): a swap configured-but-inactive before
+                # Stealth must stay inactive after.
+                while read -r sw; do
+                    [[ -n "$sw" ]] && undo "swapon $sw"
+                done <<< "$active_swaps"
+                ok "swap off"
+            else
+                _protect_failed swap "not enough free RAM to disable swap; close some programs (VM memory could be swapped to disk)"
+            fi
         fi
     fi
     if [[ "$STEALTH_BLOCK_SLEEP" == yes ]]; then
         local targets="sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target"
-        # shellcheck disable=SC2086
-        if systemctl mask --runtime --quiet $targets; then
-            undo "systemctl unmask --runtime --quiet $targets"
+        # Mask ONLY targets that aren't already masked, and record for undo only
+        # the ones WE masked (finding 21): never remove an administrator's
+        # pre-existing mask when Stealth turns off.
+        local t to_mask=()
+        for t in $targets; do
+            case "$(systemctl is-enabled "$t" 2>/dev/null)" in
+                masked*) : ;;                 # already masked (incl. masked-runtime): leave it
+                *) to_mask+=("$t") ;;
+            esac
+        done
+        if [[ ${#to_mask[@]} -eq 0 ]]; then
+            ok "suspend/hibernate already blocked"
+        elif systemctl mask --runtime --quiet "${to_mask[@]}"; then
+            undo "systemctl unmask --runtime --quiet ${to_mask[*]}"
             ok "suspend/hibernate blocked"
         else
             _protect_failed sleep "could not block suspend/hibernate (VM RAM and keys could reach disk on sleep)"
@@ -254,17 +281,46 @@ host_lockdown() {
     fi
     if [[ "$STEALTH_BLOCK_CAMERA" == yes ]]; then
         install -d /run/modprobe.d
-        echo "install uvcvideo /bin/false" > /run/modprobe.d/kratos-stealth.conf
-        undo "rm -f /run/modprobe.d/kratos-stealth.conf"
-        if lsmod | grep -q '^uvcvideo'; then
-            if modprobe -r uvcvideo 2>/dev/null; then
-                undo "modprobe uvcvideo"
-                ok "camera off"
+        # Block reload of the common camera stacks, not just uvcvideo (finding 58).
+        local cam_mods="uvcvideo gspca_main" m
+        : > /run/modprobe.d/kratos-stealth-cam.conf
+        for m in $cam_mods; do
+            echo "install $m /bin/false" >> /run/modprobe.d/kratos-stealth-cam.conf
+        done
+        undo "rm -f /run/modprobe.d/kratos-stealth-cam.conf"
+        for m in $cam_mods; do
+            if lsmod | grep -q "^$m"; then
+                if modprobe -r "$m" 2>/dev/null; then undo "modprobe $m"; fi
+            fi
+        done
+        # Verify there is no remaining V4L2 capture device — don't equate
+        # "unloaded one module" with "camera off" (finding 58).
+        if compgen -G "/dev/video*" >/dev/null; then
+            _protect_failed camera "a video capture device is still present (/dev/video*); close apps using it"
+        else
+            ok "camera off (no capture device present)"
+        fi
+    fi
+    if [[ "${STEALTH_BLOCK_MIC:-yes}" == yes ]]; then
+        # Microphone (finding 57). The persona VM has NO audio device at all
+        # (the harden-whonix allowlist excludes sound), so the persona cannot
+        # capture audio. This mutes the HOST's capture inputs best-effort while
+        # Stealth is on; it is not a hard boundary (a root/user process can
+        # unmute), so it is best-effort unless listed in STEALTH_REQUIRE.
+        if command -v amixer >/dev/null; then
+            local cap muted=0
+            for cap in Capture Mic "Internal Mic" "Front Mic" Dmic; do
+                if amixer -q sset "$cap" nocap 2>/dev/null || amixer -q sset "$cap" mute 2>/dev/null; then
+                    muted=1
+                fi
+            done
+            if (( muted )); then
+                ok "microphone muted (best-effort; persona VM has no audio device)"
             else
-                _protect_failed camera "camera is in use and could not be disabled; close apps using it"
+                _protect_failed mic "found no capture control to mute"
             fi
         else
-            ok "camera off"
+            _protect_failed mic "amixer not available to mute the microphone"
         fi
     fi
     if [[ "$STEALTH_BLOCK_NEW_USB" == yes ]]; then
@@ -424,7 +480,18 @@ give_display() {
     local sock="$SPICE_DIR/$1.sock" t=0
     while [[ ! -S "$sock" ]] && (( t < 10 )); do sleep 1; t=$((t + 1)); done
     [[ -S "$sock" ]] || { warn "display socket for $1 not found"; return 0; }
-    chown "root:$STEALTH_USER" "$sock"
+    # TOCTOU hardening (finding 18): QEMU (libvirt-qemu) owns SPICE_DIR, so a
+    # compromised QEMU could swap this path for a symlink between our check and
+    # our chown/chmod and redirect them at an arbitrary file. Refuse a symlink,
+    # chown WITHOUT dereferencing, and re-verify it is still a real socket (not
+    # a symlink) immediately before chmod.
+    if [[ -L "$sock" ]]; then
+        die "display socket $sock is a symlink — refusing (possible TOCTOU attack)"
+    fi
+    chown -h "root:$STEALTH_USER" "$sock"
+    if [[ ! -S "$sock" || -L "$sock" ]]; then
+        die "display socket $sock changed under us before chmod — refusing (possible TOCTOU attack)"
+    fi
     # 0660: connecting to a UNIX socket needs write, so the kstealth group gets
     # read+write. "Other" (your normal desktop user) gets nothing.
     chmod 0660 "$sock"

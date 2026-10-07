@@ -3,8 +3,9 @@
 # user lists in STEALTH_REQUIRE must fail CLOSED (die) when it can't be applied,
 # while anything else is best-effort (warn and continue).
 #
-# STEALTH_REQUIRE is read by the sourced stealth.sh, which the linter can't see:
-# shellcheck disable=SC1091,SC2034
+# STEALTH_REQUIRE is read by the sourced stealth.sh, which the linter can't see;
+# the chown/chmod stubs are called indirectly from give_display:
+# shellcheck disable=SC1091,SC2034,SC2317,SC2329
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 lib="$here/../config/includes.chroot/usr/local/lib/kratos"
@@ -61,6 +62,27 @@ if (( rc == 0 )) && grep -q REACHED <<<"$out"; then
     pass "nothing required -> swap failure is non-fatal"
 else
     flunk "empty require list still fatal (rc=$rc): $out"
+fi
+
+echo "— give_display refuses a symlinked socket (TOCTOU, finding 18) —"
+tmpd="$(mktemp -d)"; trap 'rm -rf "$tmpd"' EXIT
+# A real UNIX socket as the symlink target, so [[ -S ]] is true and the symlink
+# branch is what decides.
+python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])" "$tmpd/real.sock" 2>/dev/null
+ln -s "$tmpd/real.sock" "$tmpd/kx-ws.sock"
+out="$( ( load
+          SPICE_DIR="$tmpd"; STEALTH_USER="root"
+          chown() { echo "chown $*"; }      # must never run on a symlink
+          chmod() { echo "chmod $*"; }
+          give_display kx-ws; echo REACHED ) 2>&1 )"; rc=$?
+if (( rc != 0 )) && ! grep -q REACHED <<<"$out" && grep -qi "symlink" <<<"$out" \
+   && ! grep -q "^chmod" <<<"$out"; then
+    pass "symlinked display socket is refused before any chmod"
+elif [[ -S "$tmpd/real.sock" ]]; then
+    flunk "give_display did not fail closed on a symlink (rc=$rc): $out"
+else
+    # Some minimal environments can't create AF_UNIX sockets; don't false-fail.
+    echo "  SKIP  could not create an AF_UNIX socket in this sandbox"
 fi
 
 exit "$fail"
