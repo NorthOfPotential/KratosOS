@@ -171,6 +171,33 @@ class HardenWhonixTest(unittest.TestCase):
             'name="org.qemu.guest_agent.0"/></channel></devices>'))
         self.assertNotEqual(run("check", self.out).returncode, 0)
 
+    def test_check_detects_a_device_not_on_the_allowlist(self):
+        # Allowlist (finding 13): a device we never enumerated — here an audio
+        # capture path — must be refused, not silently accepted.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</devices>", '<sound model="ich9"/></devices>'))
+        r = run("check", self.out)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("allowed device set", r.stderr)
+
+    def test_check_rejects_passthrough_tpm(self):
+        # An emulated TPM is fine; a host passthrough TPM bridges a real device.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</devices>", '<tpm model="tpm-crb"><backend type="passthrough">'
+            '<device path="/dev/tpm0"/></backend></tpm></devices>'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_prepare_strips_an_unknown_device(self):
+        # A hostile device injected into the SOURCE must be stripped by prepare,
+        # so the prepared output still passes check.
+        ws = self.variant("Whonix-Workstation-Xfce.xml", lambda s: s.replace(
+            "</devices>", '<hostdev mode="subsystem" type="usb"/></devices>'))
+        self.assertEqual(self.prepare(ws_xml=ws).returncode, 0)
+        self.assertEqual(self.load("kx-ws").findall("devices/hostdev"), [])
+        self.assertEqual(run("check", self.out).returncode, 0)
+
     def test_check_detects_qemu_commandline(self):
         # <qemu:commandline> can pass arbitrary QEMU flags — an escape hatch.
         self.prepare()

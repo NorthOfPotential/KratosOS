@@ -5,7 +5,8 @@ prepare: take the XML files shipped in the official Whonix KVM archive and
 write hardened copies (kx-gw, kx-ws, kx-ext, kx-int) that:
   * use generic names (no "Whonix" in libvirt logs or process lists)
   * point at the disks inside the encrypted stealth vault
-  * have no clipboard, file transfer, USB redirection or shared folders
+  * keep ONLY an allowlisted set of guest-local devices (everything else,
+    including any host<->guest bridge, is stripped and then asserted absent)
   * have the exact network topology Whonix requires
 
 check: validate already-prepared files. Exits non-zero on any violation, so
@@ -20,12 +21,28 @@ EXT, INT = "kx-ext", "kx-int"
 GW, WS = "kx-gw", "kx-ws"
 SPICE_DIR = "/run/kratos/spice"
 
-# Device elements that can carry data across the host<->guest boundary. ALL of
-# them are stripped and then asserted absent. "channel" covers the QEMU guest
-# agent and SPICE agent (clipboard) alike; "vsock" is a direct host<->guest
-# socket; the rest are passthrough/shared-memory bridges.
-REMOVE_DEVICES = ("redirdev", "filesystem", "smartcard", "hostdev", "shmem",
-                  "channel", "vsock")
+# ALLOWLIST (finding 13): instead of blacklisting today's known-dangerous
+# devices, we enumerate the ONLY device elements a KratosOS persona VM is
+# permitted to have — all of them guest-local — and strip/reject anything else.
+# This closes the whole class of host<->guest bridges (channel, vsock,
+# filesystem, hostdev, redirdev, smartcard, shmem, sound/audio capture, …) and
+# any future libvirt device class, not just the handful we happen to know.
+#
+#   emulator    the QEMU binary path (not a device, but a <devices> child)
+#   disk        the VM's own virtual disk (validated: one, file-backed, private)
+#   controller  virtio/pci/usb controllers the guest needs internally
+#   interface   NIC (validated: type=network, mapped to kx-ext/kx-int only)
+#   graphics    the SPICE display (validated: private socket, no clipboard/FT)
+#   video       the emulated GPU the display draws
+#   input       keyboard / mouse / tablet for the SPICE console
+#   serial/console  guest console (pty) for boot/login — guest-local, no host IO
+#   rng         virtio-rng (entropy) — host provides randomness, not a data path
+#   memballoon  virtio memory balloon
+#   tpm         emulated TPM only (backend type=emulator; passthrough rejected)
+ALLOWED_DEVICES = frozenset({
+    "emulator", "disk", "controller", "interface", "graphics",
+    "video", "input", "serial", "console", "rng", "memballoon", "tpm",
+})
 
 # libvirt's <qemu:commandline>/<qemu:override> let a domain pass arbitrary QEMU
 # flags — an escape hatch around every check here. The qemu namespace URI:
@@ -78,6 +95,13 @@ def harden_domain(root, name, disk, ram_mib):
     if devices is None:
         raise Violation(f"{name}: no <devices>")
 
+    # Allowlist: drop every device element we don't explicitly permit, BEFORE
+    # touching the ones we keep. This removes channel/vsock/redirdev/filesystem/
+    # hostdev/shmem/smartcard/sound/… in one stroke.
+    for el in list(devices):
+        if el.tag not in ALLOWED_DEVICES:
+            devices.remove(el)
+
     disks = [d for d in devices.findall("disk") if d.get("device", "disk") == "disk"]
     if len(disks) != 1:
         raise Violation(f"{name}: expected exactly one disk, found {len(disks)}")
@@ -91,9 +115,6 @@ def harden_domain(root, name, disk, ram_mib):
     src.attrib.clear()
     src.set("file", disk)
 
-    for tag in REMOVE_DEVICES:
-        for el in devices.findall(tag):
-            devices.remove(el)
     _strip_qemu_overrides(root)
 
     graphics = devices.findall("graphics")
@@ -147,9 +168,20 @@ def check_domain(root):
     expected = [INT] if name == WS else [EXT, INT]
     if sorted(nets) != sorted(expected):
         raise Violation(f"{name}: networks {nets}, expected {expected}")
-    for tag in REMOVE_DEVICES:
-        if devices.find(tag) is not None:
-            raise Violation(f"{name}: <{tag}> must not be present (host<->guest bridge)")
+    # Allowlist: every device element must be one we explicitly permit. Anything
+    # else (channel, vsock, filesystem, hostdev, redirdev, smartcard, shmem,
+    # sound, or any future libvirt device class) is a potential host<->guest
+    # bridge and is refused — we do not rely on knowing today's dangerous set.
+    for el in devices:
+        if el.tag not in ALLOWED_DEVICES:
+            raise Violation(f"{name}: <{el.tag}> is not in the allowed device set "
+                            f"(possible host<->guest bridge)")
+    # An emulated TPM is guest-local and fine; a passthrough TPM is a real host
+    # device bridged into the guest — refuse it.
+    for tpm in devices.findall("tpm"):
+        backend = tpm.find("backend")
+        if backend is None or backend.get("type") != "emulator":
+            raise Violation(f"{name}: <tpm> must use an emulator backend, not host passthrough")
     # No <qemu:commandline>/<qemu:override> escape hatch at the domain root.
     for child in root:
         if child.tag.startswith("{" + QEMU_NS + "}"):
