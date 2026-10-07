@@ -236,8 +236,8 @@ migrate_windows() {
     # When a desktop user elevated this (auth_admin_keep caches that auth),
     # confine the destination to THEIR home so it can't be pointed at /etc etc.
     if [[ $EUID -eq 0 && -n "$invoker" && "$invoker" != root ]]; then
-        case "$dest/" in
-            "$owner_home"/*) : ;;
+        case "$dest" in
+            "$owner_home"|"$owner_home"/*) : ;;   # the home itself, or inside it
             *) die "refusing elevated migration to '$dest': the destination must be inside $owner_home" ;;
         esac
     fi

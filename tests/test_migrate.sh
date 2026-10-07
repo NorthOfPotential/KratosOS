@@ -25,7 +25,11 @@ make_export() {
 }
 
 run_migrate() {
-    KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" "$kratos" migrate --from "$export_dir" --to "$home_dir" 2>&1
+    # Unset SUDO_USER/PKEXEC_UID so this is treated as a direct-root run (the
+    # test's --to lives in /tmp, outside any desktop user's home); the home
+    # confinement is exercised separately below.
+    env -u SUDO_USER -u PKEXEC_UID KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" \
+        "$kratos" migrate --from "$export_dir" --to "$home_dir" 2>&1
 }
 
 echo "migration: clean export"
@@ -54,5 +58,20 @@ make_export
 printf '%s  Files/../../etc/evil\n' "$(printf evil | sha256sum | cut -d' ' -f1)" >> "$export_dir/manifest.sha256"
 if out="$(run_migrate)"; then rc=0; else rc=1; fi
 if (( rc != 0 )) && grep -qiE "unsafe paths|\.\." <<<"$out"; then pass "rejects a manifest with .. traversal"; else flunk "accepted unsafe manifest"; echo "$out"; fi
+
+echo "migration: elevated --to outside the invoker's home is refused"
+mhome="$(getent passwd mallory 2>/dev/null | cut -d: -f6)"
+if [[ $EUID -eq 0 && -n "$mhome" ]]; then
+    make_export
+    if out="$(env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
+                 "$kratos" migrate --from "$export_dir" --to "$tmp/outside" 2>&1)"; then rc=0; else rc=1; fi
+    if (( rc != 0 )) && grep -qiE "must be inside|refusing elevated" <<<"$out"; then
+        pass "elevated migration is confined to the invoker's home"
+    else
+        flunk "elevated --to confinement not enforced"; echo "$out"
+    fi
+else
+    echo "  SKIP  needs root + a 'mallory' user to test home confinement"
+fi
 
 exit "$fail"
