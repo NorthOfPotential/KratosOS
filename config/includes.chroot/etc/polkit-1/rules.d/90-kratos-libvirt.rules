@@ -1,0 +1,18 @@
+// KratosOS: the persona VMs (Stealth Mode) run on the SYSTEM libvirt
+// (qemu:///system) and are driven only by the `kratos` tool as root. The
+// ordinary desktop user must NOT be able to manage, inspect or control that
+// libvirt instance — otherwise malware as that user could watch, pause, modify
+// or exfiltrate the persona VM, defeating the host/persona separation.
+//
+// Finding 26: don't rely on whatever the distro's libvirt socket/polkit
+// defaults happen to be — deny every org.libvirt.* management action to any
+// subject that is not root. (Root, i.e. the kratos tool via its own polkit
+// action, is unaffected.)
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.libvirt.") === 0) {
+        if (subject.user === "root") {
+            return polkit.Result.YES;
+        }
+        return polkit.Result.NO;
+    }
+});
