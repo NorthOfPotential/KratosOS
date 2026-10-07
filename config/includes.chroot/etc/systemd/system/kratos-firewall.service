@@ -8,6 +8,9 @@ After=local-fs.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Load a minimal default-drop FIRST, so if the full ruleset below fails to load
+# (syntax error, missing file, ...) the machine stays blocked rather than open.
+ExecStartPre=/usr/sbin/nft -f /etc/kratos/modes/offline.nft
 ExecStart=/usr/local/bin/kratos boot
 
 [Install]

@@ -3,6 +3,7 @@ construction and the persona isolation policy audit. These run off a Qubes
 host (the logic is pure); live behaviour needs a real dom0."""
 import importlib.util
 import os
+import re
 import unittest
 from importlib.machinery import SourceFileLoader
 
@@ -52,24 +53,36 @@ class PolicyAudit(unittest.TestCase):
             self.assertIn(f"{svc} ", POLICY, f"{svc} not mentioned in policy")
 
     def test_detects_a_hole(self):
-        # Flip the clipboard deny to allow: the audit must catch it.
-        holed = POLICY.replace(
-            "qubes.ClipboardPaste  *  @tag:kratos-persona  @anyvm        deny",
-            "qubes.ClipboardPaste  *  @tag:kratos-persona  @anyvm        allow")
-        problems = kq.audit_policy(holed)
-        self.assertTrue(any("ClipboardPaste" in p for p in problems))
+        # Flip the explicit clipboard deny to allow (it sits before the catch-all,
+        # so first-match makes it a real hole): the audit must catch it.
+        holed = re.sub(
+            r"(qubes\.ClipboardPaste\s+\*\s+@tag:kratos-persona\s+@anyvm\s+)deny",
+            r"\1allow", POLICY, count=1)
+        self.assertNotEqual(holed, POLICY, "test setup: deny line not found")
+        self.assertTrue(any("ClipboardPaste" in p for p in kq.audit_policy(holed)))
 
     def test_detects_earlier_allow_shadowing_the_deny(self):
         # qrexec is first-match: an allow before the deny is a real hole.
         shadowed = "qubes.Filecopy  *  @tag:kratos-persona  @anyvm  allow\n" + POLICY
-        problems = kq.audit_policy(shadowed)
-        self.assertTrue(any("Filecopy" in p for p in problems))
+        self.assertTrue(any("Filecopy" in p for p in kq.audit_policy(shadowed)))
 
-    def test_detects_missing_rule(self):
-        # Remove the OpenURL denies entirely.
-        stripped = "\n".join(l for l in POLICY.splitlines() if "OpenURL" not in l)
-        problems = kq.audit_policy(stripped)
-        self.assertTrue(any("OpenURL" in p for p in problems))
+    def test_rejects_invalid_service_wildcard(self):
+        # A fake prefix wildcard (admin.vm.*) is INVALID qrexec syntax and must
+        # be flagged — this is exactly what slipped through before.
+        bad = POLICY + "\nadmin.vm.*  *  @tag:kratos-persona  @anyvm  deny\n"
+        self.assertTrue(any("invalid service token" in p for p in kq.audit_policy(bad)))
+
+    def test_requires_catchall_to_anyvm_and_adminvm(self):
+        # Removing either catch-all deny must be caught (dom0 isn't covered by
+        # @anyvm, so it needs its own rule).
+        for target in ("@anyvm", "@adminvm"):
+            stripped = re.sub(
+                rf"^\*\s+\*\s+@tag:kratos-persona\s+{re.escape(target)}\s+deny\s*$",
+                "", POLICY, count=1, flags=re.MULTILINE)
+            self.assertNotEqual(stripped, POLICY, f"test setup: {target} catch-all not found")
+            problems = kq.audit_policy(stripped)
+            self.assertTrue(any("catch-all" in p and target in p for p in problems),
+                            f"missing {target} catch-all not detected: {problems}")
 
 
 if __name__ == "__main__":

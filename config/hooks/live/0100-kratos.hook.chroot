@@ -45,8 +45,10 @@ find /usr/local/lib/kratos /usr/local/bin -name '__pycache__' -type d -prune \
 # this user on its own VT, so malware in your normal desktop session (a
 # different uid) cannot see the persona screen, inject keys, or read the vault.
 getent group kstealth >/dev/null || groupadd -r kstealth
+# No kvm group: the display account only opens its SPICE socket; it never needs
+# to create VMs or touch /dev/kvm (QEMU runs as libvirt-qemu).
 getent passwd kstealth >/dev/null || \
-    useradd -r -g kstealth -G kvm -s /usr/sbin/nologin -d /var/lib/kratos/stealth-home kstealth
+    useradd -r -g kstealth -s /usr/sbin/nologin -d /var/lib/kratos/stealth-home kstealth
 install -d -m 700 -o kstealth -g kstealth /var/lib/kratos/stealth-home
 
 # ── Hide processes between users ────────────────────────────

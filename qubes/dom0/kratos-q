@@ -15,6 +15,7 @@ Command construction and the policy audit are pure functions so they can be
 unit-tested off a Qubes host; main() executes them with subprocess. Live use
 requires an actual Qubes OS dom0 with Whonix templates installed.
 """
+import re
 import subprocess
 import sys
 
@@ -69,11 +70,33 @@ def build_provision():
 
 # ---- pure policy audit ----
 
-def audit_policy(policy_text):
-    """Return a list of problems with the persona isolation policy. Empty = ok.
+PERSONA_TAG_SEL = f"@tag:{PERSONA_TAG}"
 
-    Each sensitive service must be denied FROM the persona tag to @anyvm, and
-    no earlier line may allow it (first match wins in qrexec)."""
+# A qrexec service token is an exact name or exactly "*" — there are NO prefix
+# wildcards (so "admin.vm.*" is INVALID and the real parser rejects it).
+_SERVICE_RE = re.compile(r"^(?:\*|[A-Za-z0-9_.-]+(?:\+[A-Za-z0-9_.-]*)?)$")
+
+
+def _src_matches_persona(src):
+    return src in (PERSONA_TAG_SEL, "*")
+
+
+def _dst_matches(rule_dst, target):
+    """Does a rule's destination cover `target`? @anyvm excludes dom0/@adminvm."""
+    if rule_dst in (target, "*"):
+        return True
+    if rule_dst == "@anyvm" and target != "@adminvm":
+        return True
+    return False
+
+
+def audit_policy(policy_text):
+    """Best-effort lint of the persona isolation policy. Empty list = looks ok.
+
+    NOT a substitute for Qubes' own parser: this catches structural mistakes
+    (invalid service wildcards, a missing or shadowed catch-all deny, a sensitive
+    service not denied out of the persona). The authoritative check is Qubes'
+    policy tooling on a live dom0 — cmd_audit() says so."""
     problems = []
     rules = []
     for raw in policy_text.splitlines():
@@ -82,26 +105,37 @@ def audit_policy(policy_text):
             continue
         parts = line.split()
         if len(parts) < 5:
+            problems.append(f"malformed rule (needs 5 columns): {line!r}")
             continue
-        service, _arg, src, dst, action = parts[0], parts[1], parts[2], parts[3], parts[4]
-        rules.append((service, src, dst, action.split()[0]))
+        service, arg, src, dst, action = parts[0], parts[1], parts[2], parts[3], parts[4].split()[0]
+        # Reject fake prefix wildcards like admin.vm.* — qrexec has no such thing.
+        if not _SERVICE_RE.match(service):
+            problems.append(f"invalid service token {service!r} (qrexec has no prefix wildcards)")
+        if arg != "*" and not arg.startswith("+"):
+            problems.append(f"invalid argument token {arg!r} in rule for {service!r}")
+        rules.append((service, src, dst, action))
 
+    # Each sensitive service must be denied OUT of the persona (to @anyvm).
     for svc in REQUIRED_DENIES:
         verdict = None
         for service, src, dst, action in rules:
-            svc_base = service.split("+", 1)[0]
-            matches = (svc_base == svc or service in ("*", svc)) \
-                and src in (PERSONA_TAG_SEL, "*") \
-                and dst in ("@anyvm", "*")
-            if matches:
+            if (service in ("*", svc)) and _src_matches_persona(src) and _dst_matches(dst, "@anyvm"):
                 verdict = action
                 break
         if verdict != "deny":
             problems.append(f"{svc}: persona->@anyvm is {verdict or 'not matched'} (must be deny)")
+
+    # There must be a reachable catch-all deny for the persona to BOTH any other
+    # qube and dom0 (@adminvm), since @anyvm alone does not cover dom0.
+    for target in ("@anyvm", "@adminvm"):
+        verdict = None
+        for service, src, dst, action in rules:
+            if service == "*" and _src_matches_persona(src) and _dst_matches(dst, target):
+                verdict = action
+                break
+        if verdict != "deny":
+            problems.append(f"catch-all persona->{target} is {verdict or 'missing'} (must be a '*' deny)")
     return problems
-
-
-PERSONA_TAG_SEL = f"@tag:{PERSONA_TAG}"
 
 
 # ---- executor ----
@@ -137,7 +171,9 @@ def cmd_audit():
         for p in problems:
             print(f"  FAIL  {p}")
     else:
-        print("  OK    persona clipboard/file/RPC egress denied by policy")
+        print("  OK    persona egress denied (lint only — see note)")
+    print("  note  this is a KratosOS lint, NOT Qubes' parser; validate with "
+          "'qubes-policy-lint'/live dom0 before relying on it")
     if have_qubes():
         net = subprocess.run(["qvm-prefs", WS_TEMPLATE, "netvm"],
                              capture_output=True, text=True).stdout.strip()

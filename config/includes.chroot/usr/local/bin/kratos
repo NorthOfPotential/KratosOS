@@ -9,7 +9,7 @@ set -euo pipefail
 # fixed PATH and the absence of loader/interpreter hijack variables never
 # depend on how we were invoked. Closes the $PATH-attack and
 # environment-injection classes regardless of caller.
-export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
       LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
       PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONWARNINGS \

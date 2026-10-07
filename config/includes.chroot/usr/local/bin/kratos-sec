@@ -3,25 +3,31 @@
 set -uo pipefail
 case "${1:-help}" in
   install-metasploit)
+    # KratosOS will NOT pipe a mutable Internet script into root for you — that
+    # is a supply-chain root-execution risk (the upstream branch can change or be
+    # compromised between review and run). We give you the official instructions
+    # so you can review and pin a release yourself.
     cat <<'TXT'
 Metasploit Framework is not in Debian's repositories, so KratosOS does not ship
-it. Rapid7 provide an official installer that adds their APT repo and installs
-the 'metasploit-framework' package. It downloads a script and runs it as root.
-Official installer: https://github.com/rapid7/metasploit-framework#installing
+it. KratosOS deliberately does NOT download and run Rapid7's installer for you,
+because that executes mutable Internet code as root.
+
+To install it safely yourself, prefer one of:
+
+  1. A pinned release + checksum (recommended):
+       - Open https://github.com/rapid7/metasploit-framework/releases
+       - Download the release and its published checksum/signature.
+       - Verify the checksum, THEN install.
+
+  2. Rapid7's APT repository (review before trusting):
+       - Instructions: https://github.com/rapid7/metasploit-framework#installing
+       - Read their 'msfinstall' script first; pin the exact commit you reviewed
+         (https://github.com/rapid7/metasploit-omnibus at a fixed SHA), verify a
+         separately obtained digest, and only then run it.
+
+Free, already-installed alternatives for a lot of Metasploit's use cases live in
+the "KratosOS Security" menu (searchsploit, hydra, nmap NSE, sqlmap, ...).
 TXT
-    read -r -p "Download and run the official Rapid7 installer now? [y/N] " a
-    if [[ ! "$a" =~ ^[Yy]$ ]]; then
-        echo "Not installing. You can follow the link above to do it yourself."
-        exit 0
-    fi
-    command -v curl >/dev/null 2>&1 || { echo "curl is required"; exit 1; }
-    tmp="$(mktemp -d)"
-    url="https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfinstall"
-    echo "Fetching installer from $url ..."
-    curl -fsSL "$url" -o "$tmp/msfinstall" || { echo "download failed"; exit 1; }
-    chmod +x "$tmp/msfinstall"
-    echo "Running the installer with sudo..."
-    sudo "$tmp/msfinstall"
     ;;
   *)
     echo "usage: kratos-sec install-metasploit" ;;

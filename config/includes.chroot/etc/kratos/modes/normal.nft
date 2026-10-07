@@ -28,6 +28,11 @@ table inet kratos {
     chain output {
         type filter hook output priority filter; policy accept;
         meta nfproto ipv6 drop
+        # Force DNS through the local resolver (systemd-resolved, DoT upstream).
+        # Direct clear-text DNS to anywhere but the loopback stub is blocked, so
+        # an app can't bypass encrypted resolution with its own raw :53 queries.
+        udp dport 53 oifname != "lo" drop
+        tcp dport 53 oifname != "lo" drop
         # Don't announce this machine on the local network
         udp dport { 137, 138, 1900, 3702, 5353, 5355 } drop
         # Windows file sharing never goes to the internet (it leaks credential hashes)

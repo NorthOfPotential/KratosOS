@@ -17,6 +17,7 @@ VAULT_MAPPER="kratos-stealth"
 VAULT_MNT="$KRATOS_STATE/vault"
 VAULT_XML="$VAULT_MNT/libvirt"
 STEALTH_FLAG="$KRATOS_RUN/stealth.active"
+STEALTH_ERROR="$KRATOS_RUN/stealth.error"
 STEALTH_UNDO="$KRATOS_RUN/stealth.undo"
 STEALTH_NFT="$KRATOS_ETC/stealth.nft"
 HARDEN="$KRATOS_LIB/harden-whonix.py"
@@ -130,6 +131,10 @@ Download the KVM image, its .asc signature and the signing key from https://www.
 
     verify_whonix "$archive" "$sig" "$key"
 
+    # From the moment the vault can be unlocked, guarantee it is re-locked on
+    # EVERY exit path (a failed extract, missing archive member, hardener
+    # rejection, ...), so a failed setup never leaves the vault open.
+    trap 'vault_close' EXIT
     if [[ -e "$VAULT_IMG" ]]; then
         vault_open
     else
@@ -167,6 +172,7 @@ Download the KVM image, its .asc signature and the signing key from https://www.
         --outdir "$VAULT_XML" || die "Whonix definitions failed the isolation check"
     rm -rf "$imp"
     vault_close
+    trap - EXIT
     ok "Stealth Mode is ready. Turn it on from the tray, or: sudo kratos stealth on"
     warn "You can delete the downloaded archive now (kratos shred <file>)."
 }
@@ -407,17 +413,36 @@ stealth_on() {
     info "Open the stealth desktop: kratos stealth view"
 }
 
+# Record that Stealth Mode could not be fully torn down, and STOP: the host
+# lockdown and the stealth firewall stay in place (fail-closed). The host is
+# NOT restored and the active flag is NOT cleared, so status still reads ON.
+_stealth_error() {
+    { date -u +%s; printf '%s\n' "$*"; } >> "$STEALTH_ERROR" 2>/dev/null || true
+    err "STEALTH MODE LEFT PARTIALLY UP: $*"
+    err "Host lockdown and the stealth firewall are STILL ACTIVE (fail-closed)."
+    err "Run 'kratos panic' to force everything down, or retry 'kratos stealth off'."
+}
+
+# Fail-closed teardown. Each step must succeed before the next loosens anything;
+# the host is restored and the active flag cleared ONLY when everything below is
+# positively gone.
 stealth_off_steps() {
-    local failed=0
     info "${BOLD}Stopping isolated environment${RESET} (Workstation first)"
-    vm_stop "$WS" || failed=1
-    if (( failed )); then
+    if ! vm_stop "$WS"; then
         # Never take the Gateway away from a Workstation that is still running,
         # or the Workstation would sit without Tor while holding persona data.
-        err "the Workstation could not be stopped; leaving Gateway and vault as they are"
+        _stealth_error "the Workstation could not be stopped; Gateway and vault left as they are"
         return 1
     fi
-    vm_stop "$GW" || failed=1
+    if ! vm_stop "$GW"; then
+        _stealth_error "the Gateway could not be stopped"
+        return 1
+    fi
+    # Prove no persona QEMU survives before we touch networking or the vault.
+    if pgrep -f "guest=kx-" >/dev/null 2>&1; then
+        _stealth_error "a persona QEMU process is still alive"
+        return 1
+    fi
 
     virsh_ net-destroy kx-int >/dev/null 2>&1 || true
     virsh_ net-destroy kx-ext >/dev/null 2>&1 || true
@@ -432,13 +457,18 @@ stealth_off_steps() {
     info "${BOLD}Wiping artifacts and locking vault${RESET}"
     wipe_artifacts
     ok "VM logs shredded, caches dropped"
-    if vault_close; then ok "vault locked"; else failed=1; fi
+    if ! vault_close; then
+        # Vault still unlocked: keep host lockdown on; do NOT declare OFF.
+        _stealth_error "the stealth vault could not be locked"
+        return 1
+    fi
+    ok "vault locked"
 
     info "${BOLD}Restoring normal host${RESET}"
     host_restore
     ok "host restored"
-    rm -f "$STEALTH_FLAG"
-    return "$failed"
+    rm -f "$STEALTH_FLAG" "$STEALTH_ERROR"
+    return 0
 }
 
 stealth_off() {
@@ -493,9 +523,12 @@ stealth_reset() {
     load_config
     stealth_is_active && die "turn Stealth Mode off first"
     confirm "Erase everything in the Workstation and restore a clean image?" || exit 0
+    # Re-lock the vault on any exit path, including a failed overlay recreate.
+    trap 'vault_close' EXIT
     vault_open
     stealth_reset_overlay
     vault_close
+    trap - EXIT
     ok "Workstation reset"
 }
 

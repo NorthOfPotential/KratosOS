@@ -17,6 +17,23 @@ echo "— nym.nft is valid and fail-closed —"
 rules="$(sed "s/@NYM_UID@/$NYM_UID/" "$nftfile")"
 if nft -c -f - <<<"$rules" 2>/dev/null; then pass "nym.nft parses"; else flunk "nym.nft invalid"; fi
 
+# Ordering: IPv6 must be dropped BEFORE any established-state accept, and every
+# established accept must be gated by the nym uid — otherwise a connection
+# opened before the ruleset loaded (or over IPv6) could be grandfathered in.
+ipv6_line="$(grep -n 'nfproto ipv6 drop' <<<"$rules" | head -1 | cut -d: -f1)"
+est_line="$(grep -n 'ct state established' <<<"$rules" | head -1 | cut -d: -f1)"
+if [[ -n "$ipv6_line" && ( -z "$est_line" || "$ipv6_line" -lt "$est_line" ) ]]; then
+    pass "IPv6 dropped before any established-state accept"
+else
+    flunk "IPv6 not dropped before established accept (pre-existing v6 could leak)"
+fi
+bad_est="$(grep 'ct state established' <<<"$rules" | grep -i 'accept' | grep -v 'skuid' || true)"
+if [[ -z "$bad_est" ]]; then
+    pass "established-state accept is scoped to the nym user only"
+else
+    flunk "an established-state accept is not gated by the nym uid (bypass): $bad_est"
+fi
+
 # Load it for real in this netns and probe egress as two users.
 ip link set lo up 2>/dev/null
 # A stand-in network so egress actually reaches the firewall (not ENETUNREACH).

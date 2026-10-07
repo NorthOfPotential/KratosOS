@@ -10,8 +10,39 @@ load_ruleset() {
     nft -f "$KRATOS_ETC/modes/$1.nft" || die "failed to load firewall ruleset '$1'"
 }
 
+# The ONLY keys a KratosOS WireGuard config may contain. wg-quick also honours
+# PreUp/PostUp/PreDown/PostDown (which run arbitrary commands as root), Table and
+# SaveConfig — none of which appear here, so an imported "VPN config" can never
+# execute code. A config is data, and we treat it as data.
+_WG_ALLOWED_KEYS=" privatekey address dns listenport mtu fwmark publickey presharedkey allowedips endpoint persistentkeepalive "
+wg_validate() {
+    local f="$1" line key sect="" n=0 lc
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$((n + 1))
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        if [[ "$line" == \[*\] ]]; then
+            lc="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+            [[ "$lc" == "[interface]" || "$lc" == "[peer]" ]] \
+                || { err "WireGuard config (line $n): unexpected section '$line'"; return 1; }
+            sect="$lc"; continue
+        fi
+        [[ -n "$sect" ]] || { err "WireGuard config (line $n): setting before any [Interface]/[Peer] section"; return 1; }
+        [[ "$line" == *=* ]] || { err "WireGuard config (line $n): not a key = value line: '$line'"; return 1; }
+        key="$(printf '%s' "${line%%=*}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        if [[ "$_WG_ALLOWED_KEYS" != *" $key "* ]]; then
+            err "WireGuard config (line $n): rejected key '$key'. Only standard WireGuard settings are allowed — no PreUp/PostUp/PreDown/PostDown/Table/SaveConfig."
+            return 1
+        fi
+    done < "$f"
+    return 0
+}
+
 wg_up() {
     [[ -r "$WG_IMPORTED" ]] || die "no VPN configured; run: sudo kratos vpn-import <wireguard.conf>"
+    wg_validate "$WG_IMPORTED" || die "stored VPN config failed validation; re-import a clean one"
 
     local endpoint host port dns
     endpoint="$(awk -F' *= *' 'tolower($1)=="endpoint"{print $2; exit}' "$WG_IMPORTED")"
@@ -99,6 +130,9 @@ net_vpn_import() {
     if ! grep -qi '^\[Interface\]' "$src" || ! grep -qi '^\[Peer\]' "$src"; then
         die "$src doesn't look like a WireGuard config"
     fi
+    # Treat the imported file as untrusted data: refuse anything that isn't a
+    # plain WireGuard setting (so it can never run commands as root via wg-quick).
+    wg_validate "$src" || die "refusing to import $src: it contains directives that are not safe WireGuard settings"
     install -d -m 700 "$KRATOS_ETC/wireguard"
     install -m 600 "$src" "$WG_IMPORTED"
     ok "VPN config installed. Activate with: sudo kratos mode vpn"

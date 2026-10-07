@@ -1,0 +1,21 @@
+#!/bin/sh
+# Apply current Debian security updates to the image BEFORE it is packed.
+#
+# build.sh disables live-build's own security archive (its old suite naming
+# 404s), so the base packages installed from 'main' could be behind on security
+# fixes. A security distribution must not ship a stale base, so here we add the
+# correct 'trixie-security' suite (the same one shipped to the installed system)
+# and upgrade. Runs before 0090 (sectools) and 0100, while APT lists exist.
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+if ! grep -rqs 'trixie-security' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
+    echo 'deb http://deb.debian.org/debian-security trixie-security main contrib non-free non-free-firmware' \
+        > /etc/apt/sources.list.d/kratos-security.list
+fi
+
+apt-get update
+# --force-confold: keep KratosOS's shipped config files; never let an upgrade
+# silently replace our hardened /etc with a package default.
+apt-get -y --no-install-recommends -o Dpkg::Options::=--force-confold upgrade
+echo "KRATOS: applied Debian security updates to the image."

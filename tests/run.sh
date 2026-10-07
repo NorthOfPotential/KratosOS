@@ -45,6 +45,9 @@ run tests/test_branding.sh
 step "security toolset (catalog + generated menu)"
 run tests/test_sectools.sh
 
+step "WireGuard import safety (no PreUp/PostUp RCE)"
+run tests/test_wg_validate.sh
+
 step "config parser (never executes config as code)"
 run tests/test_config.sh
 

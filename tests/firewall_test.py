@@ -129,6 +129,8 @@ def main():
     load("normal")
     expect("HTTPS to the internet allowed", tcp("93.184.216.34", 443), True)
     expect("DNS over TLS allowed", tcp("9.9.9.9", 853), True)
+    expect("clear-text DNS blocked (forced through the resolver)", udp("9.9.9.9", 53), False)
+    expect("clear-text DNS over TCP blocked", tcp("9.9.9.9", 53), False)
     expect("mDNS announcement blocked", udp("224.0.0.251", 5353), False)
     expect("LLMNR blocked", udp("224.0.0.252", 5355), False)
     expect("SSDP/UPnP blocked", udp("239.255.255.250", 1900), False)

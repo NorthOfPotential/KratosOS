@@ -1,32 +1,44 @@
-## KratosOS persona isolation policy for Qubes OS (qrexec, 4.1+ format).
+## KratosOS persona isolation policy for Qubes OS (qrexec 4.1+ format).
 ##
-## Installed to dom0 as /etc/qubes/policy.d/30-kratos.policy. It runs BEFORE
-## the default 90-* policies, so these denies win. Every qube that holds the
-## persona carries the tag 'kratos-persona' (set by the Salt formula). The
-## rule is simple and total: nothing crosses out of a persona qube.
+## Installed to dom0 as /etc/qubes/policy.d/30-kratos.policy. It runs BEFORE the
+## default 90-* policies, so these rules win (first match wins in qrexec). Every
+## qube that holds the persona carries the tag 'kratos-persona' (set by the Salt
+## formula).
 ##
-## This is the Qubes-native version of KratosOS's "nothing leaves the persona"
-## rule, enforced by dom0 (the trusted base) instead of by the host kernel.
+## Model: ALLOWLIST. The persona may initiate ONLY the few flows listed under
+## "allow"; every other qrexec call it makes — to any other qube AND to dom0 —
+## is denied by the catch-all rules at the bottom. Note that @anyvm EXCLUDES
+## dom0/@adminvm, which is why dom0 is denied explicitly on its own line.
+##
+## IMPORTANT: the catch-all denies are intentionally total. On a LIVE Qubes
+## system you may find the persona legitimately needs a small number of benign
+## VM->dom0 services (e.g. qubes.GetDate, qubes.NotifyUpdates). If so, ADD them
+## as explicit `allow` lines ABOVE the catch-alls after verifying each one — do
+## not relax the catch-alls. This file must be validated with Qubes' own policy
+## tooling on a real dom0; a KratosOS lint is not authoritative.
 
-## ---- Clipboard: no copy OUT of a persona qube, to anywhere ----
-qubes.ClipboardPaste  *  @tag:kratos-persona  @anyvm        deny
-## (Pasting INTO the persona is also denied, to stop accidental cross-contamination.)
+## ---- Allow: the ONLY flows the persona needs ----
+## Updates go through the Whonix updates proxy.
+qubes.UpdatesProxy    *  @tag:kratos-persona  @default             allow target=sys-whonix
+
+## ---- Explicit denies of the high-risk cross-qube services (both directions) ----
+## Redundant with the catch-alls below, but they state the intent unambiguously
+## and are what the KratosOS tests check for.
+qubes.ClipboardPaste  *  @tag:kratos-persona  @anyvm              deny
 qubes.ClipboardPaste  *  @anyvm               @tag:kratos-persona  deny
-
-## ---- File copy / move: none in either direction ----
-qubes.Filecopy        *  @tag:kratos-persona  @anyvm        deny
+qubes.Filecopy        *  @tag:kratos-persona  @anyvm              deny
 qubes.Filecopy        *  @anyvm               @tag:kratos-persona  deny
-
-## ---- "Open in VM" / "Open URL": a persona qube can't hand files or links out ----
-qubes.OpenInVM        *  @tag:kratos-persona  @anyvm        deny
-qubes.OpenURL         *  @tag:kratos-persona  @anyvm        deny
+qubes.OpenInVM        *  @tag:kratos-persona  @anyvm              deny
 qubes.OpenInVM        *  @anyvm               @tag:kratos-persona  deny
+qubes.OpenURL         *  @tag:kratos-persona  @anyvm              deny
 qubes.OpenURL         *  @anyvm               @tag:kratos-persona  deny
+qubes.VMShell         *  @tag:kratos-persona  @anyvm              deny
+qubes.VMRootShell     *  @tag:kratos-persona  @anyvm              deny
 
-## ---- No inter-qube RPC / admin from or to the persona ----
-qubes.VMShell         *  @tag:kratos-persona  @anyvm        deny
-qubes.VMRootShell     *  @tag:kratos-persona  @anyvm        deny
-admin.vm.*            *  @tag:kratos-persona  @anyvm        deny
-
-## ---- Updates for the persona go ONLY through the Whonix updates proxy ----
-qubes.UpdatesProxy    *  @tag:kratos-persona  @default      allow target=sys-whonix
+## ---- Catch-all: nothing else leaves the persona, to dom0 or to any qube ----
+## (Networking is unaffected — it flows through the netvm, not qrexec.)
+*                     *  @tag:kratos-persona  @adminvm            deny
+*                     *  @tag:kratos-persona  @anyvm              deny
+## And no one may call INTO the persona (dom0 management is NOT matched here,
+## because @anyvm excludes dom0, so Qubes can still start/stop the persona).
+*                     *  @anyvm               @tag:kratos-persona  deny
