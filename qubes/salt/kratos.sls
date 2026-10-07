@@ -15,20 +15,32 @@
 # (installed below) blocks clipboard/file/RPC out of anything tagged
 # kratos-persona.
 
+# The installed Whonix major version. Qubes 4.2 ships Whonix 17; when Qubes
+# moves to a newer Whonix, override this once at the top instead of editing
+# every template name below. A pillar value (kratos:whonix_version) wins if set.
+{% set whonix_version = salt['pillar.get']('kratos:whonix_version', '17') %}
+{% set whonix_ws = 'whonix-workstation-' ~ whonix_version %}
+{% set whonix_gw_template = 'qubes-template-whonix-gateway-' ~ whonix_version %}
+
 # ---- Persona isolation policy into dom0 ----
 /etc/qubes/policy.d/30-kratos.policy:
   file.managed:
     - source: salt://kratos/files/30-kratos.policy
     - user: root
     - group: qubes
-    - mode: '0664'
+    # 0644: world-readable (qrexec needs it) but NOT group-writable — the policy
+    # is the persona's containment boundary, so only root may rewrite it.
+    - mode: '0644'
     - makedirs: True
 
 # ---- Whonix gateway must exist (shipped by qubes-template-whonix-gateway) ----
+# Fail the run (don't just warn) if sys-whonix is absent: the persona
+# workstation below routes through it, so provisioning without it would build a
+# workstation with no Tor gateway. qvm-check is read-only, so this is safe to
+# re-run; a non-zero exit makes Salt stop before creating the workstation.
 kratos-require-whonix:
   cmd.run:
-    - name: qvm-check --quiet sys-whonix || echo "install qubes-template-whonix-gateway-17 and create sys-whonix first" >&2
-    - stateful: False
+    - name: 'qvm-check --quiet sys-whonix || { echo "ERROR: sys-whonix not found; install {{ whonix_gw_template }} and create the sys-whonix gateway, then re-apply." >&2; exit 1; }'
 
 # ---- Vault qube: persona secrets, no network ever ----
 kratos-vault:
@@ -46,20 +58,25 @@ kratos-ws-dvm:
     - name: kratos-ws
     - present:
       - label: red
-      - template: whonix-workstation-17
+      - template: {{ whonix_ws }}
       - template_for_dispvms: True
     - prefs:
       - netvm: sys-whonix
       - default_dispvm: ""
       - autostart: False
+    # Don't build the persona workstation unless its Tor gateway is present.
+    - require:
+      - cmd: kratos-require-whonix
 
-# Tag the disposable template (and thus its disposables) as the persona.
+# Tag the disposable template (and thus its disposables) as the persona, using
+# the official qvm.tags state — idempotent, and no shelling out to qvm-tags.
 kratos-ws-tag:
-  cmd.run:
-    - name: qvm-tags kratos-ws add kratos-persona
+  qvm.tags:
+    - name: kratos-ws
+    - add:
+      - kratos-persona
     - require:
       - qvm: kratos-ws-dvm
-    - unless: qvm-tags kratos-ws list | grep -qx kratos-persona
 
 # ---- Personal everyday qube (ordinary network path) ----
 kratos-personal:

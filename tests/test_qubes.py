@@ -43,6 +43,16 @@ class DriverCommands(unittest.TestCase):
         names = [c[-1] for c in kq.build_stealth_off()]
         self.assertTrue(all(n == kq.WS_LIVE for n in names))
 
+    def test_provision_targets_dom0_not_all(self):
+        # The formula only configures dom0; provisioning must not highstate
+        # every qube (--all) — it targets dom0 and applies the kratos state.
+        apply_cmds = [c for c in kq.build_provision() if "state.apply" in c]
+        self.assertTrue(apply_cmds, "no state.apply command")
+        for c in apply_cmds:
+            self.assertNotIn("--all", c, "provisioning must not use --all")
+            self.assertIn("dom0", c, "provisioning must target dom0 explicitly")
+            self.assertIn("kratos", c, "provisioning must apply the kratos state")
+
 
 class PolicyAudit(unittest.TestCase):
     def test_shipped_policy_passes(self):

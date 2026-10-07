@@ -62,9 +62,13 @@ def build_view():
 
 
 def build_provision():
+    # Target dom0 explicitly, not --all: the kratos formula only configures
+    # dom0 (it creates the persona qubes FROM dom0 via qvm.* states), so there
+    # is no reason to apply highstate to every qube on the system.
     return [
         ["qubesctl", "top.enable", "kratos", "saltenv=user"],
-        ["qubesctl", "--all", "state.apply", "saltenv=user"],
+        ["qubesctl", "--show-output", "--target", "dom0",
+         "state.apply", "kratos", "saltenv=user"],
     ]
 
 

@@ -1,6 +1,8 @@
 # KratosOS Salt top file (user saltenv). Apply with:
 #   sudo qubesctl top.enable kratos saltenv=user
-#   sudo qubesctl --all state.apply saltenv=user
+#   sudo qubesctl --show-output --target dom0 state.apply kratos saltenv=user
+# (dom0 only — the formula configures dom0 and creates the persona qubes from
+# there; there is no need to highstate every qube with --all.)
 base:
   dom0:
     - kratos
