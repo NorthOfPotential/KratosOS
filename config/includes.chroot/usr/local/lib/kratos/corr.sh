@@ -69,13 +69,14 @@ corr_decoy_start() {
     # Dummy traffic INSIDE the tunnel to a sink, so the ISP sees a filled,
     # constant pipe instead of your real bursts. It only needs to send UDP, so
     # run it UNPRIVILEGED (nobody) rather than from the root kratos process.
-    if command -v setpriv >/dev/null 2>&1; then
-        setpriv --reuid 65534 --regid 65534 --clear-groups \
-            kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
-    else
-        warn "setpriv unavailable; running decoy without dropping privileges"
-        kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
+    # The decoy only needs to send UDP; it must never run as root (finding 14).
+    # If we can't drop privileges, refuse to start it rather than run it as root.
+    if ! command -v setpriv >/dev/null 2>&1; then
+        warn "setpriv unavailable; NOT starting the decoy (it must not run as root)"
+        return 0
     fi
+    setpriv --reuid 65534 --regid 65534 --clear-groups \
+        kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
     echo $! > "$CORR_DECOY_PIDFILE"
     ok "decoy traffic to $CORR_DECOY_SINK started"
 }

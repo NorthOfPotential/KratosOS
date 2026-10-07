@@ -15,7 +15,19 @@ if ! grep -rqs 'trixie-security' /etc/apt/sources.list /etc/apt/sources.list.d 2
 fi
 
 apt-get update
-# --force-confold: keep KratosOS's shipped config files; never let an upgrade
-# silently replace our hardened /etc with a package default.
-apt-get -y --no-install-recommends -o Dpkg::Options::=--force-confold upgrade
-echo "KRATOS: applied Debian security updates to the image."
+# full-upgrade (not plain upgrade): security transitions can pull in new or
+# changed dependencies, which `upgrade` holds back — a security image must take
+# them (finding 12). --force-confold keeps KratosOS's hardened /etc; never let
+# an upgrade silently replace our config with a package default.
+apt-get -y --no-install-recommends -o Dpkg::Options::=--force-confold full-upgrade
+
+# Fail the build if anything is still upgradeable after the full-upgrade: a
+# security image must not ship with known-pending updates.
+remaining="$(apt-get -s -o Dpkg::Options::=--force-confold full-upgrade 2>/dev/null \
+    | grep -c '^Inst ' || true)"
+if [ "${remaining:-0}" -ne 0 ]; then
+    echo "KRATOS: ERROR — $remaining package(s) still upgradeable after full-upgrade" >&2
+    apt-get -s full-upgrade 2>/dev/null | grep '^Inst ' >&2 || true
+    exit 1
+fi
+echo "KRATOS: applied Debian security updates to the image (full-upgrade; none pending)."
