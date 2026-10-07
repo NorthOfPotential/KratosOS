@@ -1,0 +1,42 @@
+# Approved SUID/SGID binaries and file-capability holders for the KratosOS image
+# (finding 46). tests/suid-audit.sh compares the built ./chroot against this
+# list and flags anything not here. Paths are absolute, as they appear in the
+# image. This is a STARTER baseline of the standard Debian/KDE privileged set;
+# after the first real build, run the audit, review every entry the inventory
+# reports, and tighten this list (then flip the CI step to hard-fail).
+#
+# --- standard Debian setuid/setgid ---
+/usr/bin/su
+/usr/bin/sudo
+/usr/bin/passwd
+/usr/bin/chfn
+/usr/bin/chsh
+/usr/bin/gpasswd
+/usr/bin/newgrp
+/usr/bin/mount
+/usr/bin/umount
+/usr/bin/fusermount3
+/usr/bin/pkexec
+/usr/bin/crontab
+/usr/bin/wall
+/usr/bin/write
+/usr/bin/expiry
+/usr/bin/chage
+/usr/bin/dotlockfile
+/usr/bin/ssh-agent
+/usr/lib/dbus-1.0/dbus-daemon-launch-helper
+/usr/lib/polkit-1/polkit-agent-helper-1
+/usr/lib/openssh/ssh-keysign
+/usr/libexec/polkit-agent-helper-1
+/usr/sbin/unix_chkpwd
+/usr/sbin/pam_extrausers_chkpwd
+# --- KDE / desktop ---
+/usr/lib/xorg/Xorg.wrap
+/usr/bin/kcheckpass
+/usr/libexec/kf5/kauth/...
+# --- file capabilities (ping etc.) ---
+/usr/bin/ping
+/usr/bin/mtr-packet
+# --- security tools known to ship setuid/caps (review against the suite) ---
+/usr/bin/dumpcap
+/usr/sbin/mtr-packet

@@ -9,12 +9,20 @@ set -euo pipefail
 # fixed PATH and the absence of loader/interpreter hijack variables never
 # depend on how we were invoked. Closes the $PATH-attack and
 # environment-injection classes regardless of caller.
-export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
       LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
       PYTHONPATH PYTHONSTARTUP PYTHONHOME PYTHONWARNINGS \
       PERL5LIB PERLLIB RUBYLIB \
       LIBVIRT_DEFAULT_URI 2>/dev/null || true
+
+# Production uses fixed, trusted paths. The KRATOS_* overrides (incl. KRATOS_LIB,
+# which selects the code this runs) exist ONLY for the test suite and are honored
+# ONLY when KRATOS_TEST=1 is set explicitly — so a stray KRATOS_LIB in the
+# environment can never redirect this privileged tool to attacker-controlled code.
+if [[ "${KRATOS_TEST:-}" != 1 ]]; then
+    unset KRATOS_LIB KRATOS_ETC KRATOS_STATE KRATOS_RUN
+fi
 
 KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 

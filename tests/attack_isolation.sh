@@ -97,7 +97,9 @@ build_live_system() {
 
 build_live_system
 
-echo "Stealth Mode is up. Attacker = unprivileged user '$ATTACKER'."
+echo "Stealth Mode is up. Threat model: an UNPRIVILEGED attacker '$ATTACKER'"
+echo "(malware running as your normal desktop user). A root/hypervisor"
+echo "compromise is explicitly OUT OF SCOPE here — that is the Qubes tier's job."
 echo
 
 # ── Attack helpers ─────────────────────────────────────────────────────────
@@ -166,5 +168,5 @@ else
 fi
 
 echo
-if (( fail )); then echo "ISOLATION BREACHED — see FAIL lines above"; else echo "ALL ATTACKS BLOCKED"; fi
+if (( fail )); then echo "ISOLATION BREACHED — see FAIL lines above"; else echo "ALL UNPRIVILEGED-ATTACKER ATTACKS BLOCKED (root/hypervisor compromise out of scope)"; fi
 exit "$fail"

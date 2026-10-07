@@ -16,6 +16,11 @@
     <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/kratos</annotate>
   </action>
 
+  <!-- INTENTIONAL TRADEOFF: panic is passwordless for the active session so it
+       works instantly in an emergency. The cost is that any code already
+       running as the active desktop user can trigger it (kill the persona, cut
+       the network, power off) as a denial-of-service. This is a deliberate
+       availability-over-DoS-resistance choice; see docs/THREAT_MODEL.md. -->
   <action id="org.kratos.panic">
     <description>KratosOS panic shutdown</description>
     <message>Panic shutdown</message>

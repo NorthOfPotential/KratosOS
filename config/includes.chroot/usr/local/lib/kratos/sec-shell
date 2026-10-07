@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Open an interactive terminal primed for one KratosOS Security tool: run the
+# suggested command once (usually its help/usage, or the action itself), then
+# drop to a shell so you can re-run it with your own arguments.
+set -u
+cmd="${1:-bash}"
+name="${2:-$cmd}"
+g=$'\033[1;32m'; d=$'\033[2m'; r=$'\033[0m'
+printf '\n  %sKratosOS Security%s — %s\n' "$g" "$r" "$name"
+printf '  command: %s%s%s\n' "$g" "$cmd" "$r"
+printf '  %s(many tools need root — prefix with: sudo)%s\n\n' "$d" "$r"
+bash -c "$cmd" || true
+printf '\n  %s[KratosOS] dropped to a shell — re-run: %s%s\n\n' "$d" "$cmd" "$r"
+exec bash

@@ -21,10 +21,11 @@ opsec_shred() {
     confirm "Permanently destroy $# item(s)?" || exit 0
     local f
     for f in "$@"; do
+        # `--` so a filename beginning with '-' is never read as an option.
         if [[ -d "$f" ]]; then
-            find "$f" -type f -exec shred -uz {} + && rm -rf "$f"
+            find "$f" -type f -exec shred -uz -- {} + && rm -rf -- "$f"
         else
-            shred -uz "$f"
+            shred -uz -- "$f"
         fi
         ok "destroyed $f"
     done

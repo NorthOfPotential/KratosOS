@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# KratosOS security helpers for tools that aren't packaged in Debian.
+set -uo pipefail
+case "${1:-help}" in
+  install-metasploit)
+    # KratosOS will NOT pipe a mutable Internet script into root for you — that
+    # is a supply-chain root-execution risk (the upstream branch can change or be
+    # compromised between review and run). We give you the official instructions
+    # so you can review and pin a release yourself.
+    cat <<'TXT'
+Metasploit Framework is not in Debian's repositories, so KratosOS does not ship
+it. KratosOS deliberately does NOT download and run Rapid7's installer for you,
+because that executes mutable Internet code as root.
+
+To install it safely yourself, prefer one of:
+
+  1. A pinned release + checksum (recommended):
+       - Open https://github.com/rapid7/metasploit-framework/releases
+       - Download the release and its published checksum/signature.
+       - Verify the checksum, THEN install.
+
+  2. Rapid7's APT repository (review before trusting):
+       - Instructions: https://github.com/rapid7/metasploit-framework#installing
+       - Read their 'msfinstall' script first; pin the exact commit you reviewed
+         (https://github.com/rapid7/metasploit-omnibus at a fixed SHA), verify a
+         separately obtained digest, and only then run it.
+
+Free, already-installed alternatives for a lot of Metasploit's use cases live in
+the "KratosOS Security" menu (searchsploit, hydra, nmap NSE, sqlmap, ...).
+TXT
+    ;;
+  *)
+    echo "usage: kratos-sec install-metasploit" ;;
+esac

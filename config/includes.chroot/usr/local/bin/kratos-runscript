@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# KratosOS: run an UNTRUSTED script in a locked-down Firejail sandbox.
+#
+# Fails closed: if the sandbox can't be established, the script is NOT run.
+# The sandbox has no network, an empty private home (so it can't read your SSH
+# keys, browser profile, password database, etc.), a private /tmp and /dev, no
+# D-Bus and no X11/Wayland. The script's *contents* are fed in on stdin, so the
+# sandbox never needs access to the real filesystem path either.
+#
+# This is a same-kernel sandbox — strong, but not a security boundary against a
+# kernel exploit. For genuinely hostile code, use a disposable VM / Qubes DispVM.
+set -u
+
+script="${1:-}"
+if [ -z "$script" ] && command -v kdialog >/dev/null 2>&1; then
+    script="$(kdialog --getopenfilename "${HOME:-/root}" 2>/dev/null)" || exit 0
+fi
+[ -n "$script" ]  || { echo "usage: kratos-runscript <script.sh|script.py>"; exit 1; }
+[ -r "$script" ]  || { echo "kratos-runscript: cannot read $script"; exit 1; }
+
+if ! command -v firejail >/dev/null 2>&1; then
+    echo "kratos-runscript: firejail is not available — refusing to run an untrusted script unsandboxed." >&2
+    exit 1
+fi
+
+case "$script" in
+    *.py) interp=python3; iarg=- ;;
+    *)    interp=bash;    iarg=-s ;;
+esac
+
+echo "Running '$script' in a Firejail sandbox (no network, empty private home, no D-Bus/X11)..."
+# shellcheck disable=SC2086
+exec firejail --quiet --noprofile --net=none --private --private-tmp --private-dev \
+    --nosound --no3d --notv --nodvd --nodbus --x11=none --caps.drop=all --seccomp --nonewprivs \
+    -- "$interp" "$iarg" < "$script"

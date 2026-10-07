@@ -25,7 +25,11 @@ make_export() {
 }
 
 run_migrate() {
-    KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" "$kratos" migrate --from "$export_dir" --to "$home_dir" 2>&1
+    # Unset SUDO_USER/PKEXEC_UID so this is treated as a direct-root run (the
+    # test's --to lives in /tmp, outside any desktop user's home); the home
+    # confinement is exercised separately below.
+    env -u SUDO_USER -u PKEXEC_UID KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" \
+        "$kratos" migrate --from "$export_dir" --to "$home_dir" 2>&1
 }
 
 echo "migration: clean export"
@@ -40,10 +44,34 @@ if grep -q "Steam" <<<"$out" && grep -q "Firefox" <<<"$out"; then
 if [[ "$(stat -c %a "$home_dir/Pictures/photo.jpg")" == 600 ]]; then
     pass "copied files are private (600)"; else flunk "copied files are private"; fi
 
-echo "migration: export with a corrupted file"
+echo "migration: export with a corrupted file (must fail closed)"
 make_export
 echo "tampered" > "$export_dir/Files/Documents/Taxes 2025/notes.txt"
-out="$(run_migrate)"
-if grep -q "1 file(s) differ" <<<"$out"; then pass "corruption detected"; else flunk "corruption detected"; echo "$out"; fi
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )); then pass "import FAILS on a verification mismatch"; else flunk "import did not fail on mismatch"; fi
+if grep -qiE "verification FAILED|incomplete or altered" <<<"$out"; then pass "reports the verification failure"; else flunk "no clear failure message"; echo "$out"; fi
+if [[ ! -e "$home_dir/Documents/Taxes 2025/notes.txt" ]]; then pass "nothing published on failure (destination untouched)"; else flunk "tampered file was published anyway"; fi
+if ! compgen -G "$home_dir/.kratos-import.*" >/dev/null; then pass "staging area cleaned up"; else flunk "staging left behind"; fi
+
+echo "migration: manifest with a path-traversal entry is rejected"
+make_export
+printf '%s  Files/../../etc/evil\n' "$(printf evil | sha256sum | cut -d' ' -f1)" >> "$export_dir/manifest.sha256"
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )) && grep -qiE "unsafe paths|\.\." <<<"$out"; then pass "rejects a manifest with .. traversal"; else flunk "accepted unsafe manifest"; echo "$out"; fi
+
+echo "migration: elevated --to outside the invoker's home is refused"
+mhome="$(getent passwd mallory 2>/dev/null | cut -d: -f6)"
+if [[ $EUID -eq 0 && -n "$mhome" ]]; then
+    make_export
+    if out="$(env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
+                 "$kratos" migrate --from "$export_dir" --to "$tmp/outside" 2>&1)"; then rc=0; else rc=1; fi
+    if (( rc != 0 )) && grep -qiE "must be inside|refusing elevated" <<<"$out"; then
+        pass "elevated migration is confined to the invoker's home"
+    else
+        flunk "elevated --to confinement not enforced"; echo "$out"
+    fi
+else
+    echo "  SKIP  needs root + a 'mallory' user to test home confinement"
+fi
 
 exit "$fail"

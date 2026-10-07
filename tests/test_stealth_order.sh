@@ -118,4 +118,31 @@ if has "vault-close" && has "host-restored"; then pass "rollback locks vault and
 if [[ ! -e "$tmp/run/stealth.active" ]]; then pass "stealth flag cleared"; else flunk "stealth flag cleared after rollback"; fi
 if has "rc=1" || ! has "rc=0"; then pass "reports failure"; else flunk "reports failure"; fi
 
+# ── 4. Gateway refuses to die: must stay fail-closed ───────────
+stuck_gw_off() {
+    touch "$tmp/vms/kx-gw" "$tmp/vms/kx-ws" "$STEALTH_FLAG"
+    STUCK=kx-gw
+    stealth_off_steps
+}
+scenario "Gateway can't be stopped" stuck_gw_off
+if has "virsh destroy kx-gw"; then pass "escalates to forced power-off on the Gateway"; else flunk "forced gw power-off"; fi
+if ! has "vault-close"; then pass "vault NOT locked while Gateway is up"; else flunk "vault touched with gw stuck"; fi
+if ! has "host-restored"; then pass "host lockdown kept (gw stuck)"; else flunk "host restored despite gw stuck"; fi
+if [[ -e "$tmp/run/stealth.active" ]]; then pass "stealth flag NOT cleared (stays ON, fail-closed)"; else flunk "flag cleared despite gw stuck"; fi
+if [[ -e "$tmp/run/stealth.error" ]]; then pass "error state recorded"; else flunk "no error state recorded"; fi
+if has "rc=1"; then pass "reports failure"; else flunk "reports failure (gw)"; fi
+
+# ── 5. Vault refuses to lock: must stay fail-closed ────────────
+failed_vault_off() {
+    touch "$tmp/vms/kx-gw" "$tmp/vms/kx-ws" "$STEALTH_FLAG"
+    vault_close() { echo "vault-close-attempt" >> "$log"; return 1; }
+    stealth_off_steps
+}
+scenario "vault can't be locked" failed_vault_off
+if has "vault-close-attempt"; then pass "vault close was attempted (both VMs down first)"; else flunk "vault close not attempted"; fi
+if ! has "host-restored"; then pass "host NOT restored while vault is still unlocked"; else flunk "host restored despite open vault"; fi
+if [[ -e "$tmp/run/stealth.active" ]]; then pass "stealth flag NOT cleared (stays ON, fail-closed)"; else flunk "flag cleared despite open vault"; fi
+if [[ -e "$tmp/run/stealth.error" ]]; then pass "error state recorded"; else flunk "no error state recorded"; fi
+if has "rc=1"; then pass "reports failure"; else flunk "reports failure (vault)"; fi
+
 exit "$fail"

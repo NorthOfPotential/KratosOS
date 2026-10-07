@@ -31,7 +31,7 @@ need_root() {
 # it always runs even while another operation holds the lock.
 serialize() {
     [[ -n "${_KRATOS_LOCKED:-}" ]] && return 0   # already held in this process
-    command -v flock >/dev/null 2>&1 || return 0 # no flock: skip rather than fail
+    command -v flock >/dev/null 2>&1 || die "flock is unavailable; refusing to run without the concurrency lock"
     install -d -m 755 "$KRATOS_RUN" 2>/dev/null || true
     exec {_KRATOS_LOCK_FD}>"$KRATOS_RUN/lock" || return 0
     flock -n "$_KRATOS_LOCK_FD" \
@@ -103,9 +103,10 @@ load_config() {
 }
 
 # True if $1 is owned by root and not writable by group or other.
+# If it can't be inspected, treat it as INSECURE (fail closed).
 _is_root_owned_secure() {
     local info owner mode
-    info="$(stat -c '%u %a' "$1" 2>/dev/null)" || return 0  # missing: nothing to trust
+    info="$(stat -c '%u %a' "$1" 2>/dev/null)" || return 1  # can't inspect: don't trust
     owner="${info%% *}"; mode="${info##* }"
     [[ "$owner" == 0 ]] || return 1
     # last two octal digits are group/other perms; reject any write bit (2)

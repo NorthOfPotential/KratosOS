@@ -26,5 +26,16 @@ if [ -f "$wp" ]; then
     apply plasma-apply-wallpaperimage "$wp"
 fi
 
+# Screen lock (finding 47): the SECURE default (auto-lock ON) ships globally in
+# /etc/xdg/kscreenlockerrc, so an installed system needs no repair and a failure
+# here fails CLOSED. Relax it ONLY in the live session, where the passwordless
+# amnesic user would otherwise be locked out with no way back in.
+if grep -qw boot=live /proc/cmdline 2>/dev/null || [ -e /run/live/medium ]; then
+    if command -v kwriteconfig6 >/dev/null 2>&1; then
+        kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock false 2>/dev/null || true
+        kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false 2>/dev/null || true
+    fi
+fi
+
 mkdir -p "$(dirname "$marker")" 2>/dev/null || true
 : > "$marker" 2>/dev/null || true

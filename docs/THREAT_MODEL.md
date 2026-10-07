@@ -121,3 +121,28 @@ and USBGuard. ClamAV's detection is **not** comparable to Bitdefender's on
 Windows, but Linux malware is a much smaller threat. The real protection is the
 architecture: a separate VM for risky activity, no exposed services, sandboxing,
 and a disposable Workstation option.
+
+## Known limitations called out by review (honest notes)
+
+- **One polkit action covers the whole `kratos` tool.** `org.kratos.manage`
+  authorizes `/usr/local/bin/kratos` regardless of subcommand, so a retained
+  authorization for a low-risk action (e.g. a network-mode change) also covers
+  higher-risk paths in the same binary. We do **not** use `auth_admin_keep` for
+  the sensitive actions to limit this; splitting the high-risk operations
+  (stealth, migrate) into separate narrowly-scoped privileged helpers is planned.
+- **`kratos shred` / Stealth log wiping is best-effort.** `shred` cannot
+  guarantee physical overwrite on SSDs, flash (FTL), or copy-on-write/snapshotted
+  storage, and `echo 3 > drop_caches` drops caches — it is not memory
+  sanitisation. The real confidentiality boundary is the LUKS2 vault (locked =
+  data at rest encrypted) and `init_on_free=1`; sensitive VM logs belong on
+  tmpfs so there is nothing persistent to overwrite.
+- **bootcheck is change-detection, not trusted boot.** It records a baseline and
+  flags changes, but the baseline is writable by the same root compromise it is
+  meant to detect. Real assurance needs Secure/measured boot, signed boot chain,
+  TPM-sealed measurements and anti-evil-maid — out of scope for the current
+  baseline.
+- **sVirt confinement is asserted in XML, not yet verified live.** The Whonix
+  hardener requires a dynamic relabeling `<seclabel>` (per-VM AppArmor/SELinux)
+  and refuses VMs without it, but that proves the XML *requests* confinement.
+  Verifying the effective label on the running QEMU process
+  (`ps -eZ`/`aa-status`) is a live-system integration check.

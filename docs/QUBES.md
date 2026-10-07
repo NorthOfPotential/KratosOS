@@ -64,3 +64,15 @@ command construction and the policy's deny-logic are unit-tested
 (`tests/test_qubes.py`). They have **not** been run on a live Qubes dom0 in
 this project yet — do a dry run (`kratos-q on` off-Qubes prints the exact
 commands) and apply the Salt formula on a test machine before relying on it.
+
+## Keep dom0 minimal; prefer official Qubes provisioning (honest note)
+
+The security value of Qubes is a tiny dom0. `kratos-q` is intentionally small
+and builds argv arrays rather than shell strings, but the long-term direction is
+to keep KratosOS-on-Qubes as *declarative* as possible: the official Qubes Salt
+formulas create `vault`/`personal`/`sys-whonix`/Whonix DVMs, and KratosOS should
+add only the extra persona **tag** and the restrictive **qrexec policy** on top,
+plus a minimal orchestrator — not re-implement provisioning that Qubes already
+ships (every duplicated line is a place Qubes behaviour can drift underneath us).
+The qrexec policy is validated by Qubes' own parser when present (`kratos-q
+audit`); run it on a live dom0 before relying on the extra isolation.

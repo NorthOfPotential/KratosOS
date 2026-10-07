@@ -3,7 +3,9 @@ construction and the persona isolation policy audit. These run off a Qubes
 host (the logic is pure); live behaviour needs a real dom0."""
 import importlib.util
 import os
+import re
 import unittest
+from unittest import mock
 from importlib.machinery import SourceFileLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +44,65 @@ class DriverCommands(unittest.TestCase):
         names = [c[-1] for c in kq.build_stealth_off()]
         self.assertTrue(all(n == kq.WS_LIVE for n in names))
 
+    def test_provision_targets_dom0_not_all(self):
+        # The formula only configures dom0; provisioning must not highstate
+        # every qube (--all) — it targets dom0 and applies the kratos state.
+        apply_cmds = [c for c in kq.build_provision() if "state.apply" in c]
+        self.assertTrue(apply_cmds, "no state.apply command")
+        for c in apply_cmds:
+            self.assertNotIn("--all", c, "provisioning must not use --all")
+            self.assertIn("dom0", c, "provisioning must target dom0 explicitly")
+            self.assertIn("kratos", c, "provisioning must apply the kratos state")
+
+
+class Executor(unittest.TestCase):
+    """Transactional on / best-effort off / idempotent reconcile (findings 32-34)."""
+
+    def _fake_subprocess(self, fail_argv0=None, fail_contains=None, exists=()):
+        """Return a fake subprocess.run that fails selected commands, plus a log."""
+        log = []
+        class R:
+            def __init__(self, rc): self.returncode = rc; self.stdout = ""; self.stderr = ""
+        def fake_run(argv, *a, **k):
+            # qvm-check drives domain_exists(): succeed for names in `exists`.
+            if argv[:2] == ["qvm-check", "--quiet"]:
+                return R(0 if argv[2] in exists else 1)
+            log.append(argv)
+            bad = (fail_argv0 and argv[0] == fail_argv0) or \
+                  (fail_contains and any(fail_contains in x for x in argv))
+            return R(1 if bad else 0)
+        return fake_run, log
+
+    def _run_quiet(self, fn, *a):
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return fn(*a)
+
+    def test_on_rolls_back_the_disposable_when_a_later_step_fails(self):
+        # qvm-run (the last step) fails -> the created disposable must be removed.
+        fake, log = self._fake_subprocess(fail_argv0="qvm-run")
+        with mock.patch.object(kq.subprocess, "run", fake):
+            rc = self._run_quiet(kq.cmd_on, False)
+        self.assertNotEqual(rc, 0, "a failed start must report failure")
+        self.assertIn(["qvm-remove", "-f", kq.WS_LIVE], log, "disposable not rolled back")
+
+    def test_on_reconciles_a_stale_live_domain(self):
+        # kratos-ws-live already exists -> it is torn down before re-creating.
+        fake, log = self._fake_subprocess(exists=(kq.WS_LIVE,))
+        with mock.patch.object(kq.subprocess, "run", fake):
+            self._run_quiet(kq.cmd_on, False)
+        first_remove = log.index(["qvm-remove", "-f", kq.WS_LIVE])
+        first_create = next(i for i, c in enumerate(log) if kq._is_create(c))
+        self.assertLess(first_remove, first_create, "stale domain not reconciled before re-create")
+
+    def test_off_is_best_effort_past_a_failed_kill(self):
+        # qvm-kill fails; qvm-remove must still be attempted (finding 33).
+        fake, log = self._fake_subprocess(fail_argv0="qvm-kill")
+        with mock.patch.object(kq.subprocess, "run", fake):
+            rc = self._run_quiet(kq.run_all, kq.build_stealth_off(), False)
+        self.assertNotEqual(rc, 0)
+        self.assertIn(["qvm-remove", "-f", kq.WS_LIVE], log, "remove skipped after kill failed")
+
 
 class PolicyAudit(unittest.TestCase):
     def test_shipped_policy_passes(self):
@@ -52,24 +113,36 @@ class PolicyAudit(unittest.TestCase):
             self.assertIn(f"{svc} ", POLICY, f"{svc} not mentioned in policy")
 
     def test_detects_a_hole(self):
-        # Flip the clipboard deny to allow: the audit must catch it.
-        holed = POLICY.replace(
-            "qubes.ClipboardPaste  *  @tag:kratos-persona  @anyvm        deny",
-            "qubes.ClipboardPaste  *  @tag:kratos-persona  @anyvm        allow")
-        problems = kq.audit_policy(holed)
-        self.assertTrue(any("ClipboardPaste" in p for p in problems))
+        # Flip the explicit clipboard deny to allow (it sits before the catch-all,
+        # so first-match makes it a real hole): the audit must catch it.
+        holed = re.sub(
+            r"(qubes\.ClipboardPaste\s+\*\s+@tag:kratos-persona\s+@anyvm\s+)deny",
+            r"\1allow", POLICY, count=1)
+        self.assertNotEqual(holed, POLICY, "test setup: deny line not found")
+        self.assertTrue(any("ClipboardPaste" in p for p in kq.audit_policy(holed)))
 
     def test_detects_earlier_allow_shadowing_the_deny(self):
         # qrexec is first-match: an allow before the deny is a real hole.
         shadowed = "qubes.Filecopy  *  @tag:kratos-persona  @anyvm  allow\n" + POLICY
-        problems = kq.audit_policy(shadowed)
-        self.assertTrue(any("Filecopy" in p for p in problems))
+        self.assertTrue(any("Filecopy" in p for p in kq.audit_policy(shadowed)))
 
-    def test_detects_missing_rule(self):
-        # Remove the OpenURL denies entirely.
-        stripped = "\n".join(l for l in POLICY.splitlines() if "OpenURL" not in l)
-        problems = kq.audit_policy(stripped)
-        self.assertTrue(any("OpenURL" in p for p in problems))
+    def test_rejects_invalid_service_wildcard(self):
+        # A fake prefix wildcard (admin.vm.*) is INVALID qrexec syntax and must
+        # be flagged — this is exactly what slipped through before.
+        bad = POLICY + "\nadmin.vm.*  *  @tag:kratos-persona  @anyvm  deny\n"
+        self.assertTrue(any("invalid service token" in p for p in kq.audit_policy(bad)))
+
+    def test_requires_catchall_to_anyvm_and_adminvm(self):
+        # Removing either catch-all deny must be caught (dom0 isn't covered by
+        # @anyvm, so it needs its own rule).
+        for target in ("@anyvm", "@adminvm"):
+            stripped = re.sub(
+                rf"^\*\s+\*\s+@tag:kratos-persona\s+{re.escape(target)}\s+deny\s*$",
+                "", POLICY, count=1, flags=re.MULTILINE)
+            self.assertNotEqual(stripped, POLICY, f"test setup: {target} catch-all not found")
+            problems = kq.audit_policy(stripped)
+            self.assertTrue(any("catch-all" in p and target in p for p in problems),
+                            f"missing {target} catch-all not detected: {problems}")
 
 
 if __name__ == "__main__":

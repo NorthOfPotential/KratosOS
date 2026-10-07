@@ -25,15 +25,18 @@ table inet kratos_nym {
     chain output {
         type filter hook output priority filter; policy drop;
 
-        oifname "lo" accept                      # apps reach the SOCKS port here
-        ct state established,related accept
-        meta nfproto ipv6 drop                   # no IPv6 leaks
+        # Drop IPv6 FIRST — before any established/uid rule — so a connection
+        # opened before this ruleset loaded can't keep leaking over IPv6.
+        meta nfproto ipv6 drop
+        ct state invalid drop
 
-        # Only the Nym client itself may talk to the network.
-        meta skuid $NYM_UID meta l4proto { tcp, udp } accept
+        oifname "lo" accept                      # apps reach the local SOCKS port here
+        udp sport 68 udp dport 67 accept         # DHCP (gateway-only lease)
 
-        # DHCP so the workstation can get its (gateway-only) lease.
-        udp sport 68 udp dport 67 accept
+        # Only the Nym client may reach the network — and established state is
+        # accepted ONLY for it, so a pre-existing socket owned by any other UID
+        # is dropped instead of being grandfathered in.
+        meta skuid $NYM_UID meta l4proto { tcp, udp } ct state new,established,related accept
 
         # Everything else is an escape attempt.
         meta l4proto tcp reject with tcp reset
@@ -42,8 +45,10 @@ table inet kratos_nym {
 
     chain input {
         type filter hook input priority filter; policy drop;
-        iifname "lo" accept
-        ct state established,related accept
+        meta nfproto ipv6 drop
         ct state invalid drop
+        iifname "lo" accept
+        # Return traffic only to the Nym client's own sockets.
+        meta skuid $NYM_UID ct state established,related accept
     }
 }

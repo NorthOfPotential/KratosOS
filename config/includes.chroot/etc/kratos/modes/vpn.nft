@@ -40,6 +40,10 @@ table inet kratos {
 
         udp sport 68 udp dport 67 accept
         ip daddr $WG_ENDPOINT udp dport $WG_PORT accept
+        # Block direct clear-text DNS even inside the tunnel: apps must use the
+        # local resolver (which does DoT upstream through the tunnel).
+        udp dport 53 oifname != "lo" drop
+        tcp dport 53 oifname != "lo" drop
         oifname $WG_IF accept
         # Replies to the stealth bridges (no new host-initiated connections)
         oifname { "kx-ext", "kx-int" } ct state established,related accept

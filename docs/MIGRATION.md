@@ -66,3 +66,14 @@ Don't import the old VirtualBox VM wholesale; it carries old state and
 artifacts. Start from a fresh Whonix image, and move **only** what the persona
 needs (for example its KeePassXC database) through a scrubbed, encrypted USB
 stick, directly into the Workstation.
+
+## manifest.sha256 detects corruption, not tampering (honest note)
+
+The Windows exporter writes `manifest.sha256` next to the files, and the
+importer verifies every file against it (fail-closed: a mismatch aborts the
+import and publishes nothing). That proves the files were not **accidentally
+corrupted** in transit. It is **not** authenticity: an attacker who can rewrite
+the drive can change a file *and* its recorded hash together. For tamper
+evidence, carry the export on media you control and verify an out-of-band
+signature, or treat the whole drive as untrusted (which is why the import runs
+fail-closed, confines the destination, and scrubs/sandboxes as the target user).

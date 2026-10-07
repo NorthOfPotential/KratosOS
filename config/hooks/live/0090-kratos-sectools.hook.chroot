@@ -1,0 +1,41 @@
+#!/bin/sh
+# Install the KratosOS security toolset and build its application menu.
+# Runs before 0100 so APT's package lists are still present.
+#
+# Every package is installed tolerantly: one that isn't in Debian is skipped
+# and never fails the build. The menu generator then only creates an entry for
+# a tool whose binary actually ended up installed, so there are no dead items.
+set -e
+
+export DEBIAN_FRONTEND=noninteractive
+
+# Preseed the few packages that ask debconf questions, so nothing blocks.
+echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections || true
+echo "macchanger macchanger/automatically_run boolean false"        | debconf-set-selections || true
+echo "kismet-capture-common kismet-capture-common/install-users string" | debconf-set-selections || true
+
+TSV=/usr/share/kratos-assets/sectools.tsv
+apt-get update || true
+
+# Unique package names from the catalog (column 2; "-" means no package).
+pkgs=$(awk -F'\t' '!/^#/ && NF>=2 && $2!="-" && $2!="" {print $2}' "$TSV" | sort -u)
+
+echo "KRATOS sectools: installing security tools (missing ones are skipped)..."
+for pkg in $pkgs; do
+    if apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+        echo "  + $pkg"
+    else
+        echo "  - $pkg (not available — skipped)" >&2
+    fi
+done
+
+# Keep the KratosOS security helpers executable.
+chmod 0755 /usr/local/lib/kratos/sectools-gen /usr/local/lib/kratos/sec-shell \
+           /usr/local/bin/kratos-logwatch /usr/local/bin/kratos-runscript \
+           /usr/local/bin/kratos-sec 2>/dev/null || true
+
+# Build the "KratosOS Security" menu from what actually installed.
+/usr/local/lib/kratos/sectools-gen --check-binaries || true
+
+# Refresh the desktop/menu caches so the entries show up.
+update-desktop-database /usr/share/applications >/dev/null 2>&1 || true

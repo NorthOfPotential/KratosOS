@@ -17,6 +17,7 @@ VAULT_MAPPER="kratos-stealth"
 VAULT_MNT="$KRATOS_STATE/vault"
 VAULT_XML="$VAULT_MNT/libvirt"
 STEALTH_FLAG="$KRATOS_RUN/stealth.active"
+STEALTH_ERROR="$KRATOS_RUN/stealth.error"
 STEALTH_UNDO="$KRATOS_RUN/stealth.undo"
 STEALTH_NFT="$KRATOS_ETC/stealth.nft"
 HARDEN="$KRATOS_LIB/harden-whonix.py"
@@ -66,7 +67,14 @@ vault_open() {
 vault_close() {
     sync
     if mountpoint -q "$VAULT_MNT"; then
-        umount "$VAULT_MNT" || umount -l "$VAULT_MNT"
+        # Normal shutdown is FAIL-CLOSED: a busy mount is an error to surface,
+        # not something to hide behind a lazy unmount (which detaches the name
+        # while references — and the plaintext mapping — may still be live).
+        # Lazy unmount is reserved for the panic path (stealth_kill).
+        if ! umount "$VAULT_MNT"; then
+            bad "vault is still busy; refusing to lazy-unmount (run 'kratos panic' to force it down)"
+            return 1
+        fi
     fi
     if vault_is_open; then
         cryptsetup close "$VAULT_MAPPER" || { bad "vault could not be locked"; return 1; }
@@ -130,6 +138,10 @@ Download the KVM image, its .asc signature and the signing key from https://www.
 
     verify_whonix "$archive" "$sig" "$key"
 
+    # From the moment the vault can be unlocked, guarantee it is re-locked on
+    # EVERY exit path (a failed extract, missing archive member, hardener
+    # rejection, ...), so a failed setup never leaves the vault open.
+    trap 'vault_close' EXIT
     if [[ -e "$VAULT_IMG" ]]; then
         vault_open
     else
@@ -167,6 +179,7 @@ Download the KVM image, its .asc signature and the signing key from https://www.
         --outdir "$VAULT_XML" || die "Whonix definitions failed the isolation check"
     rm -rf "$imp"
     vault_close
+    trap - EXIT
     ok "Stealth Mode is ready. Turn it on from the tray, or: sudo kratos stealth on"
     warn "You can delete the downloaded archive now (kratos shred <file>)."
 }
@@ -191,48 +204,135 @@ undo() { printf '%s\n' "$*" >> "$STEALTH_UNDO"; }
 # corrupted undo log can't be turned into arbitrary root commands.
 _UNDO_ALLOWED=" swapon systemctl rfkill rm modprobe usbguard sysctl "
 
+# Is a named host-lockdown protection REQUIRED (Stealth refuses to start unless
+# it is actually applied) rather than best-effort? Driven by STEALTH_REQUIRE, a
+# comma-separated list drawn from: swap sleep bluetooth camera usb scan mac.
+_stealth_required() {
+    local IFS=',' t
+    for t in ${STEALTH_REQUIRE:-}; do
+        [[ "$t" == "$1" ]] && return 0
+    done
+    return 1
+}
+
+# A requested protection could not be fully applied. If the user listed it in
+# STEALTH_REQUIRE, fail closed (die -> stealth_on rolls the lockdown back); if
+# not, it is best-effort, so warn and carry on. This keeps "I asked for X and
+# Stealth started" from silently meaning "X isn't actually in force".
+_protect_failed() {   # <token> <message...>
+    local token="$1"; shift
+    if _stealth_required "$token"; then
+        die "required protection '$token' is not in force: $* — refusing to start (edit STEALTH_REQUIRE to make it best-effort)"
+    fi
+    warn "$* (best-effort; add '$token' to STEALTH_REQUIRE to make this fatal)"
+}
+
 host_lockdown() {
     : > "$STEALTH_UNDO"
     chmod 600 "$STEALTH_UNDO"
 
-    if [[ "$STEALTH_DISABLE_SWAP" == yes && -n "$(swapon --noheadings --show 2>/dev/null)" ]]; then
-        swapoff -a || die "not enough free RAM to disable swap; close some programs"
-        undo "swapon -a"
-        ok "swap off"
-    fi
-    if [[ "$STEALTH_BLOCK_SLEEP" == yes ]]; then
-        local targets="sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target"
-        # shellcheck disable=SC2086
-        systemctl mask --runtime --quiet $targets
-        undo "systemctl unmask --runtime --quiet $targets"
-        ok "suspend/hibernate blocked"
-    fi
-    if [[ "$STEALTH_BLOCK_BLUETOOTH" == yes ]] && command -v rfkill >/dev/null; then
-        if rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: no'; then
-            rfkill block bluetooth
-            undo "rfkill unblock bluetooth"
-        fi
-        ok "bluetooth off"
-    fi
-    if [[ "$STEALTH_BLOCK_CAMERA" == yes ]]; then
-        install -d /run/modprobe.d
-        echo "install uvcvideo /bin/false" > /run/modprobe.d/kratos-stealth.conf
-        undo "rm -f /run/modprobe.d/kratos-stealth.conf"
-        if lsmod | grep -q '^uvcvideo'; then
-            if modprobe -r uvcvideo 2>/dev/null; then
-                undo "modprobe uvcvideo"
-                ok "camera off"
+    if [[ "$STEALTH_DISABLE_SWAP" == yes ]]; then
+        local active_swaps sw
+        active_swaps="$(swapon --noheadings --show=NAME 2>/dev/null)"
+        if [[ -n "$active_swaps" ]]; then
+            if swapoff -a; then
+                # Re-enable ONLY the swaps that were actually active, not every
+                # fstab entry (finding 21): a swap configured-but-inactive before
+                # Stealth must stay inactive after.
+                while read -r sw; do
+                    [[ -n "$sw" ]] && undo "swapon $sw"
+                done <<< "$active_swaps"
+                ok "swap off"
             else
-                warn "camera is in use and could not be disabled; close apps using it"
+                _protect_failed swap "not enough free RAM to disable swap; close some programs (VM memory could be swapped to disk)"
             fi
         fi
     fi
-    if [[ "$STEALTH_BLOCK_NEW_USB" == yes ]] && systemctl is-active --quiet usbguard; then
-        local prev
-        prev="$(usbguard get-parameter ImplicitPolicyTarget 2>/dev/null || echo allow)"
-        usbguard set-parameter ImplicitPolicyTarget block >/dev/null
-        undo "usbguard set-parameter ImplicitPolicyTarget $prev"
-        ok "new USB devices blocked"
+    if [[ "$STEALTH_BLOCK_SLEEP" == yes ]]; then
+        local targets="sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target"
+        # Mask ONLY targets that aren't already masked, and record for undo only
+        # the ones WE masked (finding 21): never remove an administrator's
+        # pre-existing mask when Stealth turns off.
+        local t to_mask=()
+        for t in $targets; do
+            case "$(systemctl is-enabled "$t" 2>/dev/null)" in
+                masked*) : ;;                 # already masked (incl. masked-runtime): leave it
+                *) to_mask+=("$t") ;;
+            esac
+        done
+        if [[ ${#to_mask[@]} -eq 0 ]]; then
+            ok "suspend/hibernate already blocked"
+        elif systemctl mask --runtime --quiet "${to_mask[@]}"; then
+            undo "systemctl unmask --runtime --quiet ${to_mask[*]}"
+            ok "suspend/hibernate blocked"
+        else
+            _protect_failed sleep "could not block suspend/hibernate (VM RAM and keys could reach disk on sleep)"
+        fi
+    fi
+    if [[ "$STEALTH_BLOCK_BLUETOOTH" == yes ]]; then
+        if ! command -v rfkill >/dev/null; then
+            _protect_failed bluetooth "rfkill is not installed, so Bluetooth could not be disabled"
+        elif rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: no'; then
+            if rfkill block bluetooth; then undo "rfkill unblock bluetooth"; ok "bluetooth off"
+            else _protect_failed bluetooth "rfkill could not block Bluetooth"; fi
+        else
+            ok "bluetooth off"
+        fi
+    fi
+    if [[ "$STEALTH_BLOCK_CAMERA" == yes ]]; then
+        install -d /run/modprobe.d
+        # Block reload of the common camera stacks, not just uvcvideo (finding 58).
+        local cam_mods="uvcvideo gspca_main" m
+        : > /run/modprobe.d/kratos-stealth-cam.conf
+        for m in $cam_mods; do
+            echo "install $m /bin/false" >> /run/modprobe.d/kratos-stealth-cam.conf
+        done
+        undo "rm -f /run/modprobe.d/kratos-stealth-cam.conf"
+        for m in $cam_mods; do
+            if lsmod | grep -q "^$m"; then
+                if modprobe -r "$m" 2>/dev/null; then undo "modprobe $m"; fi
+            fi
+        done
+        # Verify there is no remaining V4L2 capture device — don't equate
+        # "unloaded one module" with "camera off" (finding 58).
+        if compgen -G "/dev/video*" >/dev/null; then
+            _protect_failed camera "a video capture device is still present (/dev/video*); close apps using it"
+        else
+            ok "camera off (no capture device present)"
+        fi
+    fi
+    if [[ "${STEALTH_BLOCK_MIC:-yes}" == yes ]]; then
+        # Microphone (finding 57). The persona VM has NO audio device at all
+        # (the harden-whonix allowlist excludes sound), so the persona cannot
+        # capture audio. This mutes the HOST's capture inputs best-effort while
+        # Stealth is on; it is not a hard boundary (a root/user process can
+        # unmute), so it is best-effort unless listed in STEALTH_REQUIRE.
+        if command -v amixer >/dev/null; then
+            local cap muted=0
+            for cap in Capture Mic "Internal Mic" "Front Mic" Dmic; do
+                if amixer -q sset "$cap" nocap 2>/dev/null || amixer -q sset "$cap" mute 2>/dev/null; then
+                    muted=1
+                fi
+            done
+            if (( muted )); then
+                ok "microphone muted (best-effort; persona VM has no audio device)"
+            else
+                _protect_failed mic "found no capture control to mute"
+            fi
+        else
+            _protect_failed mic "amixer not available to mute the microphone"
+        fi
+    fi
+    if [[ "$STEALTH_BLOCK_NEW_USB" == yes ]]; then
+        if systemctl is-active --quiet usbguard; then
+            local prev
+            prev="$(usbguard get-parameter ImplicitPolicyTarget 2>/dev/null || echo allow)"
+            usbguard set-parameter ImplicitPolicyTarget block >/dev/null
+            undo "usbguard set-parameter ImplicitPolicyTarget $prev"
+            ok "new USB devices blocked"
+        else
+            _protect_failed usb "usbguard is not running, so newly plugged USB devices are NOT blocked"
+        fi
     fi
     if [[ "$STEALTH_ONACCESS_SCAN" == yes ]] && ! systemctl is-active --quiet clamav-clamonacc; then
         # clamd needs ~1 GB RAM for signatures, so it only runs in Stealth Mode
@@ -240,20 +340,30 @@ host_lockdown() {
             undo "systemctl stop clamav-clamonacc clamav-daemon"
             ok "on-access malware scanning on"
         else
-            warn "could not start on-access malware scanning"
+            _protect_failed scan "could not start on-access malware scanning"
         fi
     fi
-    if [[ "$STEALTH_NEW_MAC" == yes ]] && command -v nmcli >/dev/null; then
-        local uuid
-        local ctype
-        while IFS=: read -r uuid ctype; do
-            [[ "$ctype" == *wireless* || "$ctype" == *ethernet* ]] || continue
-            nmcli -w 20 connection up "$uuid" >/dev/null 2>&1 || true
-        done < <(nmcli -t -f UUID,TYPE connection show --active)
-        ok "reconnected with a fresh random MAC"
+    if [[ "$STEALTH_NEW_MAC" == yes ]]; then
+        if command -v nmcli >/dev/null; then
+            local uuid
+            local ctype
+            while IFS=: read -r uuid ctype; do
+                [[ "$ctype" == *wireless* || "$ctype" == *ethernet* ]] || continue
+                nmcli -w 20 connection up "$uuid" >/dev/null 2>&1 || true
+            done < <(nmcli -t -f UUID,TYPE connection show --active)
+            ok "reconnected with a fresh random MAC"
+        else
+            _protect_failed mac "NetworkManager (nmcli) not available, so MAC was not refreshed"
+        fi
     fi
-    # libvirt turns forwarding on for the Gateway's NAT; turn it back off after
-    undo "sysctl -qw net.ipv4.ip_forward=0"
+    # libvirt turns forwarding on for the Gateway's NAT. Restore the EXACT prior
+    # value on teardown, not a hard-coded 0: if the machine legitimately had
+    # IP forwarding enabled before Stealth Mode, forcing it off would silently
+    # break the user's routing. Read it now, before libvirt changes it.
+    local prev_fwd
+    prev_fwd="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"
+    [[ "$prev_fwd" =~ ^[01]$ ]] || prev_fwd=0
+    undo "sysctl -qw net.ipv4.ip_forward=$prev_fwd"
 }
 
 host_restore() {
@@ -370,7 +480,18 @@ give_display() {
     local sock="$SPICE_DIR/$1.sock" t=0
     while [[ ! -S "$sock" ]] && (( t < 10 )); do sleep 1; t=$((t + 1)); done
     [[ -S "$sock" ]] || { warn "display socket for $1 not found"; return 0; }
-    chown "root:$STEALTH_USER" "$sock"
+    # TOCTOU hardening (finding 18): QEMU (libvirt-qemu) owns SPICE_DIR, so a
+    # compromised QEMU could swap this path for a symlink between our check and
+    # our chown/chmod and redirect them at an arbitrary file. Refuse a symlink,
+    # chown WITHOUT dereferencing, and re-verify it is still a real socket (not
+    # a symlink) immediately before chmod.
+    if [[ -L "$sock" ]]; then
+        die "display socket $sock is a symlink — refusing (possible TOCTOU attack)"
+    fi
+    chown -h "root:$STEALTH_USER" "$sock"
+    if [[ ! -S "$sock" || -L "$sock" ]]; then
+        die "display socket $sock changed under us before chmod — refusing (possible TOCTOU attack)"
+    fi
     # 0660: connecting to a UNIX socket needs write, so the kstealth group gets
     # read+write. "Other" (your normal desktop user) gets nothing.
     chmod 0660 "$sock"
@@ -407,17 +528,36 @@ stealth_on() {
     info "Open the stealth desktop: kratos stealth view"
 }
 
+# Record that Stealth Mode could not be fully torn down, and STOP: the host
+# lockdown and the stealth firewall stay in place (fail-closed). The host is
+# NOT restored and the active flag is NOT cleared, so status still reads ON.
+_stealth_error() {
+    { date -u +%s; printf '%s\n' "$*"; } >> "$STEALTH_ERROR" 2>/dev/null || true
+    err "STEALTH MODE LEFT PARTIALLY UP: $*"
+    err "Host lockdown and the stealth firewall are STILL ACTIVE (fail-closed)."
+    err "Run 'kratos panic' to force everything down, or retry 'kratos stealth off'."
+}
+
+# Fail-closed teardown. Each step must succeed before the next loosens anything;
+# the host is restored and the active flag cleared ONLY when everything below is
+# positively gone.
 stealth_off_steps() {
-    local failed=0
     info "${BOLD}Stopping isolated environment${RESET} (Workstation first)"
-    vm_stop "$WS" || failed=1
-    if (( failed )); then
+    if ! vm_stop "$WS"; then
         # Never take the Gateway away from a Workstation that is still running,
         # or the Workstation would sit without Tor while holding persona data.
-        err "the Workstation could not be stopped; leaving Gateway and vault as they are"
+        _stealth_error "the Workstation could not be stopped; Gateway and vault left as they are"
         return 1
     fi
-    vm_stop "$GW" || failed=1
+    if ! vm_stop "$GW"; then
+        _stealth_error "the Gateway could not be stopped"
+        return 1
+    fi
+    # Prove no persona QEMU survives before we touch networking or the vault.
+    if pgrep -f "guest=kx-" >/dev/null 2>&1; then
+        _stealth_error "a persona QEMU process is still alive"
+        return 1
+    fi
 
     virsh_ net-destroy kx-int >/dev/null 2>&1 || true
     virsh_ net-destroy kx-ext >/dev/null 2>&1 || true
@@ -431,14 +571,22 @@ stealth_off_steps() {
 
     info "${BOLD}Wiping artifacts and locking vault${RESET}"
     wipe_artifacts
-    ok "VM logs shredded, caches dropped"
-    if vault_close; then ok "vault locked"; else failed=1; fi
+    # Honest wording: shred/drop_caches are best-effort on SSD/CoW/flash and are
+    # NOT guaranteed erasure. The real protection is that the persona lived only
+    # inside the now-locked LUKS vault.
+    ok "VM logs removed, caches dropped (best-effort; vault is the real boundary)"
+    if ! vault_close; then
+        # Vault still unlocked: keep host lockdown on; do NOT declare OFF.
+        _stealth_error "the stealth vault could not be locked"
+        return 1
+    fi
+    ok "vault locked"
 
     info "${BOLD}Restoring normal host${RESET}"
     host_restore
     ok "host restored"
-    rm -f "$STEALTH_FLAG"
-    return "$failed"
+    rm -f "$STEALTH_FLAG" "$STEALTH_ERROR"
+    return 0
 }
 
 stealth_off() {
@@ -493,9 +641,12 @@ stealth_reset() {
     load_config
     stealth_is_active && die "turn Stealth Mode off first"
     confirm "Erase everything in the Workstation and restore a clean image?" || exit 0
+    # Re-lock the vault on any exit path, including a failed overlay recreate.
+    trap 'vault_close' EXIT
     vault_open
     stealth_reset_overlay
     vault_close
+    trap - EXIT
     ok "Workstation reset"
 }
 

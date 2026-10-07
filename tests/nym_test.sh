@@ -17,6 +17,23 @@ echo "— nym.nft is valid and fail-closed —"
 rules="$(sed "s/@NYM_UID@/$NYM_UID/" "$nftfile")"
 if nft -c -f - <<<"$rules" 2>/dev/null; then pass "nym.nft parses"; else flunk "nym.nft invalid"; fi
 
+# Ordering: IPv6 must be dropped BEFORE any established-state accept, and every
+# established accept must be gated by the nym uid — otherwise a connection
+# opened before the ruleset loaded (or over IPv6) could be grandfathered in.
+ipv6_line="$(grep -n 'nfproto ipv6 drop' <<<"$rules" | head -1 | cut -d: -f1)"
+est_line="$(grep -n 'ct state established' <<<"$rules" | head -1 | cut -d: -f1)"
+if [[ -n "$ipv6_line" && ( -z "$est_line" || "$ipv6_line" -lt "$est_line" ) ]]; then
+    pass "IPv6 dropped before any established-state accept"
+else
+    flunk "IPv6 not dropped before established accept (pre-existing v6 could leak)"
+fi
+bad_est="$(grep 'ct state established' <<<"$rules" | grep -i 'accept' | grep -v 'skuid' || true)"
+if [[ -z "$bad_est" ]]; then
+    pass "established-state accept is scoped to the nym user only"
+else
+    flunk "an established-state accept is not gated by the nym uid (bypass): $bad_est"
+fi
+
 # Load it for real in this netns and probe egress as two users.
 ip link set lo up 2>/dev/null
 # A stand-in network so egress actually reaches the firewall (not ENETUNREACH).
@@ -63,6 +80,21 @@ PY
 if grep -q 'disable_loop_cover_traffic_stream = false' <<<"$cfg"; then pass "loop cover traffic enabled"; else flunk "cover traffic not enabled"; fi
 if grep -q 'disable_main_poisson_packet_distribution = false' <<<"$cfg"; then pass "poisson timing enabled"; else flunk "poisson timing off"; fi
 if grep -q 'disabled = true' <<<"$cfg"; then pass "client logging disabled"; else flunk "logging not disabled"; fi
+
+echo "— provider address is validated (no TOML injection) —"
+rc=0
+python3 - <<PY || rc=$?
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+p=os.path.join("$here","..","workstation","nym","kratos-nym")
+spec=importlib.util.spec_from_loader("kn", SourceFileLoader("kn",p)); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    m.build_config("c", 'evil"\ndisable_loop_cover_traffic_stream = true')
+    sys.exit(0)        # accepted -> bad
+except ValueError:
+    sys.exit(3)        # rejected -> good
+PY
+if [[ $rc -eq 3 ]]; then pass "rejects a provider address with quotes/newlines"; else flunk "accepted an injecting provider address (rc=$rc)"; fi
 
 echo
 if (( fail )); then echo "NYM TESTS FAILED"; else echo "nym tests passed"; fi
