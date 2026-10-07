@@ -300,8 +300,14 @@ host_lockdown() {
             _protect_failed mac "NetworkManager (nmcli) not available, so MAC was not refreshed"
         fi
     fi
-    # libvirt turns forwarding on for the Gateway's NAT; turn it back off after
-    undo "sysctl -qw net.ipv4.ip_forward=0"
+    # libvirt turns forwarding on for the Gateway's NAT. Restore the EXACT prior
+    # value on teardown, not a hard-coded 0: if the machine legitimately had
+    # IP forwarding enabled before Stealth Mode, forcing it off would silently
+    # break the user's routing. Read it now, before libvirt changes it.
+    local prev_fwd
+    prev_fwd="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"
+    [[ "$prev_fwd" =~ ^[01]$ ]] || prev_fwd=0
+    undo "sysctl -qw net.ipv4.ip_forward=$prev_fwd"
 }
 
 host_restore() {
