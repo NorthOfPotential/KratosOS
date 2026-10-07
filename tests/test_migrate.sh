@@ -74,4 +74,30 @@ else
     echo "  SKIP  needs root + a 'mallory' user to test home confinement"
 fi
 
+echo "migration: elevated chown touches only imported trees, not pre-existing files"
+if [[ $EUID -eq 0 && -n "$mhome" ]]; then
+    make_export
+    idest="$mhome/kratos-import-test"
+    rm -rf "$idest"; mkdir -p "$idest"
+    # A pre-existing root-owned file under the destination must NOT be chowned.
+    echo keep > "$idest/preexisting-root-file"; chown root:root "$idest/preexisting-root-file"
+    env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
+        "$kratos" migrate --from "$export_dir" --to "$idest" >/dev/null 2>&1 || true
+    pre_owner="$(stat -c %U "$idest/preexisting-root-file" 2>/dev/null)"
+    imp_owner="$(stat -c %U "$idest/Documents/Taxes 2025/notes.txt" 2>/dev/null)"
+    if [[ "$pre_owner" == root ]]; then
+        pass "pre-existing root-owned file left untouched (no blanket chown)"
+    else
+        flunk "pre-existing file was chowned to '$pre_owner' (blanket chown of the destination)"
+    fi
+    if [[ "$imp_owner" == mallory ]]; then
+        pass "imported files are owned by the target user"
+    else
+        flunk "imported file owner is '$imp_owner', expected mallory"
+    fi
+    rm -rf "$idest"
+else
+    echo "  SKIP  needs root + a 'mallory' user to test import-scoped chown"
+fi
+
 exit "$fail"

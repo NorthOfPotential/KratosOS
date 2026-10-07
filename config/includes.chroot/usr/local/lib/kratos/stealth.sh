@@ -344,16 +344,35 @@ host_lockdown() {
         fi
     fi
     if [[ "$STEALTH_NEW_MAC" == yes ]]; then
-        if command -v nmcli >/dev/null; then
-            local uuid
-            local ctype
+        if ! command -v nmcli >/dev/null; then
+            _protect_failed mac "NetworkManager (nmcli) not available, so MAC was not refreshed"
+        else
+            # Reconnect each active wired/wireless connection, then VERIFY the
+            # result (finding 7): a failed reconnect, or a device whose current
+            # MAC still equals its permanent hardware address, means rotation did
+            # not take effect — so we no longer just announce success.
+            local uuid ctype dev cur perm mac_ok=1
             while IFS=: read -r uuid ctype; do
                 [[ "$ctype" == *wireless* || "$ctype" == *ethernet* ]] || continue
-                nmcli -w 20 connection up "$uuid" >/dev/null 2>&1 || true
+                if ! nmcli -w 20 connection up "$uuid" >/dev/null 2>&1; then
+                    mac_ok=0; continue
+                fi
+                dev="$(nmcli -g GENERAL.DEVICES connection show "$uuid" 2>/dev/null | head -1)"
+                [[ -n "$dev" ]] || continue
+                cur="$(cat "/sys/class/net/$dev/address" 2>/dev/null)"
+                perm=""
+                if command -v ethtool >/dev/null; then
+                    perm="$(ethtool -P "$dev" 2>/dev/null | awk '{print $NF}')"
+                fi
+                if [[ -n "$perm" && "$perm" != "00:00:00:00:00:00" && "$cur" == "$perm" ]]; then
+                    mac_ok=0
+                fi
             done < <(nmcli -t -f UUID,TYPE connection show --active)
-            ok "reconnected with a fresh random MAC"
-        else
-            _protect_failed mac "NetworkManager (nmcli) not available, so MAC was not refreshed"
+            if (( mac_ok )); then
+                ok "reconnected with a verified fresh random MAC"
+            else
+                _protect_failed mac "a connection failed to come up, or a device's MAC still equals its hardware address"
+            fi
         fi
     fi
     # libvirt turns forwarding on for the Gateway's NAT. Restore the EXACT prior
