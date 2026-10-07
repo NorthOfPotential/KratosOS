@@ -52,13 +52,13 @@ corr_shape_off() {
     # an administrator's or another app's QoS on unrelated interfaces.
     if [[ -r "$CORR_SHAPED_FILE" ]]; then
         while read -r dev; do
-            [[ -n "$dev" ]] && tc qdisc del dev "$dev" root 2>/dev/null || true
+            if [[ -n "$dev" ]]; then tc qdisc del dev "$dev" root 2>/dev/null || true; fi
         done < "$CORR_SHAPED_FILE"
         rm -f "$CORR_SHAPED_FILE"
     fi
     # Belt-and-suspenders: also clear the current default-route iface.
     dev="$(corr_shape_iface)"
-    [[ -n "$dev" ]] && tc qdisc del dev "$dev" root 2>/dev/null || true
+    if [[ -n "$dev" ]]; then tc qdisc del dev "$dev" root 2>/dev/null || true; fi
     ok "shaping removed"
 }
 

@@ -4,11 +4,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege by default: the workflow's token can only read the repo.
+# Jobs that need more (the ISO build signs provenance) raise it for themselves.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # Third-party actions are pinned to a full commit SHA (not a movable tag)
+      # so a compromised or re-pointed tag can't inject code into our pipeline.
+      # The trailing comment records the human-readable version each SHA is.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install test tools
         run: |
           sudo apt-get update
@@ -33,8 +41,17 @@ jobs:
     # mount, chroot and loop devices.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
+    # id-token + attestations let this job mint a signed, verifiable provenance
+    # attestation for the ISO it builds (see the "Attest" step). contents stays
+    # read — the build publishes through artifacts and attestations, not pushes.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     container:
-      image: debian:trixie
+      # Pinned to the trixie image digest, not the floating tag, so the build
+      # base can't change under us without a visible edit here.
+      image: debian:trixie@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
       options: --privileged
     steps:
       - name: Install build tooling
@@ -44,15 +61,39 @@ jobs:
           apt-get install -y --no-install-recommends \
             live-build debootstrap git ca-certificates xorriso \
             squashfs-tools dosfstools mtools
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build ISO
         run: ./build.sh          # already root in the container; no sudo
       - name: Checksums
         run: sha256sum kratosos-*.iso | tee SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - name: Generate SBOM
+        # Software Bill of Materials for the built image. syft reads the live
+        # root filesystem live-build leaves in ./chroot (a real dpkg database),
+        # so the SBOM lists every package + version that actually shipped.
+        # Best-effort: never fail the build over the SBOM itself.
+        continue-on-error: true
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: ./chroot
+          format: spdx-json
+          output-file: kratosos.spdx.json
+          upload-artifact: false
+      - name: Attest build provenance
+        # A signed, cryptographically verifiable record of WHERE and HOW the ISO
+        # was built (this repo, this workflow, this commit). Downloaders verify
+        # with:  gh attestation verify kratosos-amd64.hybrid.iso -R <owner>/<repo>
+        # Only runs for first-party builds (a token with id-token on a fork PR
+        # can't sign), so it never blocks external contributors' CI.
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: kratosos-*.iso
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kratosos-iso
           path: |
             kratosos-*.iso
             SHA256SUMS
+            kratosos-amd64.packages
+            kratosos.spdx.json
           retention-days: 14

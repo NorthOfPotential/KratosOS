@@ -27,7 +27,7 @@ else
     flunk "catalog has malformed rows: $badrows"
 fi
 nrows="$(awk -F'\t' '!/^#/ && NF>=7 {n++} END{print n+0}' "$tsv")"
-[[ "$nrows" -ge 50 ]] && pass "catalog lists $nrows tools" || flunk "catalog unexpectedly small ($nrows)"
+if [[ "$nrows" -ge 50 ]]; then pass "catalog lists $nrows tools"; else flunk "catalog unexpectedly small ($nrows)"; fi
 
 # ── Generator produces a well-formed menu + valid .desktop files ───────────
 out="$(mktemp -d)"; trap 'rm -rf "$out"' EXIT

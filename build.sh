@@ -73,6 +73,15 @@ done
 [ -n "$built" ] || { echo "build produced no ISO" >&2; exit 1; }
 [ "$built" = "$out" ] || mv -f "$built" "$out"
 
+# Publish live-build's own package manifest (every package + exact version that
+# went into the image) next to the ISO. This is the authoritative input for the
+# SBOM and lets anyone audit exactly what shipped. live-build names it
+# live-image-amd64.packages; tolerate other names across versions.
+manifest="kratosos-amd64.packages"
+for m in live-image-*.packages binary.packages chroot.packages.install; do
+    [ -f "$m" ] && { cp -f "$m" "$manifest"; break; }
+done
+
 echo
 echo "Built: $out"
 sha256sum "$out" | tee SHA256SUMS
