@@ -1,0 +1,111 @@
+# KratosOS Security toolset catalog.  Tab-separated.  Lines starting with # are ignored.
+# Columns:  Menu  Package  Name  Exec  Kind  Icon  Comment
+#   Menu    one of: Recon Scanning Web Wireless Passwords Sniffing Forensics RevEng Exploitation Anonymity Logging Scripting
+#   Package apt package to install ("-" = provided by base system or a KratosOS custom tool)
+#   Exec    command the launcher runs (first word must be the installed binary for cli tools)
+#   Kind    cli (opens in a terminal, ready to use) | gui (launches directly)
+#   Icon    a freedesktop icon name
+#   Comment short description shown in the menu
+#
+# A package that isn't in Debian is simply skipped at build time, and no menu
+# entry is created for a tool whose binary didn't end up installed.
+#
+# ── Reconnaissance ──────────────────────────────────────────────────────────
+Recon	nmap	Nmap	nmap	cli	network-wired	Network/port/service/OS discovery scanner
+Recon	nmap	Ncat	ncat	cli	network-wired	Netcat replacement (connect/listen/relay)
+Recon	masscan	Masscan	masscan	cli	network-wired	Mass IP/port scanner (very fast)
+Recon	arp-scan	ARP Scan	arp-scan	cli	network-wired	Discover hosts on the local link via ARP
+Recon	netdiscover	Netdiscover	netdiscover	cli	network-wired	Passive/active ARP reconnaissance
+Recon	dnsutils	Dig (DNS)	dig	cli	network-server	DNS lookups and zone queries
+Recon	dnsrecon	DNSRecon	dnsrecon	cli	network-server	DNS enumeration and zone transfer tests
+Recon	fierce	Fierce	fierce	cli	network-server	DNS subdomain reconnaissance
+Recon	whois	Whois	whois	cli	network-server	Domain/IP registration lookup
+Recon	theharvester	theHarvester	theHarvester	cli	mail-message-new	OSINT emails/subdomains/hosts gathering
+Recon	whatweb	WhatWeb	whatweb	cli	applications-internet	Identify web technologies on a site
+Recon	smbclient	SMBClient	smbclient	cli	network-workgroup	Enumerate/interact with SMB shares
+Recon	snmp	SNMP Walk	snmpwalk	cli	network-server	Query SNMP-enabled devices
+# ── Scanning / Vulnerability ────────────────────────────────────────────────
+Scanning	nmap	Nmap NSE Scripts	nmap --script vuln	cli	security-medium	Run Nmap vulnerability scripts
+Scanning	nikto	Nikto	nikto	cli	security-medium	Web server vulnerability scanner
+Scanning	wapiti	Wapiti	wapiti	cli	security-medium	Web application vulnerability scanner
+Scanning	lynis	Lynis (host audit)	lynis audit system	cli	security-high	Audit THIS system's hardening
+Scanning	legion	Legion	legion	gui	security-medium	GUI network pentest framework
+# ── Web ─────────────────────────────────────────────────────────────────────
+Web	sqlmap	SQLMap	sqlmap	cli	applications-internet	Automated SQL-injection testing
+Web	dirb	Dirb	dirb	cli	folder-remote	Web content/directory brute forcer
+Web	gobuster	Gobuster	gobuster	cli	folder-remote	Fast directory/DNS/vhost brute forcer
+Web	feroxbuster	Feroxbuster	feroxbuster	cli	folder-remote	Recursive content discovery
+Web	ffuf	ffuf	ffuf	cli	folder-remote	Fast web fuzzer
+Web	wfuzz	Wfuzz	wfuzz	cli	folder-remote	Web application fuzzer
+Web	zaproxy	OWASP ZAP	zaproxy	gui	applications-internet	Web app proxy / scanner (Burp-like)
+Web	wpscan	WPScan	wpscan	cli	wordpress	WordPress security scanner
+Web	skipfish	Skipfish	skipfish	cli	applications-internet	Active web recon scanner
+Web	sslscan	SSLScan	sslscan	cli	security-high	Enumerate TLS ciphers/certs of a service
+# ── Wireless ────────────────────────────────────────────────────────────────
+Wireless	aircrack-ng	Aircrack-ng	aircrack-ng	cli	network-wireless	WEP/WPA capture + cracking suite
+Wireless	wifite	Wifite	wifite	cli	network-wireless	Automated wireless auditing
+Wireless	reaver	Reaver	reaver	cli	network-wireless	WPS PIN brute force
+Wireless	bully	Bully	bully	cli	network-wireless	WPS brute force (alternative)
+Wireless	mdk4	MDK4	mdk4	cli	network-wireless	Wi-Fi stress/deauth testing
+Wireless	kismet	Kismet	kismet	gui	network-wireless	Wireless sniffer/IDS
+Wireless	hcxdumptool	hcxdumptool	hcxdumptool	cli	network-wireless	Capture WPA PMKID/handshakes
+# ── Password attacks ────────────────────────────────────────────────────────
+Passwords	john	John the Ripper	john	cli	dialog-password	Offline password hash cracker
+Passwords	hashcat	Hashcat	hashcat	cli	dialog-password	GPU/CPU password recovery
+Passwords	hydra	Hydra	hydra	cli	dialog-password	Online login brute forcer
+Passwords	medusa	Medusa	medusa	cli	dialog-password	Parallel network login brute forcer
+Passwords	ncrack	Ncrack	ncrack	cli	dialog-password	High-speed network auth cracking
+Passwords	crunch	Crunch	crunch	cli	dialog-password	Wordlist generator
+Passwords	cewl	CeWL	cewl	cli	dialog-password	Scrape a site into a custom wordlist
+Passwords	hashid	hashID	hashid	cli	dialog-password	Identify hash types
+# ── Sniffing / MITM ─────────────────────────────────────────────────────────
+Sniffing	wireshark	Wireshark	wireshark	gui	utilities-system-monitor	Graphical packet capture/analysis
+Sniffing	tshark	TShark	tshark	cli	utilities-system-monitor	Terminal packet capture/analysis
+Sniffing	tcpdump	tcpdump	tcpdump	cli	utilities-system-monitor	Classic CLI packet capture
+Sniffing	ettercap-graphical	Ettercap	ettercap -G	gui	network-wired	MITM suite (ARP poisoning, filters)
+Sniffing	bettercap	Bettercap	bettercap	cli	network-wired	Modern MITM / network attack framework
+Sniffing	dsniff	dsniff	dsniff	cli	network-wired	Password/traffic sniffing tools
+Sniffing	mitmproxy	mitmproxy	mitmproxy	cli	applications-internet	Interactive HTTPS intercepting proxy
+Sniffing	ngrep	ngrep	ngrep	cli	utilities-system-monitor	grep across live network traffic
+# ── Forensics ───────────────────────────────────────────────────────────────
+Forensics	sleuthkit	Sleuth Kit	fls	cli	drive-harddisk	Filesystem/disk forensic analysis
+Forensics	autopsy	Autopsy	autopsy	gui	drive-harddisk	Web GUI over the Sleuth Kit
+Forensics	foremost	Foremost	foremost	cli	drive-harddisk	Recover files by header/footer carving
+Forensics	scalpel	Scalpel	scalpel	cli	drive-harddisk	File carving (fast, configurable)
+Forensics	testdisk	TestDisk / PhotoRec	testdisk	cli	drive-harddisk	Recover partitions and deleted files
+Forensics	binwalk	Binwalk	binwalk	cli	application-x-firmware	Analyze/extract firmware images
+Forensics	libimage-exiftool-perl	ExifTool	exiftool	cli	image-x-generic	Read/write file metadata
+Forensics	steghide	Steghide	steghide	cli	image-x-generic	Hide/extract data in images/audio
+Forensics	yara	YARA	yara	cli	security-medium	Pattern-match malware samples
+Forensics	gddrescue	ddrescue	ddrescue	cli	drive-harddisk	Image failing disks safely
+# ── Reverse engineering ─────────────────────────────────────────────────────
+RevEng	radare2	Radare2	r2	cli	applications-engineering	Reverse-engineering framework
+RevEng	rizin	Rizin	rizin	cli	applications-engineering	Reverse-engineering framework (r2 fork)
+RevEng	gdb	GDB	gdb	cli	applications-engineering	The GNU debugger
+RevEng	ltrace	ltrace	ltrace	cli	applications-engineering	Trace library calls
+RevEng	strace	strace	strace	cli	applications-engineering	Trace system calls
+RevEng	apktool	Apktool	apktool	cli	applications-engineering	Decode/rebuild Android APKs
+RevEng	hexedit	Hexedit	hexedit	cli	applications-engineering	Terminal hex editor
+# ── Exploitation ────────────────────────────────────────────────────────────
+Exploitation	-	Metasploit (install helper)	kratos-sec install-metasploit	cli	security-low	Install the Metasploit Framework (not in Debian)
+Exploitation	exploitdb	searchsploit	searchsploit	cli	security-low	Search the Exploit-DB archive offline
+Exploitation	set	Social-Engineer Toolkit	setoolkit	cli	security-low	Social-engineering attack framework
+Exploitation	thc-ipv6	THC-IPv6	atk6-alive6	cli	network-wired	IPv6 protocol attack toolkit
+# ── Anonymity ───────────────────────────────────────────────────────────────
+Anonymity	proxychains4	ProxyChains	proxychains4	cli	security-high	Force any program through a proxy chain
+Anonymity	torsocks	Torsocks	torsocks	cli	security-high	Route a command through Tor
+Anonymity	macchanger	MAC Changer	macchanger	cli	network-wired	Change a NIC's MAC address
+# ── Logging & monitoring (KratosOS custom + standard) ───────────────────────
+Logging	-	Live System Log	kratos-logwatch	cli	utilities-system-monitor	Follow the system journal live (KratosOS)
+Logging	ksystemlog	System Log (GUI)	ksystemlog	gui	utilities-system-monitor	KDE graphical log viewer
+Logging	htop	htop	htop	cli	utilities-system-monitor	Interactive process viewer
+Logging	btop	btop	btop	cli	utilities-system-monitor	Resource monitor (modern)
+Logging	iftop	iftop	iftop	cli	network-wired	Live per-connection bandwidth
+Logging	nethogs	NetHogs	nethogs	cli	network-wired	Per-process network usage
+Logging	iotop	iotop	iotop	cli	drive-harddisk	Per-process disk I/O
+Logging	auditd	Audit Log (ausearch)	ausearch -ts recent	cli	security-high	Query the kernel audit log
+# ── Script execution (KratosOS custom) ──────────────────────────────────────
+Scripting	-	Run Script (sandboxed)	kratos-runscript	cli	utilities-terminal	Run a script inside a Firejail sandbox (KratosOS)
+Scripting	ipython3	IPython	ipython3	cli	text-x-python	Interactive Python shell
+Scripting	-	Python 3	python3	cli	text-x-python	Python 3 interpreter
+Scripting	-	Terminal (Konsole)	konsole	gui	utilities-terminal	Open a KratosOS terminal

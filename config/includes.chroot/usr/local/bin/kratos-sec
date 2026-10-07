@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# KratosOS security helpers for tools that aren't packaged in Debian.
+set -uo pipefail
+case "${1:-help}" in
+  install-metasploit)
+    cat <<'TXT'
+Metasploit Framework is not in Debian's repositories, so KratosOS does not ship
+it. Rapid7 provide an official installer that adds their APT repo and installs
+the 'metasploit-framework' package. It downloads a script and runs it as root.
+Official installer: https://github.com/rapid7/metasploit-framework#installing
+TXT
+    read -r -p "Download and run the official Rapid7 installer now? [y/N] " a
+    if [[ ! "$a" =~ ^[Yy]$ ]]; then
+        echo "Not installing. You can follow the link above to do it yourself."
+        exit 0
+    fi
+    command -v curl >/dev/null 2>&1 || { echo "curl is required"; exit 1; }
+    tmp="$(mktemp -d)"
+    url="https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfinstall"
+    echo "Fetching installer from $url ..."
+    curl -fsSL "$url" -o "$tmp/msfinstall" || { echo "download failed"; exit 1; }
+    chmod +x "$tmp/msfinstall"
+    echo "Running the installer with sudo..."
+    sudo "$tmp/msfinstall"
+    ;;
+  *)
+    echo "usage: kratos-sec install-metasploit" ;;
+esac

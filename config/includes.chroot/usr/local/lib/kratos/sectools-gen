@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Generate the "KratosOS Security" application menu from sectools.tsv:
+#   * one .desktop launcher per tool (CLI tools open in Konsole, ready to use)
+#   * one .directory per submenu
+#   * an XDG applications-merged .menu placing it all under "KratosOS Security"
+#
+# At build time it is run with --check-binaries so a tool whose package wasn't
+# available (and so never installed) gets no dead menu entry. Without that flag
+# it emits every entry, which is how the test suite validates the output.
+set -uo pipefail
+
+TSV="/usr/share/kratos-assets/sectools.tsv"
+APPDIR="/usr/share/applications"
+DIRDIR="/usr/share/desktop-directories"
+MENUFILE="/etc/xdg/menus/applications-merged/kratos-security.menu"
+CHECK=0
+SECSHELL="/usr/local/lib/kratos/sec-shell"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --tsv) TSV="$2"; shift 2 ;;
+        --appdir) APPDIR="$2"; shift 2 ;;
+        --dirdir) DIRDIR="$2"; shift 2 ;;
+        --menufile) MENUFILE="$2"; shift 2 ;;
+        --check-binaries) CHECK=1; shift ;;
+        *) echo "sectools-gen: unknown arg $1" >&2; exit 2 ;;
+    esac
+done
+
+# Menu key -> "display name|icon". Order here is the menu order.
+menus_order=(Recon Scanning Web Wireless Passwords Sniffing Forensics RevEng Exploitation Anonymity Logging Scripting)
+declare -A menu_name=(
+    [Recon]="Reconnaissance"      [Scanning]="Scanning & Vuln"   [Web]="Web"
+    [Wireless]="Wireless"         [Passwords]="Password Attacks" [Sniffing]="Sniffing & MITM"
+    [Forensics]="Forensics"       [RevEng]="Reverse Engineering" [Exploitation]="Exploitation"
+    [Anonymity]="Anonymity"       [Logging]="Logging & Monitoring" [Scripting]="Script Execution"
+)
+declare -A menu_icon=(
+    [Recon]="network-wired"       [Scanning]="security-medium"   [Web]="applications-internet"
+    [Wireless]="network-wireless" [Passwords]="dialog-password"  [Sniffing]="utilities-system-monitor"
+    [Forensics]="drive-harddisk"  [RevEng]="applications-engineering" [Exploitation]="security-low"
+    [Anonymity]="security-high"   [Logging]="utilities-system-monitor" [Scripting]="utilities-terminal"
+)
+
+install -d "$APPDIR" "$DIRDIR" "$(dirname "$MENUFILE")"
+
+slug() { printf '%s' "$1" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9-'; }
+# .desktop-escape: only " needs care in our quoted Exec args.
+esc() { printf '%s' "$1" | sed 's/"/\\"/g'; }
+# XML text escape for the .menu file (& < > in submenu display names).
+xesc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+declare -A used_menu=()
+count=0
+
+while IFS=$'\t' read -r menu _ name exec kind icon comment; do
+    [[ -z "${menu:-}" || "$menu" == \#* ]] && continue
+    [[ -n "${menu_name[$menu]:-}" ]] || { echo "sectools-gen: unknown menu '$menu' for '$name'" >&2; continue; }
+
+    # Skip tools whose binary isn't present (only when asked to check).
+    bin="${exec%% *}"
+    if [[ "$CHECK" -eq 1 ]] && ! command -v "$bin" >/dev/null 2>&1; then
+        continue
+    fi
+
+    s="$(slug "$name")"
+    dfile="$APPDIR/kratos-sec-$(printf '%s' "$menu" | tr '[:upper:]' '[:lower:]')-$s.desktop"
+    if [[ "$kind" == gui ]]; then
+        execline="$exec"
+        term="false"
+    else
+        execline="konsole -e $SECSHELL \"$(esc "$exec")\" \"$(esc "$name")\""
+        term="false"
+    fi
+    {
+        echo "[Desktop Entry]"
+        echo "Type=Application"
+        echo "Version=1.0"
+        echo "Name=$name"
+        echo "Comment=$comment"
+        echo "Exec=$execline"
+        echo "Terminal=$term"
+        echo "Icon=$icon"
+        echo "Categories=X-Kratos-$menu;"
+    } > "$dfile"
+    used_menu[$menu]=1
+    count=$((count + 1))
+done < "$TSV"
+
+# Submenu .directory files (only for menus that got at least one entry).
+for m in "${menus_order[@]}"; do
+    [[ -n "${used_menu[$m]:-}" ]] || continue
+    {
+        echo "[Desktop Entry]"
+        echo "Type=Directory"
+        echo "Name=${menu_name[$m]}"
+        echo "Icon=${menu_icon[$m]}"
+    } > "$DIRDIR/kratos-sec-$(printf '%s' "$m" | tr '[:upper:]' '[:lower:]').directory"
+done
+
+# Top-level directory.
+{
+    echo "[Desktop Entry]"
+    echo "Type=Directory"
+    echo "Name=KratosOS Security"
+    echo "Icon=security-high"
+} > "$DIRDIR/kratos-security.directory"
+
+# The merged menu.
+{
+    echo '<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN" "http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd">'
+    echo '<Menu>'
+    echo '  <Name>Applications</Name>'
+    echo '  <Menu>'
+    echo '    <Name>KratosOS Security</Name>'
+    echo '    <Directory>kratos-security.directory</Directory>'
+    for m in "${menus_order[@]}"; do
+        [[ -n "${used_menu[$m]:-}" ]] || continue
+        # <Name> is the menu identifier (the shown label comes from <Directory>);
+        # use the short key so it needs no XML escaping.
+        echo "    <Menu>"
+        echo "      <Name>Kratos-$m</Name>"
+        echo "      <Directory>kratos-sec-$(printf '%s' "$m" | tr '[:upper:]' '[:lower:]').directory</Directory>"
+        echo "      <Include><Category>X-Kratos-$m</Category></Include>"
+        echo "    </Menu>"
+    done
+    echo '  </Menu>'
+    echo '</Menu>'
+} > "$MENUFILE"
+
+echo "sectools-gen: wrote $count launchers across ${#used_menu[@]} menus"

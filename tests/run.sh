@@ -10,7 +10,9 @@ run() { "$@" || status=1; }
 
 step "shellcheck"
 run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
-    $inc/usr/local/bin/kratos-apply-look \
+    $inc/usr/local/bin/kratos-apply-look $inc/usr/local/bin/kratos-logwatch \
+    $inc/usr/local/bin/kratos-runscript $inc/usr/local/bin/kratos-sec \
+    $inc/usr/local/lib/kratos/sectools-gen $inc/usr/local/lib/kratos/sec-shell \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
     build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
@@ -39,6 +41,9 @@ run tests/test_stealth_order.sh
 
 step "branding (KratosOS identity, wallpaper, installer rename)"
 run tests/test_branding.sh
+
+step "security toolset (catalog + generated menu)"
+run tests/test_sectools.sh
 
 step "config parser (never executes config as code)"
 run tests/test_config.sh

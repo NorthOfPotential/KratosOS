@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# KratosOS: run a script in a locked-down Firejail sandbox (no network, a
+# private /tmp, your home read-only). For safely trying untrusted scripts.
+set -u
+script="${1:-}"
+if [ -z "$script" ] && command -v kdialog >/dev/null 2>&1; then
+    script="$(kdialog --getopenfilename "${HOME:-/root}" 2>/dev/null)" || exit 0
+fi
+[ -n "$script" ] || { echo "usage: kratos-runscript <script.sh|script.py>"; exit 1; }
+[ -r "$script" ] || { echo "kratos-runscript: cannot read $script"; exit 1; }
+
+runner() { case "$1" in *.py) exec python3 "$1";; *) exec bash "$1";; esac; }
+echo "Running '$script' sandboxed (no network, private /tmp, read-only home)..."
+if command -v firejail >/dev/null 2>&1; then
+    # $1 is expanded by the INNER bash inside the sandbox, not here (intentional).
+    # shellcheck disable=SC2016
+    exec firejail --quiet --net=none --private-tmp --read-only="${HOME:-/root}" \
+        -- bash -c 'case "$1" in *.py) exec python3 "$1";; *) exec bash "$1";; esac' _ "$script"
+fi
+echo "(firejail not available — running unsandboxed)"
+runner "$script"
