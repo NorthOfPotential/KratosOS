@@ -21,6 +21,20 @@ chk "$nm" '^ipv4\.dhcp-fqdn=$'                   "no DHCP FQDN sent"
 chk "$nm" '^connection\.mdns=0'                  "mDNS off"
 chk "$nm" '^connection\.llmnr=0'                 "LLMNR off"
 
+echo "— networking is a hard dependent of the firewall (finding 6) —"
+nmdrop="$root/etc/systemd/system/NetworkManager.service.d/10-kratos-firewall.conf"
+fw="$root/etc/systemd/system/kratos-firewall.service"
+if [[ -f "$nmdrop" ]] && grep -qE '^Requires=kratos-firewall\.service' "$nmdrop"; then
+    pass "NetworkManager Requires the firewall unit (fails closed if it fails)"
+else
+    flunk "no NetworkManager drop-in requiring kratos-firewall.service"
+fi
+if grep -qE 'ExecStartPre=.*offline\.nft' "$fw"; then
+    pass "firewall preloads a minimal default-drop before the full ruleset"
+else
+    flunk "firewall unit does not preload the default-drop layer"
+fi
+
 echo "— libvirt authorization (finding 26) —"
 if [[ -f "$lvrule" ]] && grep -qE 'org\.libvirt\.' "$lvrule" && grep -qE 'polkit\.Result\.NO' "$lvrule"; then
     pass "an explicit polkit rule denies non-root libvirt management"
