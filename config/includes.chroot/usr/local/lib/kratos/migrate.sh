@@ -114,23 +114,55 @@ migrate_bookmarks() {
     info "Bookmarks saved to '$out'. Import them from Firefox: Bookmarks > Manage > Import."
 }
 
-# Copy an Export-WindowsData.ps1 folder and verify every file against its manifest.
+# Every manifest entry must be "<64-hex>␣␣Files/<relative-path>" with no
+# absolute path and no ".." component. Empty/garbage manifests are rejected.
+_migrate_safe_manifest() {
+    local mf="$1" line path any=0
+    [[ -s "$mf" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        [[ "$line" =~ ^[0-9a-fA-F]{64}[[:space:]] ]] || return 1
+        [[ "$line" == *"Files/"* ]] || return 1
+        path="${line#*Files/}"
+        [[ "$path" == /* ]] && return 1          # no absolute paths
+        case "/$path/" in */../*) return 1 ;; esac  # no parent traversal
+        any=1
+    done < "$mf"
+    (( any == 1 ))
+}
+
+# Copy an Export-WindowsData.ps1 folder into a STAGING area, verify EVERY file
+# against the manifest, and only publish to the destination if all pass. On any
+# failure the staging tree is discarded and the destination is left untouched —
+# the import is fail-closed, so "migration finished" never prints on a mismatch.
 migrate_copy_from_export() {
     local src="$1" dest="$2"
     [[ -f "$src/manifest.sha256" ]] || die "$src has no manifest.sha256 (was it made by Export-WindowsData.ps1?)"
-    info "Copying export..."
+    _migrate_safe_manifest "$src/manifest.sha256" \
+        || die "manifest.sha256 is empty or contains unsafe paths (absolute or ..); refusing to import"
+
+    local stage
+    stage="$(mktemp -d "$dest/.kratos-import.XXXXXX")" || die "cannot create a staging area in $dest"
+    trap 'rm -rf "$stage"' EXIT
+    info "Copying export to a staging area..."
     rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= --exclude manifest.sha256 \
-        --exclude inventory --exclude export.log "$src/Files/" "$dest/"
-    info "Verifying every copied file against the manifest made on Windows..."
-    local bad_count
-    # Manifest lines: "<sha256>  Files/<path>"; check the copies in $dest
-    bad_count="$(sed 's#^\([0-9a-f]*\)  Files/#\1  #' "$src/manifest.sha256" \
-        | (cd "$dest" && sha256sum --quiet -c - 2>/dev/null) | grep -c 'FAILED' || true)"
-    if [[ "$bad_count" == 0 ]]; then
-        ok "all files verified: identical to the originals on Windows"
+        --exclude inventory --exclude export.log "$src/Files/" "$stage/"
+
+    info "Verifying every file against the manifest made on Windows (all must pass)..."
+    # sha256sum -c --strict fails on ANY mismatch AND on any malformed line, so a
+    # garbled/empty manifest can't masquerade as "zero failures".
+    if sed 's#^\([0-9a-fA-F]\{64\}\)  Files/#\1  #' "$src/manifest.sha256" \
+        | ( cd "$stage" && sha256sum -c --strict - >/dev/null 2>&1 ); then
+        ok "all files verified against the manifest (corruption check)"
     else
-        bad "$bad_count file(s) differ from the originals; DO NOT wipe your backup"
+        die "verification FAILED: the import is incomplete or altered. Destination left unchanged, staging discarded. DO NOT wipe your backup."
     fi
+
+    info "Publishing verified files..."
+    cp -a "$stage/." "$dest/"
+    rm -rf "$stage"
+    trap - EXIT
+
     if [[ -d "$src/inventory" ]]; then
         install -d "$dest/Windows inventory"
         cp -r "$src/inventory/." "$dest/Windows inventory/"
@@ -155,13 +187,18 @@ migrate_app_report() {
 }
 
 migrate_scrub() {
-    local dest="$1"
+    local dest="$1" owner="${2:-}"
     need_cmd mat2
     info "Stripping metadata from photos and documents..."
-    find "$dest" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.heic' \
-        -o -iname '*.tif*' -o -iname '*.pdf' -o -iname '*.docx' -o -iname '*.xlsx' -o -iname '*.pptx' \
-        -o -iname '*.odt' -o -iname '*.mp3' -o -iname '*.flac' \) -print0 \
-        | xargs -0 -r -n 50 mat2 --inplace --lightweight 2>/dev/null || true
+    # mat2 parses complex attacker-controlled formats (PDF/Office/JPEG). Run it
+    # as the destination USER, never as root, so a parser bug can't be root.
+    # shellcheck disable=SC2016
+    local cmd='find "$1" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.heic" -o -iname "*.tif*" -o -iname "*.pdf" -o -iname "*.docx" -o -iname "*.xlsx" -o -iname "*.pptx" -o -iname "*.odt" -o -iname "*.mp3" -o -iname "*.flac" \) -print0 | xargs -0 -r -n 50 mat2 --inplace --lightweight 2>/dev/null || true'
+    if [[ $EUID -eq 0 && -n "$owner" && "$owner" != root ]] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$owner" -- bash -c "$cmd" _ "$dest"
+    else
+        bash -c "$cmd" _ "$dest"
+    fi
     ok "metadata stripped"
 }
 
@@ -182,11 +219,29 @@ migrate_windows() {
         return
     fi
 
-    local owner
-    owner="$(desktop_user)"
-    [[ -n "$owner" ]] || owner="$(id -un)"
-    dest="${dest:-$(getent passwd "$owner" | cut -d: -f6)}"
-    install -d "$dest"
+    # --user must name a SINGLE Windows profile directory, never a path.
+    if [[ -n "$user" ]]; then
+        case "$user" in
+            */*|*\\*|.|..|*..*) die "invalid --user '$user' (must be a single profile name)" ;;
+        esac
+    fi
+
+    local invoker owner owner_home
+    invoker="$(desktop_user)"                 # set only when invoked via sudo/pkexec by a user
+    owner="${invoker:-$(id -un)}"
+    owner_home="$(getent passwd "$owner" | cut -d: -f6)"
+    [[ -n "$owner_home" ]] || owner_home="${HOME:-/root}"
+    dest="${dest:-$owner_home}"
+    dest="$(realpath -m -- "$dest")"
+    # When a desktop user elevated this (auth_admin_keep caches that auth),
+    # confine the destination to THEIR home so it can't be pointed at /etc etc.
+    if [[ $EUID -eq 0 && -n "$invoker" && "$invoker" != root ]]; then
+        case "$dest/" in
+            "$owner_home"/*) : ;;
+            *) die "refusing elevated migration to '$dest': the destination must be inside $owner_home" ;;
+        esac
+    fi
+    install -d -- "$dest"
 
     if [[ -b "$from" ]]; then
         need_root migrate --from "$from"
@@ -207,8 +262,10 @@ migrate_windows() {
         die "--from must be an export folder or a partition like /dev/sdb3"
     fi
 
-    [[ "$scrub" == yes ]] && migrate_scrub "$dest"
-    [[ $EUID -eq 0 && "$owner" != root ]] && chown -R "$owner": "$dest"
+    # Own the imported files as the target user FIRST (bounded to $dest), THEN
+    # scrub as that user, so hostile documents are never parsed by mat2 as root.
+    [[ $EUID -eq 0 && "$owner" != root ]] && chown -R -- "$owner": "$dest"
+    [[ "$scrub" == yes ]] && migrate_scrub "$dest" "$owner"
     ok "migration finished: $dest"
     info "Keep your backup drive until you have opened your important files here."
 }

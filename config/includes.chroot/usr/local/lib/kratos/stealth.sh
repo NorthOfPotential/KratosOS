@@ -456,7 +456,10 @@ stealth_off_steps() {
 
     info "${BOLD}Wiping artifacts and locking vault${RESET}"
     wipe_artifacts
-    ok "VM logs shredded, caches dropped"
+    # Honest wording: shred/drop_caches are best-effort on SSD/CoW/flash and are
+    # NOT guaranteed erasure. The real protection is that the persona lived only
+    # inside the now-locked LUKS vault.
+    ok "VM logs removed, caches dropped (best-effort; vault is the real boundary)"
     if ! vault_close; then
         # Vault still unlocked: keep host lockdown on; do NOT declare OFF.
         _stealth_error "the stealth vault could not be locked"

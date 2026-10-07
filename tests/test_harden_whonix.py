@@ -157,6 +157,29 @@ class HardenWhonixTest(unittest.TestCase):
             '<listen type="address" address="0.0.0.0" />'))
         self.assertNotEqual(run("check", self.out).returncode, 0)
 
+    def test_check_detects_vsock(self):
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</devices>", '<vsock model="virtio"><cid auto="yes"/></vsock></devices>'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_check_detects_any_channel(self):
+        # Even a guest-agent channel is a host<->guest bridge and must be gone.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</devices>", '<channel type="unix"><target type="virtio" '
+            'name="org.qemu.guest_agent.0"/></channel></devices>'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_check_detects_qemu_commandline(self):
+        # <qemu:commandline> can pass arbitrary QEMU flags — an escape hatch.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</domain>",
+            '<qemu:commandline xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">'
+            '<qemu:arg value="-netdev"/></qemu:commandline></domain>'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
     # ── compartmentalization (sVirt / blast-radius reduction) ──
 
     def test_svirt_seclabel_added(self):

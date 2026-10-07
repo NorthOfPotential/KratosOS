@@ -40,10 +40,19 @@ if grep -q "Steam" <<<"$out" && grep -q "Firefox" <<<"$out"; then
 if [[ "$(stat -c %a "$home_dir/Pictures/photo.jpg")" == 600 ]]; then
     pass "copied files are private (600)"; else flunk "copied files are private"; fi
 
-echo "migration: export with a corrupted file"
+echo "migration: export with a corrupted file (must fail closed)"
 make_export
 echo "tampered" > "$export_dir/Files/Documents/Taxes 2025/notes.txt"
-out="$(run_migrate)"
-if grep -q "1 file(s) differ" <<<"$out"; then pass "corruption detected"; else flunk "corruption detected"; echo "$out"; fi
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )); then pass "import FAILS on a verification mismatch"; else flunk "import did not fail on mismatch"; fi
+if grep -qiE "verification FAILED|incomplete or altered" <<<"$out"; then pass "reports the verification failure"; else flunk "no clear failure message"; echo "$out"; fi
+if [[ ! -e "$home_dir/Documents/Taxes 2025/notes.txt" ]]; then pass "nothing published on failure (destination untouched)"; else flunk "tampered file was published anyway"; fi
+if ! compgen -G "$home_dir/.kratos-import.*" >/dev/null; then pass "staging area cleaned up"; else flunk "staging left behind"; fi
+
+echo "migration: manifest with a path-traversal entry is rejected"
+make_export
+printf '%s  Files/../../etc/evil\n' "$(printf evil | sha256sum | cut -d' ' -f1)" >> "$export_dir/manifest.sha256"
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )) && grep -qiE "unsafe paths|\.\." <<<"$out"; then pass "rejects a manifest with .. traversal"; else flunk "accepted unsafe manifest"; echo "$out"; fi
 
 exit "$fail"

@@ -20,8 +20,23 @@ EXT, INT = "kx-ext", "kx-int"
 GW, WS = "kx-gw", "kx-ws"
 SPICE_DIR = "/run/kratos/spice"
 
-# Host/guest integration that could carry data across the boundary
-REMOVE_DEVICES = ("redirdev", "filesystem", "smartcard", "hostdev", "shmem")
+# Device elements that can carry data across the host<->guest boundary. ALL of
+# them are stripped and then asserted absent. "channel" covers the QEMU guest
+# agent and SPICE agent (clipboard) alike; "vsock" is a direct host<->guest
+# socket; the rest are passthrough/shared-memory bridges.
+REMOVE_DEVICES = ("redirdev", "filesystem", "smartcard", "hostdev", "shmem",
+                  "channel", "vsock")
+
+# libvirt's <qemu:commandline>/<qemu:override> let a domain pass arbitrary QEMU
+# flags — an escape hatch around every check here. The qemu namespace URI:
+QEMU_NS = "http://libvirt.org/schemas/domain/qemu/1.0"
+
+
+def _strip_qemu_overrides(root):
+    """Remove any <qemu:commandline>/<qemu:override> and reject nothing else."""
+    for child in list(root):
+        if child.tag.startswith("{" + QEMU_NS + "}"):
+            root.remove(child)
 
 
 class Violation(Exception):
@@ -79,12 +94,7 @@ def harden_domain(root, name, disk, ram_mib):
     for tag in REMOVE_DEVICES:
         for el in devices.findall(tag):
             devices.remove(el)
-    for ch in devices.findall("channel"):
-        target = ch.find("target")
-        if ch.get("type") == "spicevmc" or (
-            target is not None and target.get("name", "").startswith("com.redhat.spice")
-        ):
-            devices.remove(ch)
+    _strip_qemu_overrides(root)
 
     graphics = devices.findall("graphics")
     for g in graphics[1:]:
@@ -139,10 +149,11 @@ def check_domain(root):
         raise Violation(f"{name}: networks {nets}, expected {expected}")
     for tag in REMOVE_DEVICES:
         if devices.find(tag) is not None:
-            raise Violation(f"{name}: <{tag}> must not be present")
-    for ch in devices.findall("channel"):
-        if ch.get("type") == "spicevmc":
-            raise Violation(f"{name}: spice agent channel (clipboard) must not be present")
+            raise Violation(f"{name}: <{tag}> must not be present (host<->guest bridge)")
+    # No <qemu:commandline>/<qemu:override> escape hatch at the domain root.
+    for child in root:
+        if child.tag.startswith("{" + QEMU_NS + "}"):
+            raise Violation(f"{name}: <qemu:{child.tag.split('}')[-1]}> (raw QEMU args) must not be present")
     for g in devices.findall("graphics"):
         if g.get("type") != "spice":
             raise Violation(f"{name}: only a SPICE display on a private socket is allowed")
