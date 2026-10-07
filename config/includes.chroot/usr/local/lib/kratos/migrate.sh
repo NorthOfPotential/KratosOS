@@ -102,13 +102,19 @@ migrate_copy_from_disk() {
 migrate_bookmarks() {
     local profile="$1" out="$2" src
     install -d "$out"
+    # Only ever copy ORDINARY regular files (finding 62): a symlink/reparse
+    # point on the untrusted NTFS image could otherwise redirect the copy at an
+    # arbitrary file. `-f && ! -L` rejects symlinks; cp -- guards leading dashes.
+    local bm
     for src in "Google/Chrome" "Microsoft/Edge" "BraveSoftware/Brave-Browser"; do
-        if [[ -f "$profile/AppData/Local/$src/User Data/Default/Bookmarks" ]]; then
-            cp "$profile/AppData/Local/$src/User Data/Default/Bookmarks" "$out/${src//\//-}.json"
+        bm="$profile/AppData/Local/$src/User Data/Default/Bookmarks"
+        if [[ -f "$bm" && ! -L "$bm" ]]; then
+            cp -- "$bm" "$out/${src//\//-}.json"
         fi
     done
     for src in "$profile"/AppData/Roaming/Mozilla/Firefox/Profiles/*/places.sqlite; do
-        [[ -f "$src" ]] && cp "$src" "$out/Firefox-$(basename "$(dirname "$src")")-places.sqlite"
+        [[ -f "$src" && ! -L "$src" ]] || continue
+        cp -- "$src" "$out/Firefox-$(basename "$(dirname "$src")")-places.sqlite"
     done
     rmdir "$out" 2>/dev/null && return 0
     info "Bookmarks saved to '$out'. Import them from Firefox: Bookmarks > Manage > Import."

@@ -66,6 +66,15 @@ jobs:
         run: ./build.sh          # already root in the container; no sudo
       - name: Checksums
         run: sha256sum kratosos-*.iso | tee SHA256SUMS
+      - name: Privileged-binary inventory (SUID/SGID + capabilities)
+        # Finding 46: inventory every setuid/setgid binary and capability holder
+        # in the built image and compare to tests/suid-allowlist.txt. Report-only
+        # for now (the allowlist is a starter baseline); the inventory is always
+        # published so maintainers can tighten the list and later gate on it.
+        continue-on-error: true
+        run: |
+          apt-get install -y --no-install-recommends libcap2-bin >/dev/null 2>&1 || true
+          tests/suid-audit.sh ./chroot | tee kratosos-suid-inventory.txt
       - name: Generate SBOM
         # Software Bill of Materials for the built image. syft reads the live
         # root filesystem live-build leaves in ./chroot (a real dpkg database),
@@ -96,4 +105,5 @@ jobs:
             SHA256SUMS
             kratosos-amd64.packages
             kratosos.spdx.json
+            kratosos-suid-inventory.txt
           retention-days: 14

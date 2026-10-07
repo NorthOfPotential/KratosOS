@@ -98,3 +98,13 @@ Padding can't hide a pattern you keep making:
 - [Website Fingerprinting Attacks and Defenses, survey (arXiv, 2025)](https://arxiv.org/pdf/2510.11804)
 - [Nym / Loopix mixnet mode](https://nym.com/docs/network/mixnet-mode/loopix)
 - [Nym (mixnet) overview](https://en.wikipedia.org/wiki/Nym_(mixnet))
+
+## Nym: the trust boundary is the dedicated UID (honest note)
+
+The Nym fail-closed firewall (`workstation/nym/nym.nft`) permits network egress
+only from the `kratos-nym` user. That means its real security boundary is
+"any process running as `kratos-nym`" — a compromised program under that UID
+could open arbitrary direct connections and bypass the SOCKS/mixnet path. So
+`kratos-nym` is a locked, dedicated service account that runs nothing but the
+Nym client, and the systemd unit should be sandboxed (no new privileges, private
+tmp/dev, minimal filesystem). Don't run anything else under it.

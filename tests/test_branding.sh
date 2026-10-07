@@ -115,18 +115,18 @@ grep -q 'plymouth-set-default-theme kratos' "$hook" \
     && pass "build hook builds + enables the KratosOS Plymouth theme" \
     || flunk "Plymouth theme build missing from hook"
 
-# ── Screen lock: off by default (passwordless live user), on when installed ─
+# ── Screen lock: SECURE default globally, relaxed only in the live session ──
 kscr="$inc/etc/xdg/kscreenlockerrc"
-if grep -q '^Autolock=false' "$kscr" 2>/dev/null; then
-    pass "auto screen-lock is disabled by default (live user has no password)"
+if grep -q '^Autolock=true' "$kscr" 2>/dev/null; then
+    pass "auto screen-lock ON by default (secure; a failed repair fails closed)"
 else
-    flunk "kscreenlockerrc does not disable auto-lock"
+    flunk "kscreenlockerrc default is not the secure Autolock=true"
 fi
-if grep -q 'Autolock true' "$inc/usr/local/bin/kratos-apply-look" \
+if grep -q 'Autolock false' "$inc/usr/local/bin/kratos-apply-look" \
    && grep -q 'boot=live' "$inc/usr/local/bin/kratos-apply-look"; then
-    pass "apply-look restores auto-lock on installed systems only"
+    pass "apply-look relaxes auto-lock only in the live session"
 else
-    flunk "apply-look does not re-enable auto-lock for installed systems"
+    flunk "apply-look does not relax auto-lock for the live session"
 fi
 
 echo

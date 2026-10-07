@@ -1,8 +1,14 @@
-# KratosOS: the amnesic live user has NO password, so an automatic screen lock
-# would lock the user out with no way back in. Auto-lock is therefore OFF by
-# default here. On an INSTALLED system the user sets a password at install, so
-# kratos-apply-look re-enables auto-lock for them on first login.
+# KratosOS screen-lock policy (finding 47).
+#
+# The SECURE default is shipped globally: auto-lock ON. This is the correct
+# setting for an INSTALLED system (the user set a password at install), and it
+# means a failure of the live relaxation below fails CLOSED (locked), not open.
+#
+# The live session is the ONLY place auto-lock must be off, because the amnesic
+# live user has no password and a lock would be an unrecoverable lockout. That
+# relaxation is applied per-session, live-only, by kratos-apply-look — so we
+# never "ship insecure globally and try to repair it after install".
 [Daemon]
-Autolock=false
-LockOnResume=false
+Autolock=true
+LockOnResume=true
 Timeout=5
