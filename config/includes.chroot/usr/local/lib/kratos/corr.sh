@@ -10,6 +10,7 @@
 
 CORR_SHAPE_IF="${CORR_SHAPE_IF:-kratos0}"   # the WireGuard uplink
 CORR_DECOY_PIDFILE="$KRATOS_RUN/decoy.pid"
+CORR_SHAPED_FILE="$KRATOS_RUN/corr.shaped"  # records which iface(s) we shaped
 
 corr_shape_iface() {
     # Shape the physical path the ISP sees. With the VPN up that is the real
@@ -34,6 +35,8 @@ corr_shape_on() {
         rate "$CORR_SHAPE_RATE" burst 32kbit latency 400ms
     tc qdisc replace dev "$dev" parent 1:1 handle 10: netem \
         delay "$CORR_SHAPE_JITTER" "$CORR_SHAPE_JITTER" distribution normal
+    # Record exactly which interface we touched, so shaping off restores only it.
+    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$CORR_SHAPED_FILE"
     ok "shaping $dev at $CORR_SHAPE_RATE, jitter $CORR_SHAPE_JITTER"
 
     if [[ "$CORR_DECOY" == on ]]; then
@@ -44,12 +47,18 @@ corr_shape_on() {
 corr_shape_off() {
     need_cmd tc ip
     corr_decoy_stop
-    local dev; dev="$(corr_shape_iface)"
-    [[ -n "$dev" ]] && tc qdisc del dev "$dev" root 2>/dev/null
-    # Also clear any interface we might have shaped earlier
-    ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | while read -r i; do
-        tc qdisc del dev "$i" root 2>/dev/null || true
-    done
+    local dev
+    # Restore ONLY the interface(s) Kratos actually shaped — never blow away
+    # an administrator's or another app's QoS on unrelated interfaces.
+    if [[ -r "$CORR_SHAPED_FILE" ]]; then
+        while read -r dev; do
+            [[ -n "$dev" ]] && tc qdisc del dev "$dev" root 2>/dev/null || true
+        done < "$CORR_SHAPED_FILE"
+        rm -f "$CORR_SHAPED_FILE"
+    fi
+    # Belt-and-suspenders: also clear the current default-route iface.
+    dev="$(corr_shape_iface)"
+    [[ -n "$dev" ]] && tc qdisc del dev "$dev" root 2>/dev/null || true
     ok "shaping removed"
 }
 
@@ -58,8 +67,15 @@ corr_decoy_start() {
     [[ -n "$CORR_DECOY_SINK" ]] || { warn "CORR_DECOY on but CORR_DECOY_SINK empty; skipping decoy"; return 0; }
     corr_decoy_stop
     # Dummy traffic INSIDE the tunnel to a sink, so the ISP sees a filled,
-    # constant pipe instead of your real bursts.
-    kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
+    # constant pipe instead of your real bursts. It only needs to send UDP, so
+    # run it UNPRIVILEGED (nobody) rather than from the root kratos process.
+    if command -v setpriv >/dev/null 2>&1; then
+        setpriv --reuid 65534 --regid 65534 --clear-groups \
+            kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
+    else
+        warn "setpriv unavailable; running decoy without dropping privileges"
+        kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
+    fi
     echo $! > "$CORR_DECOY_PIDFILE"
     ok "decoy traffic to $CORR_DECOY_SINK started"
 }

@@ -81,6 +81,21 @@ if grep -q 'disable_loop_cover_traffic_stream = false' <<<"$cfg"; then pass "loo
 if grep -q 'disable_main_poisson_packet_distribution = false' <<<"$cfg"; then pass "poisson timing enabled"; else flunk "poisson timing off"; fi
 if grep -q 'disabled = true' <<<"$cfg"; then pass "client logging disabled"; else flunk "logging not disabled"; fi
 
+echo "— provider address is validated (no TOML injection) —"
+rc=0
+python3 - <<PY || rc=$?
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+p=os.path.join("$here","..","workstation","nym","kratos-nym")
+spec=importlib.util.spec_from_loader("kn", SourceFileLoader("kn",p)); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    m.build_config("c", 'evil"\ndisable_loop_cover_traffic_stream = true')
+    sys.exit(0)        # accepted -> bad
+except ValueError:
+    sys.exit(3)        # rejected -> good
+PY
+if [[ $rc -eq 3 ]]; then pass "rejects a provider address with quotes/newlines"; else flunk "accepted an injecting provider address (rc=$rc)"; fi
+
 echo
 if (( fail )); then echo "NYM TESTS FAILED"; else echo "nym tests passed"; fi
 exit "$fail"

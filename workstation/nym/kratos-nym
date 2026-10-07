@@ -19,6 +19,7 @@ profile). See docs/CORRELATION-RESISTANCE.md.
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 
@@ -26,8 +27,21 @@ SOCKS_PORT = 1080
 CONFIG_DIR = os.path.expanduser("~/.nym/socks5-clients")
 
 
+# A Nym provider/mix address is base58 with '.'/'@' separators. Validate against
+# a safe charset so a value can never contain a quote or newline that would break
+# out of the TOML string and inject config.
+_PROVIDER_RE = re.compile(r"^[A-Za-z0-9._@-]{1,512}$")
+
+
+def _validate_provider(provider):
+    if not _PROVIDER_RE.match(provider or ""):
+        raise ValueError(
+            "invalid Nym provider address (allowed: letters, digits and . _ - @)")
+
+
 def build_config(client_id, provider, port=SOCKS_PORT):
     """Return the TOML config body for nym-socks5-client (subset we pin)."""
+    _validate_provider(provider)
     return (
         "[socks5]\n"
         f'listening_port = {port}\n'

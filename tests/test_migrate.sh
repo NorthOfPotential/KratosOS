@@ -25,7 +25,7 @@ make_export() {
 }
 
 run_migrate() {
-    KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" "$kratos" migrate --from "$export_dir" --to "$home_dir" 2>&1
+    KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" "$kratos" migrate --from "$export_dir" --to "$home_dir" 2>&1
 }
 
 echo "migration: clean export"
