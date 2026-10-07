@@ -5,6 +5,7 @@ import importlib.util
 import os
 import re
 import unittest
+from unittest import mock
 from importlib.machinery import SourceFileLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -52,6 +53,55 @@ class DriverCommands(unittest.TestCase):
             self.assertNotIn("--all", c, "provisioning must not use --all")
             self.assertIn("dom0", c, "provisioning must target dom0 explicitly")
             self.assertIn("kratos", c, "provisioning must apply the kratos state")
+
+
+class Executor(unittest.TestCase):
+    """Transactional on / best-effort off / idempotent reconcile (findings 32-34)."""
+
+    def _fake_subprocess(self, fail_argv0=None, fail_contains=None, exists=()):
+        """Return a fake subprocess.run that fails selected commands, plus a log."""
+        log = []
+        class R:
+            def __init__(self, rc): self.returncode = rc; self.stdout = ""; self.stderr = ""
+        def fake_run(argv, *a, **k):
+            # qvm-check drives domain_exists(): succeed for names in `exists`.
+            if argv[:2] == ["qvm-check", "--quiet"]:
+                return R(0 if argv[2] in exists else 1)
+            log.append(argv)
+            bad = (fail_argv0 and argv[0] == fail_argv0) or \
+                  (fail_contains and any(fail_contains in x for x in argv))
+            return R(1 if bad else 0)
+        return fake_run, log
+
+    def _run_quiet(self, fn, *a):
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return fn(*a)
+
+    def test_on_rolls_back_the_disposable_when_a_later_step_fails(self):
+        # qvm-run (the last step) fails -> the created disposable must be removed.
+        fake, log = self._fake_subprocess(fail_argv0="qvm-run")
+        with mock.patch.object(kq.subprocess, "run", fake):
+            rc = self._run_quiet(kq.cmd_on, False)
+        self.assertNotEqual(rc, 0, "a failed start must report failure")
+        self.assertIn(["qvm-remove", "-f", kq.WS_LIVE], log, "disposable not rolled back")
+
+    def test_on_reconciles_a_stale_live_domain(self):
+        # kratos-ws-live already exists -> it is torn down before re-creating.
+        fake, log = self._fake_subprocess(exists=(kq.WS_LIVE,))
+        with mock.patch.object(kq.subprocess, "run", fake):
+            self._run_quiet(kq.cmd_on, False)
+        first_remove = log.index(["qvm-remove", "-f", kq.WS_LIVE])
+        first_create = next(i for i, c in enumerate(log) if kq._is_create(c))
+        self.assertLess(first_remove, first_create, "stale domain not reconciled before re-create")
+
+    def test_off_is_best_effort_past_a_failed_kill(self):
+        # qvm-kill fails; qvm-remove must still be attempted (finding 33).
+        fake, log = self._fake_subprocess(fail_argv0="qvm-kill")
+        with mock.patch.object(kq.subprocess, "run", fake):
+            rc = self._run_quiet(kq.run_all, kq.build_stealth_off(), False)
+        self.assertNotEqual(rc, 0)
+        self.assertIn(["qvm-remove", "-f", kq.WS_LIVE], log, "remove skipped after kill failed")
 
 
 class PolicyAudit(unittest.TestCase):

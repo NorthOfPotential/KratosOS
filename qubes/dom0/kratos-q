@@ -61,6 +61,21 @@ def build_view():
     return [["qvm-run", WS_LIVE, PERSONA_APP]]
 
 
+# The create step in build_stealth_on(): used to know, during a failed start,
+# that a disposable was already created and must be torn down (finding 32).
+def _is_create(argv):
+    return argv[:3] == ["qvm-create", "--class", "DispVM"]
+
+
+def build_cleanup():
+    """Tear down the live disposable, unconditionally. Same effect as 'off';
+    used both for 'off' and to roll back a failed 'on'."""
+    return [
+        ["qvm-kill", WS_LIVE],
+        ["qvm-remove", "-f", WS_LIVE],
+    ]
+
+
 def build_provision():
     # Target dom0 explicitly, not --all: the kratos formula only configures
     # dom0 (it creates the persona qubes FROM dom0 via qvm.* states), so there
@@ -145,20 +160,100 @@ def audit_policy(policy_text):
 # ---- executor ----
 
 def run(cmds, dry=False):
+    """Run commands, STOPPING at the first failure (for on-path steps that must
+    all succeed). Returns the first non-zero exit code, or 0."""
     for argv in cmds:
         print("+ " + " ".join(argv))
         if dry:
             continue
         r = subprocess.run(argv)
         if r.returncode != 0:
-            # off-path commands are best-effort; on-path must succeed
             print(f"  (exit {r.returncode})", file=sys.stderr)
             return r.returncode
     return 0
 
 
+def run_all(cmds, dry=False):
+    """Run EVERY command even if some fail (for genuinely best-effort cleanup,
+    finding 33: a failed qvm-kill must not skip qvm-remove). Returns the worst
+    (last non-zero) exit code seen, or 0."""
+    rc = 0
+    for argv in cmds:
+        print("+ " + " ".join(argv))
+        if dry:
+            continue
+        r = subprocess.run(argv)
+        if r.returncode != 0:
+            print(f"  (exit {r.returncode}; continuing)", file=sys.stderr)
+            rc = r.returncode
+    return rc
+
+
 def have_qubes():
     return subprocess.run(["sh", "-c", "command -v qvm-ls >/dev/null"]).returncode == 0
+
+
+def domain_exists(name):
+    return subprocess.run(["qvm-check", "--quiet", name]).returncode == 0
+
+
+def cmd_on(dry=False):
+    """Transactional, idempotent start (findings 32, 34).
+
+    Reconcile any stale kratos-ws-live first, then bring the persona up; if any
+    step after the disposable is created fails, roll the disposable back so we
+    never leave a half-started persona running."""
+    if not dry and domain_exists(WS_LIVE):
+        print(f"# {WS_LIVE} already exists (stale or running) — reconciling", file=sys.stderr)
+        run_all(build_cleanup(), dry)
+
+    created = False
+    for argv in build_stealth_on():
+        print("+ " + " ".join(argv))
+        if dry:
+            if _is_create(argv):
+                created = True
+            continue
+        rc = subprocess.run(argv).returncode
+        if _is_create(argv) and rc == 0:
+            created = True
+        if rc != 0:
+            print(f"  (exit {rc})", file=sys.stderr)
+            if created:
+                print("# start failed after the disposable was created — rolling it back",
+                      file=sys.stderr)
+                run_all(build_cleanup(), dry)
+            return rc
+    return 0
+
+
+def validate_with_real_parser(path):
+    """Finding 2/15: the authority on whether a qrexec policy is valid is
+    Qubes' OWN parser, not our lint. Use it when it is present (a live dom0):
+    first the Python qrexec.policy.parser module, then the qubes-policy-lint
+    CLI. Returns (ran, problems): ran=False means neither was available here
+    (e.g. this is not a Qubes dom0), so the caller falls back to the lint."""
+    try:
+        from qrexec.policy.parser import FilePolicy  # type: ignore
+        import os as _os
+        try:
+            FilePolicy(policy_path=_os.path.dirname(path) or "/etc/qubes/policy.d")
+            return True, []
+        except Exception as e:  # noqa: BLE001 - surface the parser's own verdict
+            return True, [f"Qubes qrexec parser rejected the policy: {e}"]
+    except ImportError:
+        pass
+    if subprocess.run(["sh", "-c", "command -v qubes-policy-lint >/dev/null"]).returncode == 0:
+        r = subprocess.run(["qubes-policy-lint", path], capture_output=True, text=True)
+        if r.returncode == 0:
+            return True, []
+        return True, [f"qubes-policy-lint: {(r.stderr or r.stdout).strip()}"]
+    return False, []
+
+
+def _prefs(vm, key):
+    return subprocess.run(["qvm-prefs", vm, key],
+                          capture_output=True, text=True).stdout.strip()
 
 
 def cmd_audit():
@@ -169,25 +264,67 @@ def cmd_audit():
     except OSError:
         print(f"audit: policy not installed at {POLICY_PATH}", file=sys.stderr)
         return 1
-    problems = audit_policy(text)
-    if problems:
-        rc = 1
-        for p in problems:
+
+    # Prefer Qubes' real parser; fall back to our lint only when it is absent.
+    ran, problems = validate_with_real_parser(POLICY_PATH)
+    if ran:
+        if problems:
+            rc = 1
+            for p in problems:
+                print(f"  FAIL  {p}")
+        else:
+            print("  OK    policy accepted by Qubes' own qrexec parser")
+        # Still run our lint for the persona-egress semantics the parser doesn't judge.
+        for p in audit_policy(text):
+            rc = 1
             print(f"  FAIL  {p}")
     else:
-        print("  OK    persona egress denied (lint only — see note)")
-    print("  note  this is a KratosOS lint, NOT Qubes' parser; validate with "
-          "'qubes-policy-lint'/live dom0 before relying on it")
-    if have_qubes():
-        net = subprocess.run(["qvm-prefs", WS_TEMPLATE, "netvm"],
-                             capture_output=True, text=True).stdout.strip()
-        if net == GATEWAY:
-            print(f"  OK    {WS_TEMPLATE} routes only through {GATEWAY}")
-        else:
-            print(f"  FAIL  {WS_TEMPLATE} netvm is '{net}', expected {GATEWAY}")
+        problems = audit_policy(text)
+        if problems:
             rc = 1
-    else:
+            for p in problems:
+                print(f"  FAIL  {p}")
+        else:
+            print("  OK    persona egress denied (KratosOS lint only — see note)")
+        print("  note  Qubes' own parser was not found here; this is a KratosOS lint, "
+              "NOT the authority. Run 'kratos-q audit' on a live dom0 (or qubes-policy-lint).")
+
+    if not have_qubes():
         print("  note  not on a Qubes dom0; checked policy file only")
+        return rc
+
+    # Findings 35/36: audit the LIVE disposable (the object that actually runs
+    # the persona), not just the template. Verify it is a DispVM from our
+    # template, pinned to the Tor gateway, and carries the persona tag that the
+    # entire qrexec policy keys off.
+    if domain_exists(WS_LIVE):
+        klass = _prefs(WS_LIVE, "klass") or _prefs(WS_LIVE, "class")
+        tmpl = _prefs(WS_LIVE, "template")
+        net = _prefs(WS_LIVE, "netvm")
+        tags = subprocess.run(["qvm-tags", WS_LIVE], capture_output=True, text=True).stdout.split()
+        checks = [
+            (klass == "DispVM", f"{WS_LIVE} class is '{klass}', expected DispVM"),
+            (tmpl == WS_TEMPLATE, f"{WS_LIVE} template is '{tmpl}', expected {WS_TEMPLATE}"),
+            (net == GATEWAY, f"{WS_LIVE} netvm is '{net}', expected {GATEWAY}"),
+            (PERSONA_TAG in tags, f"{WS_LIVE} is missing the '{PERSONA_TAG}' tag (qrexec policy would not apply)"),
+        ]
+        labels = ["class is DispVM", f"template is {WS_TEMPLATE}",
+                  f"netvm is {GATEWAY}", f"carries the {PERSONA_TAG} tag"]
+        for (ok, msg), label in zip(checks, labels):
+            if ok:
+                print(f"  OK    live persona {label}")
+            else:
+                print(f"  FAIL  {msg}")
+                rc = 1
+    else:
+        print(f"  note  {WS_LIVE} is not running; auditing the template only")
+
+    net = _prefs(WS_TEMPLATE, "netvm")
+    if net == GATEWAY:
+        print(f"  OK    {WS_TEMPLATE} routes only through {GATEWAY}")
+    else:
+        print(f"  FAIL  {WS_TEMPLATE} netvm is '{net}', expected {GATEWAY}")
+        rc = 1
     return rc
 
 
@@ -198,9 +335,10 @@ def main(argv=None):
     if dry and cmd in ("on", "off", "view", "provision"):
         print("kratos-q: not on a Qubes dom0 — showing the commands that would run:\n")
     if cmd == "on":
-        return run(build_stealth_on(), dry)
+        return cmd_on(dry)
     if cmd == "off":
-        return run(build_stealth_off(), dry)
+        # Best-effort: attempt every teardown step even if one fails (finding 33).
+        return run_all(build_stealth_off(), dry)
     if cmd == "view":
         return run(build_view(), dry)
     if cmd == "provision":
