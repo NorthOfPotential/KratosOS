@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Set owner:group and mode 0660 on a UNIX socket, race-free (finding 18).
+
+QEMU (libvirt-qemu) owns the SPICE socket directory, so a compromised QEMU
+could swap the socket pathname for a symlink or another file between a check and
+a chown/chmod done by path. This helper eliminates that race:
+
+  * open the path with O_PATH | O_NOFOLLOW — a symlink at the final component is
+    refused outright (ELOOP), and O_PATH never follows it;
+  * fstat the descriptor and require S_IFSOCK;
+  * chown/chmod the PINNED inode via /proc/self/fd/<fd>, which refers to the
+    exact inode the fd holds — a later pathname swap cannot redirect it.
+
+Usage: fix-socket-perms <socket-path> <owner> <group>
+Owner/group may be names or numeric ids. Exits non-zero (with a message) on any
+problem, so the caller fails closed.
+"""
+import grp
+import os
+import pwd
+import stat
+import sys
+
+
+def _resolve(spec, lookup, attr):
+    if spec.isdigit():
+        return int(spec)
+    return getattr(lookup(spec), attr)
+
+
+def main(argv):
+    if len(argv) != 4:
+        sys.exit("usage: fix-socket-perms <socket-path> <owner> <group>")
+    path, owner, group = argv[1], argv[2], argv[3]
+    uid = _resolve(owner, pwd.getpwnam, "pw_uid")
+    gid = _resolve(group, grp.getgrnam, "gr_gid")
+
+    try:
+        fd = os.open(path, os.O_PATH | os.O_NOFOLLOW)
+    except OSError as e:
+        sys.exit(f"fix-socket-perms: refusing '{path}': {e} (symlink or missing?)")
+    try:
+        st = os.stat(fd)
+        if not stat.S_ISSOCK(st.st_mode):
+            sys.exit(f"fix-socket-perms: '{path}' is not a socket (mode {st.st_mode:#o})")
+        proc = f"/proc/self/fd/{fd}"
+        # Operate on the pinned inode, not a re-resolved pathname.
+        os.chown(proc, uid, gid)
+        os.chmod(proc, 0o660)
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

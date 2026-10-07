@@ -481,20 +481,13 @@ give_display() {
     while [[ ! -S "$sock" ]] && (( t < 10 )); do sleep 1; t=$((t + 1)); done
     [[ -S "$sock" ]] || { warn "display socket for $1 not found"; return 0; }
     # TOCTOU hardening (finding 18): QEMU (libvirt-qemu) owns SPICE_DIR, so a
-    # compromised QEMU could swap this path for a symlink between our check and
-    # our chown/chmod and redirect them at an arbitrary file. Refuse a symlink,
-    # chown WITHOUT dereferencing, and re-verify it is still a real socket (not
-    # a symlink) immediately before chmod.
-    if [[ -L "$sock" ]]; then
-        die "display socket $sock is a symlink — refusing (possible TOCTOU attack)"
-    fi
-    chown -h "root:$STEALTH_USER" "$sock"
-    if [[ ! -S "$sock" || -L "$sock" ]]; then
-        die "display socket $sock changed under us before chmod — refusing (possible TOCTOU attack)"
-    fi
-    # 0660: connecting to a UNIX socket needs write, so the kstealth group gets
-    # read+write. "Other" (your normal desktop user) gets nothing.
-    chmod 0660 "$sock"
+    # compromised QEMU could swap this path between a check and a chown/chmod
+    # done by path. fix-socket-perms opens the inode with O_PATH|O_NOFOLLOW,
+    # verifies it is a socket, and chowns/chmods the PINNED inode via
+    # /proc/self/fd — race-free, immune to a later pathname swap. 0660 so the
+    # kstealth group (the persona seat) can connect and "other" cannot.
+    command python3 "$KRATOS_LIB/fix-socket-perms" "$sock" root "$STEALTH_USER" \
+        || die "could not securely hand over display socket $sock (possible TOCTOU attack)"
 }
 
 stealth_on() {

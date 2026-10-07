@@ -28,7 +28,8 @@ install -d -m 755 /var/lib/kratos
 echo normal > /var/lib/kratos/mode
 chmod 755 /usr/local/bin/kratos /usr/local/bin/kratos-tray /usr/local/bin/kratos-panic
 chmod 644 /usr/local/lib/kratos/*.sh /usr/local/lib/kratos/*.tsv
-chmod 755 /usr/local/lib/kratos/harden-whonix.py /usr/local/lib/kratos/stealth-seat
+chmod 755 /usr/local/lib/kratos/harden-whonix.py /usr/local/lib/kratos/stealth-seat \
+          /usr/local/lib/kratos/fix-socket-perms
 install -d /usr/share/doc/kratos
 
 # ── Lock down everything the privileged tool reads or runs ──────────────────

@@ -29,7 +29,7 @@ if nft -c -f "$tmp/nym.nft"; then echo "ok   workstation/nym/nym.nft"; else echo
 rm -rf "$tmp"
 
 step "python syntax"
-run python3 -m py_compile $inc/usr/local/bin/kratos-tray $inc/usr/local/bin/kratos-decoy $inc/usr/local/lib/kratos/harden-whonix.py $inc/usr/local/lib/kratos/stylo.py tests/forward_test.py tests/firewall_test.py && echo ok
+run python3 -m py_compile $inc/usr/local/bin/kratos-tray $inc/usr/local/bin/kratos-decoy $inc/usr/local/lib/kratos/harden-whonix.py $inc/usr/local/lib/kratos/stylo.py $inc/usr/local/lib/kratos/fix-socket-perms tests/forward_test.py tests/firewall_test.py && echo ok
 run python3 -m json.tool $inc/etc/firefox/policies/policies.json >/dev/null && echo "ok   policies.json"
 run python3 -c "import ast,sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]" qubes/dom0/kratos-q workstation/nym/kratos-nym && echo "ok   kratos-q, kratos-nym"
 

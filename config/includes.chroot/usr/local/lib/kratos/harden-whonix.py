@@ -14,6 +14,7 @@ Stealth Mode refuses to start a Workstation that could reach the internet
 any way other than through the Gateway.
 """
 import argparse
+import os
 import sys
 import xml.etree.ElementTree as ET
 
@@ -41,8 +42,17 @@ SPICE_DIR = "/run/kratos/spice"
 #   tpm         emulated TPM only (backend type=emulator; passthrough rejected)
 ALLOWED_DEVICES = frozenset({
     "emulator", "disk", "controller", "interface", "graphics",
-    "video", "input", "serial", "console", "rng", "memballoon", "tpm",
+    "video", "input", "rng", "memballoon", "tpm",
 })
+# serial/console are intentionally NOT allowed: libvirt lets them be backed by
+# host files, pipes, UNIX/TCP endpoints — i.e. host<->guest channels. The SPICE
+# display is the console; we strip serial/console entirely (finding 1).
+
+# Allowlisted attribute values *inside* allowed elements (finding 1): an allowed
+# element is only safe with allowed subtypes and sources.
+_ALLOWED_DISK_BUS = frozenset({"virtio", "sata", "scsi", "ide"})
+_ALLOWED_INPUT_TYPE = frozenset({"mouse", "keyboard", "tablet"})
+_ALLOWED_RNG_BACKEND_FILES = frozenset({"/dev/urandom", "/dev/random"})
 
 # libvirt's <qemu:commandline>/<qemu:override> let a domain pass arbitrary QEMU
 # flags — an escape hatch around every check here. The qemu namespace URI:
@@ -199,9 +209,51 @@ def check_domain(root):
         if len(listens) != 1 or listens[0].get("type") != "socket" \
                 or listens[0].get("socket") != f"{SPICE_DIR}/{name}.sock":
             raise Violation(f"{name}: display must listen only on {SPICE_DIR}/{name}.sock")
-    for d in devices.findall("disk"):
-        if d.find("shareable") is not None:
-            raise Violation(f"{name}: disks must not be <shareable/> (would bridge compartments)")
+    # Disk: EXACTLY ONE <disk> total (not just device="disk"), so an extra disk
+    # of any other subtype can't slip past — and it must be a file-backed
+    # ordinary disk pointing at a file source, never a host block device/LUN
+    # (finding 1).
+    disks = devices.findall("disk")
+    if len(disks) != 1:
+        raise Violation(f"{name}: exactly one <disk> is allowed, found {len(disks)}")
+    d = disks[0]
+    if d.get("device", "disk") != "disk":
+        raise Violation(f"{name}: the disk must be device='disk', not '{d.get('device')}'")
+    if d.get("type") != "file":
+        raise Violation(f"{name}: the disk must be type='file', not '{d.get('type')}' (no host block device/LUN)")
+    if d.find("shareable") is not None:
+        raise Violation(f"{name}: disks must not be <shareable/> (would bridge compartments)")
+    src = d.find("source")
+    if src is None or not src.get("file") or any(
+            src.get(a) for a in ("dev", "dir", "pool", "volume", "protocol", "name")):
+        raise Violation(f"{name}: the disk source must be a plain file (no dev/dir/pool/network source)")
+    tgt = d.find("target")
+    if tgt is None or tgt.get("bus") not in _ALLOWED_DISK_BUS:
+        raise Violation(f"{name}: disk bus must be one of {sorted(_ALLOWED_DISK_BUS)}")
+
+    # Input: only guest-local pointer/keyboard, never a host input device
+    # (type='evdev'/'passthrough' with a host <source>).
+    for inp in devices.findall("input"):
+        if inp.get("type") not in _ALLOWED_INPUT_TYPE:
+            raise Violation(f"{name}: <input type='{inp.get('type')}'> is not allowed (host input passthrough?)")
+        if inp.find("source") is not None:
+            raise Violation(f"{name}: <input> must not have a host <source>")
+
+    # RNG: entropy from the host kernel CSPRNG only — never an EGD/TCP backend
+    # (a host/network side channel).
+    for rng in devices.findall("rng"):
+        backend = rng.find("backend")
+        if backend is None or backend.get("model", "random") != "random":
+            raise Violation(f"{name}: <rng> backend model must be 'random' (no egd/host source)")
+        if (backend.text or "").strip() not in _ALLOWED_RNG_BACKEND_FILES:
+            raise Violation(f"{name}: <rng> backend must be /dev/urandom or /dev/random")
+
+    # Emulator: must be a QEMU system binary under /usr, not a planted path.
+    emu = devices.findtext("emulator")
+    if emu is not None:
+        if not (emu.startswith("/usr/") and "qemu" in os.path.basename(emu)):
+            raise Violation(f"{name}: unexpected <emulator> path '{emu}'")
+
     # sVirt confinement must be present and relabeling, or the VMs share the
     # host's security context and a breakout is unconstrained.
     seclabel = root.find("seclabel")
