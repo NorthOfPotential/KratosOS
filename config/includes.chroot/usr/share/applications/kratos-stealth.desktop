@@ -2,6 +2,6 @@
 Type=Application
 Name=Stealth Desktop
 Comment=Open the isolated Stealth Mode workstation
-Exec=/usr/local/bin/kratos stealth view
+Exec=pkexec /usr/local/libexec/kratos/kratos-stealth view
 Icon=security-high
 Categories=System;Security;

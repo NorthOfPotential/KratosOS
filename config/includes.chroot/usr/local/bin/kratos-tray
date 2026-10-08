@@ -12,6 +12,11 @@ from PyQt6.QtWidgets import (
 )
 
 KRATOS = "/usr/local/bin/kratos"
+# Per-surface privileged helpers (each a separate polkit action, so a cached
+# auth for one surface never covers another — findings R6-12/R6-25).
+HELPER_DIR = "/usr/local/libexec/kratos"
+H_NET = f"{HELPER_DIR}/kratos-net"
+H_STEALTH = f"{HELPER_DIR}/kratos-stealth"
 STEALTH_FLAG = "/run/kratos/stealth.active"
 MODE_FILE = "/var/lib/kratos/mode"
 CONF_FILE = "/etc/kratos/kratos.conf"
@@ -55,7 +60,7 @@ def current_mode():
 class LogDialog(QDialog):
     """Runs a privileged kratos command and streams its output."""
 
-    def __init__(self, title, args, stdin_data=None, on_success=None):
+    def __init__(self, title, program, args, stdin_data=None, on_success=None):
         super().__init__()
         self.setWindowTitle(title)
         self.resize(640, 420)
@@ -75,7 +80,7 @@ class LogDialog(QDialog):
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self._read)
         self.proc.finished.connect(self._done)
-        self.proc.start("pkexec", [KRATOS, *args])
+        self.proc.start("pkexec", [program, *args])
         if stdin_data is not None:
             self.proc.write(stdin_data.encode() + b"\n")
         self.proc.closeWriteChannel()
@@ -118,7 +123,7 @@ class Tray(QSystemTrayIcon):
         self.stealth.triggered.connect(self.toggle_stealth)
         self.menu.addAction(self.stealth)
         self.view = QAction("Open stealth desktop")
-        self.view.triggered.connect(lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"]))
+        self.view.triggered.connect(lambda: subprocess.Popen(["pkexec", H_STEALTH, "view"]))
         self.menu.addAction(self.view)
         self.menu.addSeparator()
 
@@ -164,8 +169,8 @@ class Tray(QSystemTrayIcon):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.contextMenu().popup(self.geometry().center())
 
-    def _run(self, title, args, stdin_data=None, on_success=None):
-        self.dialog = LogDialog(title, args, stdin_data, on_success)
+    def _run(self, title, program, args, stdin_data=None, on_success=None):
+        self.dialog = LogDialog(title, program, args, stdin_data, on_success)
         self.dialog.finished.connect(self.refresh)
         self.dialog.show()
 
@@ -179,27 +184,27 @@ class Tray(QSystemTrayIcon):
                 "Save your work inside the Workstation before continuing.",
             )
             if ok == QMessageBox.StandardButton.Yes:
-                self._run("Stealth Mode: OFF", ["stealth", "off"])
+                self._run("Stealth Mode: OFF", H_STEALTH, ["off"])
             return
         self.stealth.setChecked(False)
-        view = lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"])
+        view = lambda: subprocess.Popen(["pkexec", H_STEALTH, "view"])
         if not vault_persists():
             # Amnesic vault (default): the key lives only in RAM and is thrown
             # away on lock. Prompting for a passphrase here would defeat that
             # design (finding R4-6), so just toggle it on — no passphrase.
-            self._run("Stealth Mode: ON", ["stealth", "on"], on_success=view)
+            self._run("Stealth Mode: ON", H_STEALTH, ["on"], on_success=view)
             return
         pw, ok = QInputDialog.getText(
             None, "Stealth Mode", "Stealth vault passphrase:", QLineEdit.EchoMode.Password)
         if not ok or not pw:
             return
-        self._run("Stealth Mode: ON", ["stealth", "on", "--passphrase-stdin"], pw,
+        self._run("Stealth Mode: ON", H_STEALTH, ["on", "--passphrase-stdin"], pw,
                   on_success=view)
         del pw
 
     def set_mode(self, mode):
         if mode != current_mode():
-            self._run(f"Network: {mode}", ["mode", mode])
+            self._run(f"Network: {mode}", H_NET, [mode])
 
     def show_status(self):
         out = subprocess.run([KRATOS, "status"], capture_output=True, text=True,

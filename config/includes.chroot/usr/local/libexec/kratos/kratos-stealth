@@ -1,0 +1,6 @@
+#!/bin/sh
+# KratosOS privileged helper: fixes the subcommand to 'stealth' so polkit can give
+# this surface its OWN action (see org.kratos.policy) instead of one cached
+# authorization covering the whole kratos tool (findings R6-12/R6-25). A caller
+# can pass arguments to 'stealth' but can NOT select a different subcommand.
+exec /usr/local/bin/kratos stealth "$@"
