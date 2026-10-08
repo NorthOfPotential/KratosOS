@@ -133,3 +133,41 @@ trade is worth it. If it is "don't be noticed using Tor at all," set
 `CORR_STEALTH_PROFILE=off` (and use bridges). Neither setting defeats a true
 global passive adversary on low-latency Tor — **only `max` (the mixnet) does**,
 and it costs seconds of latency. Tune the rate with `CORR_SHAPE_RATE`.
+
+## How we compare to Vanguards and MUFFLER
+
+Two defenses people ask about, and where KratosOS stands:
+
+**Tor Vanguards (guard-discovery defense).** `vanguards-lite` — layer-2 guard
+pinning, built into Tor 0.4.7+ — is **already active by default inside the
+persona Whonix Gateway**, so our circuits already resist guard-discovery
+attacks. This is a *different* threat from the volume/timing correlation the
+Stealth padding profile addresses; the two are complementary. The **full
+`vanguards` add-on** (adds layer-3 guards + rendguard/bandguards monitors) is
+stronger but mainly benefits onion-*service* operators, and its extra hop costs
+latency — so it is **opt-in, not default**, for a low-latency browsing persona.
+To enable it, run the shipped helper **inside the Gateway** (there is no
+host→guest channel by design):
+
+```
+# in the kx-gw Gateway, as root:
+sudo /usr/share/kratos/gateway/kratos-gw-harden
+```
+
+It enables the full add-on and turns on maximum Tor connection padding
+(`ConnectionPadding 1`, `ReducedConnectionPadding 0`).
+
+**MUFFLER (2025).** MUFFLER obfuscates flow correlation at Tor's **final egress
+hop** by shuffling/splitting N real connections onto M virtual connections
+between the exit relay and the destination. It must be deployed at the **exit
+side** — a client (all KratosOS controls) cannot deploy it unilaterally, so
+there is nothing to "implement" here. Its goal — defeating end-to-end flow
+correlation — is precisely what a **mixnet** provides end-to-end, which is our
+`CORR_STEALTH_PROFILE=max` (Nym) path. For a client, the mixnet is the
+deployable route to that property; MUFFLER is not deployable at all.
+
+**So:** we already have the vanguards baseline (lite), offer the full add-on as
+an opt-in, and for the flow-correlation property MUFFLER targets we rely on the
+Nym mixnet rather than an exit-side scheme a client can't run. None of this
+changes the honest top-line: only the mixnet gives a real story against a
+global passive adversary on anything resembling low latency.

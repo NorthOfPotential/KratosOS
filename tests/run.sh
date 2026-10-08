@@ -14,6 +14,7 @@ run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
     $inc/usr/local/bin/kratos-runscript $inc/usr/local/bin/kratos-sec \
     $inc/usr/local/lib/kratos/sectools-gen $inc/usr/local/lib/kratos/sec-shell \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
+    workstation/gateway/kratos-gw-harden \
     build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
 step "nftables syntax"

@@ -21,6 +21,19 @@ chk "$nm" '^ipv4\.dhcp-fqdn=$'                   "no DHCP FQDN sent"
 chk "$nm" '^connection\.mdns=0'                  "mDNS off"
 chk "$nm" '^connection\.llmnr=0'                 "LLMNR off"
 
+echo "— optional Gateway hardening helper (vanguards + padding) —"
+gwh="$here/../workstation/gateway/kratos-gw-harden"
+if [[ -f "$gwh" ]]; then
+    if grep -qE '^ConnectionPadding 1' "$gwh" && grep -qE '^ReducedConnectionPadding 0' "$gwh" \
+       && grep -q 'vanguards' "$gwh" && bash -n "$gwh"; then
+        pass "gw-harden enables full padding + the vanguards add-on and parses"
+    else
+        flunk "gw-harden missing padding/vanguards directives or has a syntax error"
+    fi
+else
+    flunk "Gateway hardening helper not shipped"
+fi
+
 echo "— networking is a hard dependent of the firewall (finding 6) —"
 nmdrop="$root/etc/systemd/system/NetworkManager.service.d/10-kratos-firewall.conf"
 fw="$root/etc/systemd/system/kratos-firewall.service"
