@@ -87,7 +87,7 @@ run tests/bootcheck_test.sh
 
 step "traffic shaping (network namespace)"
 if [[ $EUID -eq 0 ]]; then
-    run unshare -rn bash tests/corr_test.sh
+    run unshare -n bash tests/corr_test.sh
 else
     echo "skipped (needs root)"
 fi
