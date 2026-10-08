@@ -112,7 +112,9 @@ corr_stealth_apply() {
     # HONEST naming (finding R4-3): TBF is a rate LIMITER, not a traffic
     # generator. Without a running cover stream this hides bursts and adds
     # jitter but does NOT hide idle-vs-active — it is not "constant-rate".
-    if [[ -n "${CORR_DECOY_SINK:-}" ]] && [[ "$(saved_mode)" == vpn ]]; then
+    # The decoy only runs when the user actually asked for it (CORR_DECOY=on,
+    # finding R5-5), with a sink, in vpn mode.
+    if [[ "${CORR_DECOY:-off}" == on ]] && [[ -n "${CORR_DECOY_SINK:-}" ]] && [[ "$(saved_mode)" == vpn ]]; then
         corr_decoy_start   # a real cover stream through the tunnel => constant-rate
         ok "uplink rate-limited + jitter + decoy cover stream (constant-rate via the tunnel)"
     else
@@ -165,6 +167,9 @@ _corr_sink_via_tunnel() {
 
 corr_decoy_start() {
     load_config
+    # Defense-in-depth (finding R5-5): the decoy is fingerprint-producing cover
+    # traffic, so it runs ONLY when explicitly enabled, no matter who called us.
+    [[ "${CORR_DECOY:-off}" == on ]] || { warn "CORR_DECOY is off; not starting cover traffic"; return 0; }
     [[ -n "$CORR_DECOY_SINK" ]] || { warn "CORR_DECOY on but CORR_DECOY_SINK empty; skipping decoy"; return 0; }
     # NEVER send Stealth-correlated cover traffic down the clear host path
     # (finding R4-4): require VPN mode AND confirm the sink routes through the

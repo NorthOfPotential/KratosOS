@@ -23,7 +23,12 @@ stick in **live mode** before you install over anything. Tick each item.
       On the first toggle KratosOS automatically downloads the Whonix KVM image,
       verifies it against the pinned Whonix signing key, and builds an amnesic
       vault (a random key kept only in RAM) — no manual download or passphrase.
-      The first toggle takes a few minutes; later toggles are instant.
+      - In the default **amnesic** mode the in-RAM key is destroyed when Stealth
+        turns off, so each OFF→ON cycle rebuilds the vault from the locally
+        cached, signature-verified image — no re-download, but not instant
+        either (it takes the time to rebuild the vault and start the VMs). The
+        very first toggle also downloads Whonix. For a vault that persists
+        between toggles and boots, set `STEALTH_VAULT_PERSIST=yes` (below).
       - The download runs over your current network mode. For `you → VPN → Tor`,
         switch to `vpn` first so your ISP sees only the VPN during the fetch.
       - The verified image is cached so later boots don't re-download it. The
@@ -35,8 +40,13 @@ stick in **live mode** before you install over anything. Tick each item.
         nothing. On the live ISO the cache is on the ephemeral overlay anyway.
       - Want a persistent persona (keeps accounts/files across reboots)? Set
         `STEALTH_VAULT_PERSIST=yes` in `/etc/kratos/kratos.conf` and you'll be
-        asked for a passphrase once. Offline install, or prefer to supply the
-        image yourself? `sudo kratos stealth setup ~/Downloads/Whonix-*.libvirt.xz`
+        asked for a passphrase once. Note that `STEALTH_WORKSTATION=persistent`
+        only preserves the Workstation across toggles when the VAULT itself
+        persists — under the default amnesic vault the whole vault (Workstation
+        included) is rebuilt each cycle, so set `STEALTH_VAULT_PERSIST=yes` too
+        if you actually want the persona to remember anything. Offline install,
+        or prefer to supply the image yourself?
+        `sudo kratos stealth setup ~/Downloads/Whonix-*.libvirt.xz`
         still works (set `STEALTH_AUTOPROVISION=no` to require it).
 - [ ] The host locks down, the vault unlocks, Gateway then Workstation start,
       and the correlation profile (`CORR_STEALTH_PROFILE`, default `off`) is
