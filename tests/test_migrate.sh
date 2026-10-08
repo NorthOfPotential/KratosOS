@@ -61,6 +61,29 @@ printf '%s  Files/../../etc/evil\n' "$(printf evil | sha256sum | cut -d' ' -f1)"
 if out="$(run_migrate)"; then rc=0; else rc=1; fi
 if (( rc != 0 )) && grep -qiE "unsafe paths|\.\." <<<"$out"; then pass "rejects a manifest with .. traversal"; else flunk "accepted unsafe manifest"; echo "$out"; fi
 
+echo "migration: a symlinked source folder is refused (no root disclosure, R6-H1)"
+rm -rf "${export_dir:?}" "${home_dir:?}"
+mkdir -p "$tmp/secret" "$export_dir" "$home_dir"
+echo topsecret > "$tmp/secret/secret.txt"
+ln -s "$tmp/secret" "$export_dir/Files"                       # Files/ points at a secret dir
+printf '%s  Files/secret.txt\n' "$(printf topsecret | sha256sum | cut -d' ' -f1)" > "$export_dir/manifest.sha256"
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )) && grep -qiE "symlink|escapes" <<<"$out" && [[ ! -e "$home_dir/secret.txt" ]]; then
+    pass "a symlinked Files/ is refused and nothing is disclosed"
+else
+    flunk "symlinked source not refused (rc=$rc, leaked=$( [[ -e "$home_dir/secret.txt" ]] && echo yes || echo no ))"; echo "$out"
+fi
+
+echo "migration: an extra file not in the manifest is rejected (R6-16)"
+make_export
+echo "unlisted" > "$export_dir/Files/Documents/evil.desktop"   # present but NOT in the manifest
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )) && grep -qiE "not listed in the manifest|unlisted extras" <<<"$out" && [[ ! -e "$home_dir/Documents/evil.desktop" ]]; then
+    pass "an unmanifested extra file is refused (set equality enforced)"
+else
+    flunk "unmanifested extra was accepted (rc=$rc)"; echo "$out"
+fi
+
 echo "migration: elevated --to outside the invoker's home is refused"
 mhome="$(getent passwd mallory 2>/dev/null | cut -d: -f6)"
 if [[ $EUID -eq 0 && -n "$mhome" ]]; then
