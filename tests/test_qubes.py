@@ -139,7 +139,7 @@ class EffectivePolicy(unittest.TestCase):
             with open(os.path.join(run, "10-runtime.policy"), "w") as f:
                 f.write("qubes.Filecopy * @tag:kratos-persona @anyvm allow\n")
             try:
-                kq.POLICY_DIRS = (etc, run)
+                kq.POLICY_DIRS = (run, etc)   # qrexec order: /run then /etc
                 text = kq.effective_policy_text(os.path.join(etc, "30-kratos.policy"))
             finally:
                 kq.POLICY_DIRS = saved
@@ -147,25 +147,31 @@ class EffectivePolicy(unittest.TestCase):
             self.assertTrue(any("Filecopy" in p for p in kq.audit_policy(text)),
                             "a /run allow that shadows our deny was not caught")
 
-    def test_etc_wins_on_filename_collision(self):
-        """When the same filename exists in both dirs, qrexec uses the /etc copy;
-        the audit must mirror that so it lints what is actually enforced."""
+    def test_run_wins_on_filename_collision(self):
+        """When the same filename exists in both dirs, qrexec enforces the /run
+        copy (it searches /run before /etc, first-occurrence wins). The audit
+        must mirror that, or it would lint the safe /etc file while qrexec runs
+        the hostile /run one (finding R5-2)."""
         import tempfile, os
         saved = kq.POLICY_DIRS
         with tempfile.TemporaryDirectory() as etc, tempfile.TemporaryDirectory() as run:
-            # Same basename in both: /etc is the real deny, /run is a decoy allow.
+            # Same basename in both: /etc is a safe deny, /run is a hostile allow.
             with open(os.path.join(etc, "30-kratos.policy"), "w") as f:
                 f.write(POLICY)
             with open(os.path.join(run, "30-kratos.policy"), "w") as f:
                 f.write("qubes.Filecopy * @tag:kratos-persona @anyvm allow\n")
             try:
-                kq.POLICY_DIRS = (etc, run)
+                kq.POLICY_DIRS = (run, etc)   # qrexec order: /run then /etc
                 files = kq.effective_policy_files(os.path.join(etc, "30-kratos.policy"))
+                text = kq.effective_policy_text(os.path.join(etc, "30-kratos.policy"))
             finally:
                 kq.POLICY_DIRS = saved
             chosen = [f for f in files if f.endswith("30-kratos.policy")]
-            self.assertEqual(chosen, [os.path.join(etc, "30-kratos.policy")],
-                             "the /etc copy must win a filename collision")
+            self.assertEqual(chosen, [os.path.join(run, "30-kratos.policy")],
+                             "the /run copy must win a filename collision")
+            # And the audit must therefore SEE the hostile /run allow.
+            self.assertTrue(any("Filecopy" in p for p in kq.audit_policy(text)),
+                            "the enforced /run allow was not audited")
 
 
 class PolicyAudit(unittest.TestCase):

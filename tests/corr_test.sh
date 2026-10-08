@@ -61,7 +61,29 @@ if CORR_SHAPE_RATE=1mbit CORR_STEALTH_PROFILE=max corr_stealth_apply 2>"$rundir/
 if tc qdisc show dev lo | grep -q tbf; then pass "profile=max is never weaker than balanced (shapes the uplink)"; else flunk "profile=max applied no protection"; fi
 if grep -qi "nym mixnet is NOT active" "$rundir/max.err"; then pass "profile=max warns that the mixnet is not active"; else flunk "profile=max did not warn about the inactive mixnet"; fi
 corr_stealth_clear >/dev/null 2>&1
-tc qdisc del dev lo root 2>/dev/null; rm -rf "$rundir"
+
+# finding R5-3: an administrator's existing qdisc must survive a Stealth
+# apply+clear cycle — apply refuses to overwrite it, and clear must NOT delete
+# the qdisc Kratos never recorded installing.
+tc qdisc del dev lo root 2>/dev/null
+if tc qdisc replace dev lo root handle 1: htb default 10 2>/dev/null; then
+    CORR_SHAPE_RATE=1mbit CORR_STEALTH_PROFILE=balanced corr_stealth_apply >/dev/null 2>&1 || true
+    if tc qdisc show dev lo | grep -q htb; then pass "apply refuses to overwrite an existing custom qdisc"; else flunk "apply clobbered the admin qdisc"; fi
+    corr_stealth_clear >/dev/null 2>&1
+    if tc qdisc show dev lo | grep -q htb; then pass "clear leaves the admin qdisc intact (no untracked fallback)"; else flunk "clear deleted the admin qdisc Kratos never installed"; fi
+    tc qdisc del dev lo root 2>/dev/null
+else
+    echo "  SKIP  sch_htb not available to test QoS preservation"
+fi
+tc qdisc del dev lo root 2>/dev/null
+
+# finding R5-5: CORR_DECOY=off must stop the automatic profile from starting
+# cover traffic, even when a sink is configured and the mode is vpn.
+saved_mode() { echo vpn; }
+rm -f "$CORR_DECOY_PIDFILE" 2>/dev/null
+CORR_DECOY=off CORR_DECOY_SINK="10.0.0.1:9" corr_decoy_start >/dev/null 2>&1 || true
+if [[ ! -e "$CORR_DECOY_PIDFILE" ]]; then pass "CORR_DECOY=off does not start cover traffic"; else flunk "decoy started despite CORR_DECOY=off"; fi
+rm -rf "$rundir"
 
 echo
 if (( fail )); then echo "SHAPING TESTS FAILED"; else echo "shaping tests passed"; fi

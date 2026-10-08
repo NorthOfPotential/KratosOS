@@ -172,26 +172,27 @@ migrate_copy_from_export() {
     fi
 }
 
-# Publish the root-owned staging tree into $dest. When elevated by a desktop
-# user, do it AS THAT USER (runuser): a symlink they planted in $HOME then
-# cannot turn a root write into an arbitrary-path root write, and files land
-# owned by the user with no post-hoc chown (findings R4-1, 8).
+# Publish the (already user-owned) staging tree into $dest. When elevated by a
+# desktop user, EVERY operation that touches the user-controlled $dest runs AS
+# THAT USER (runuser) — the directory creation AND the rsync. Root never does a
+# pathname-based write, chown or mkdir on $dest, so a destination that a
+# concurrent desktop-user process swaps for a symlink (TOCTOU) can only ever
+# redirect a write to somewhere the user could already write anyway. There is
+# no root-write primitive to escalate (findings R4-1/R4-8, R5-1).
+#
+# The staging tree is root-created outside the user's reach (see migrate_windows)
+# and handed to the user by a single chown there, so it needs none here.
 _migrate_publish() {
     local stage="$1" dest="$2" owner="$3"
-    install -d -- "$dest"
     info "Publishing verified files to $dest ..."
     if [[ $EUID -eq 0 && -n "$owner" && "$owner" != root ]] && command -v runuser >/dev/null 2>&1; then
-        # Make the target DIRECTORY (not its contents) owned by the user so the
-        # publish can run as them; pre-existing files inside $dest keep their
-        # owner (no blanket chown). Then hand over the staging tree and rsync it
-        # in AS THE USER — a symlink the user planted can only ever write where
-        # the user already can, so there is no root-write primitive.
-        chown "$owner": "$dest" 2>/dev/null || true
-        chown -R "$owner": "$stage" 2>/dev/null || true
+        runuser -u "$owner" -- mkdir -p -- "$dest" \
+            || die "cannot create $dest as $owner"
         runuser -u "$owner" -- rsync -rt --no-perms \
             --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "$stage"/ "$dest"/ \
             || die "publish failed (as $owner) — nothing left half-written"
     else
+        install -d -- "$dest"
         cp -a "$stage/." "$dest/"
     fi
 }
@@ -259,23 +260,28 @@ migrate_windows() {
     [[ -n "$owner_home" ]] || owner_home="${HOME:-/root}"
     dest="${dest:-$owner_home}"
     dest="$(realpath -m -- "$dest")"
-    # When a desktop user elevated this (auth_admin_keep caches that auth),
-    # confine the destination to THEIR home so it can't be pointed at /etc etc.
+    # Early sanity guard (NOT the security boundary): reject a destination that
+    # obviously isn't the invoker's home. The real safety is that every write to
+    # $dest happens as the user in _migrate_publish, so this check only needs to
+    # catch mistakes, not races.
     if [[ $EUID -eq 0 && -n "$invoker" && "$invoker" != root ]]; then
         case "$dest" in
             "$owner_home"|"$owner_home"/*) : ;;   # the home itself, or inside it
             *) die "refusing elevated migration to '$dest': the destination must be inside $owner_home" ;;
         esac
     fi
-    install -d -- "$dest"
 
-    # Root-owned staging with a random name INSIDE $dest. $dest is realpath'd and
-    # confined to the invoker's home above, so a symlinked $dest is already
-    # rejected; the random 700 dir can't be pre-planted (mktemp fails if it
-    # exists). The user can traverse their own home to read it once we hand it
-    # over, so the publish can run as the user (see _migrate_publish).
-    local stage
-    stage="$(mktemp -d "$dest/.kratos-import.XXXXXX")" || die "cannot create a staging area in $dest"
+    # Stage in a ROOT-OWNED area OUTSIDE the user's reach (never inside $dest,
+    # which the user can swap for a symlink). KRATOS_STATE lives on the host's
+    # own (LUKS-encrypted, on an installed system) root filesystem, so staging
+    # has real disk space and no desktop-user process can pre-plant or redirect
+    # it. The random 700 dir can't be pre-created (mktemp fails if it exists).
+    local stage stageroot="$KRATOS_STATE/migrate"
+    install -d -- "$KRATOS_STATE"
+    # 711: the user must be able to TRAVERSE to their own (random-named, 700,
+    # user-owned) staging leaf once we hand it over, but not enumerate the dir.
+    install -d -m 711 -- "$stageroot"
+    stage="$(mktemp -d "$stageroot/import.XXXXXX")" || die "cannot create a staging area in $stageroot"
     chmod 700 "$stage"
 
     if [[ -b "$from" ]]; then
@@ -299,11 +305,18 @@ migrate_windows() {
         die "--from must be an export folder or a partition like /dev/sdb3"
     fi
 
+    # Hand the root-owned staging tree to the user with ONE chown, up here where
+    # the tree is still in our root-controlled staging root (no user symlinks:
+    # rsync copied no symlinks into it). Everything after this runs unprivileged.
+    if [[ $EUID -eq 0 && -n "$owner" && "$owner" != root ]]; then
+        chown -R "$owner": "$stage" 2>/dev/null || true
+    fi
+
     # Strip metadata on the STAGING tree, as the destination user (mat2 parses
     # hostile formats — never as root), before anything is published.
     [[ "$scrub" == yes ]] && migrate_scrub "$stage" "$owner"
 
-    # Publish into the user's home AS THE USER.
+    # Publish into the user's home AS THE USER (all $dest writes unprivileged).
     _migrate_publish "$stage" "$dest" "$owner"
     rm -rf "$stage"
     trap - EXIT

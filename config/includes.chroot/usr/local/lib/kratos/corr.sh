@@ -33,11 +33,16 @@ _corr_shape_dev() {   # <dev> <rate> <jitter> <record-file>
         warn "refusing to shape $dev: it already has a custom qdisc; not overwriting QoS ($cur)"
         return 1
     fi
+    # Record our INTENT to shape $dev BEFORE touching it, so teardown has
+    # positive evidence Kratos modified this interface even if we die midway.
+    # Cleanup deletes a qdisc ONLY when it is in a record file — never on a
+    # guess — so an administrator's QoS we refused to overwrite is never removed
+    # by us (finding R5-3).
+    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$record"
     # Root: token-bucket filter caps the sustained rate (smooths bursts).
     # Child: netem adds random jitter (breaks fine-grained timing correlation).
     tc qdisc replace dev "$dev" root handle 1: tbf rate "$rate" burst 32kbit latency 400ms
     tc qdisc replace dev "$dev" parent 1:1 handle 10: netem delay "$jitter" "$jitter" distribution normal
-    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$record"
 }
 
 corr_shape_on() {
@@ -107,7 +112,9 @@ corr_stealth_apply() {
     # HONEST naming (finding R4-3): TBF is a rate LIMITER, not a traffic
     # generator. Without a running cover stream this hides bursts and adds
     # jitter but does NOT hide idle-vs-active — it is not "constant-rate".
-    if [[ -n "${CORR_DECOY_SINK:-}" ]] && [[ "$(saved_mode)" == vpn ]]; then
+    # The decoy only runs when the user actually asked for it (CORR_DECOY=on,
+    # finding R5-5), with a sink, in vpn mode.
+    if [[ "${CORR_DECOY:-off}" == on ]] && [[ -n "${CORR_DECOY_SINK:-}" ]] && [[ "$(saved_mode)" == vpn ]]; then
         corr_decoy_start   # a real cover stream through the tunnel => constant-rate
         ok "uplink rate-limited + jitter + decoy cover stream (constant-rate via the tunnel)"
     else
@@ -128,14 +135,10 @@ corr_stealth_clear() {
         done < "$CORR_STEALTH_SHAPED_FILE"
         rm -f "$CORR_STEALTH_SHAPED_FILE"
     fi
-    # Belt-and-suspenders: if padding was applied but never recorded (e.g. the
-    # record write failed), the profile only ever shapes the default-route iface,
-    # so clear that too — UNLESS the user shaped it themselves via
-    # `corr shape on` (recorded separately), which we must not tear down.
-    dev="$(corr_shape_iface)"
-    if [[ -n "$dev" ]] && ! { [[ -r "$CORR_SHAPED_FILE" ]] && grep -qxF "$dev" "$CORR_SHAPED_FILE"; }; then
-        tc qdisc del dev "$dev" root 2>/dev/null || true
-    fi
+    # No untracked fallback: we delete a qdisc only when the record says Kratos
+    # installed it. The intent is recorded before the qdisc is applied
+    # (_corr_shape_dev), so there is no "applied but unrecorded" window to cover,
+    # and guessing would risk deleting an administrator's QoS (finding R5-3).
 }
 
 corr_shape_off() {
@@ -150,9 +153,8 @@ corr_shape_off() {
         done < "$CORR_SHAPED_FILE"
         rm -f "$CORR_SHAPED_FILE"
     fi
-    # Belt-and-suspenders: also clear the current default-route iface.
-    dev="$(corr_shape_iface)"
-    if [[ -n "$dev" ]]; then tc qdisc del dev "$dev" root 2>/dev/null || true; fi
+    # No untracked fallback (finding R5-3): only interfaces Kratos recorded are
+    # restored, so we never delete an administrator's or another app's QoS.
     ok "shaping removed"
 }
 
@@ -165,6 +167,9 @@ _corr_sink_via_tunnel() {
 
 corr_decoy_start() {
     load_config
+    # Defense-in-depth (finding R5-5): the decoy is fingerprint-producing cover
+    # traffic, so it runs ONLY when explicitly enabled, no matter who called us.
+    [[ "${CORR_DECOY:-off}" == on ]] || { warn "CORR_DECOY is off; not starting cover traffic"; return 0; }
     [[ -n "$CORR_DECOY_SINK" ]] || { warn "CORR_DECOY on but CORR_DECOY_SINK empty; skipping decoy"; return 0; }
     # NEVER send Stealth-correlated cover traffic down the clear host path
     # (finding R4-4): require VPN mode AND confirm the sink routes through the

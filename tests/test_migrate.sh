@@ -5,6 +5,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 lib="$here/../config/includes.chroot/usr/local/lib/kratos"
 kratos="$here/../config/includes.chroot/usr/local/bin/kratos"
 tmp="$(mktemp -d)"
+chmod 755 "$tmp"   # so an unprivileged target user can traverse to the staging leaf
 trap 'rm -rf "$tmp"' EXIT
 export_dir="$tmp/export"
 home_dir="$tmp/home"
@@ -28,7 +29,8 @@ run_migrate() {
     # Unset SUDO_USER/PKEXEC_UID so this is treated as a direct-root run (the
     # test's --to lives in /tmp, outside any desktop user's home); the home
     # confinement is exercised separately below.
-    env -u SUDO_USER -u PKEXEC_UID KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" \
+    env -u SUDO_USER -u PKEXEC_UID KRATOS_TEST=1 KRATOS_LIB="$lib" \
+        KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run" \
         "$kratos" migrate --from "$export_dir" --to "$home_dir" 2>&1
 }
 
@@ -51,7 +53,7 @@ if out="$(run_migrate)"; then rc=0; else rc=1; fi
 if (( rc != 0 )); then pass "import FAILS on a verification mismatch"; else flunk "import did not fail on mismatch"; fi
 if grep -qiE "verification FAILED|incomplete or altered" <<<"$out"; then pass "reports the verification failure"; else flunk "no clear failure message"; echo "$out"; fi
 if [[ ! -e "$home_dir/Documents/Taxes 2025/notes.txt" ]]; then pass "nothing published on failure (destination untouched)"; else flunk "tampered file was published anyway"; fi
-if ! compgen -G "$home_dir/.kratos-import.*" >/dev/null; then pass "staging area cleaned up"; else flunk "staging left behind"; fi
+if ! compgen -G "$tmp/state/migrate/import.*" >/dev/null && ! compgen -G "$home_dir/.kratos-import.*" >/dev/null; then pass "staging area cleaned up"; else flunk "staging left behind"; fi
 
 echo "migration: manifest with a path-traversal entry is rejected"
 make_export
@@ -63,7 +65,7 @@ echo "migration: elevated --to outside the invoker's home is refused"
 mhome="$(getent passwd mallory 2>/dev/null | cut -d: -f6)"
 if [[ $EUID -eq 0 && -n "$mhome" ]]; then
     make_export
-    if out="$(env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
+    if out="$(env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
                  "$kratos" migrate --from "$export_dir" --to "$tmp/outside" 2>&1)"; then rc=0; else rc=1; fi
     if (( rc != 0 )) && grep -qiE "must be inside|refusing elevated" <<<"$out"; then
         pass "elevated migration is confined to the invoker's home"
@@ -74,21 +76,22 @@ else
     echo "  SKIP  needs root + a 'mallory' user to test home confinement"
 fi
 
-echo "migration: elevated chown touches only imported trees, not pre-existing files"
+echo "migration: elevated publish never writes the destination as root (pre-existing files untouched)"
 if [[ $EUID -eq 0 && -n "$mhome" ]]; then
     make_export
     idest="$mhome/kratos-import-test"
-    rm -rf "$idest"; mkdir -p "$idest"
-    # A pre-existing root-owned file under the destination must NOT be chowned.
+    rm -rf "$idest"; mkdir -p "$idest"; chown mallory: "$idest"   # a real user-owned home dir
+    # A pre-existing root-owned file in the destination must NOT be touched:
+    # the publish rsyncs AS mallory, who cannot modify a root-owned file.
     echo keep > "$idest/preexisting-root-file"; chown root:root "$idest/preexisting-root-file"
-    env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
+    env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
         "$kratos" migrate --from "$export_dir" --to "$idest" >/dev/null 2>&1 || true
     pre_owner="$(stat -c %U "$idest/preexisting-root-file" 2>/dev/null)"
     imp_owner="$(stat -c %U "$idest/Documents/Taxes 2025/notes.txt" 2>/dev/null)"
     if [[ "$pre_owner" == root ]]; then
-        pass "pre-existing root-owned file left untouched (no blanket chown)"
+        pass "pre-existing root-owned file left untouched"
     else
-        flunk "pre-existing file was chowned to '$pre_owner' (blanket chown of the destination)"
+        flunk "pre-existing file became '$pre_owner'"
     fi
     if [[ "$imp_owner" == mallory ]]; then
         pass "imported files are owned by the target user"
@@ -97,7 +100,28 @@ if [[ $EUID -eq 0 && -n "$mhome" ]]; then
     fi
     rm -rf "$idest"
 else
-    echo "  SKIP  needs root + a 'mallory' user to test import-scoped chown"
+    echo "  SKIP  needs root + a 'mallory' user to test import-scoped ownership"
+fi
+
+echo "migration: a root-owned destination is NOT written via root (no root-write primitive, R5-1)"
+if [[ $EUID -eq 0 && -n "$mhome" ]]; then
+    make_export
+    # Destination is root-owned and NOT writable by mallory. This stands in for
+    # the TOCTOU where $dest, validated inside the home, is swapped at write time
+    # for a path only root can write: a correct publish-as-user must FAIL CLOSED
+    # here instead of silently writing it as root.
+    victim="$mhome/victim-root-dir"
+    rm -rf "$victim"; mkdir -p "$victim"; chown root:root "$victim"; chmod 755 "$victim"
+    if out="$(env KRATOS_TEST=1 KRATOS_LIB="$lib" KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run" SUDO_USER=mallory \
+                 "$kratos" migrate --from "$export_dir" --to "$victim" 2>&1)"; then rc=0; else rc=1; fi
+    if (( rc != 0 )) && [[ -z "$(ls -A "$victim" 2>/dev/null)" ]]; then
+        pass "root-owned destination fails closed (root never writes it)"
+    else
+        flunk "imported into a root-owned dir via root (rc=$rc, contents='$(ls -A "$victim" 2>/dev/null)')"; echo "$out"
+    fi
+    rm -rf "$victim"
+else
+    echo "  SKIP  needs root + a 'mallory' user to test the root-write property"
 fi
 
 exit "$fail"
