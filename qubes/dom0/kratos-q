@@ -21,8 +21,11 @@ import subprocess
 import sys
 
 POLICY_PATH = "/etc/qubes/policy.d/30-kratos.policy"
-# qrexec loads policy from BOTH of these; /run holds runtime-generated policy.
-POLICY_DIRS = ("/etc/qubes/policy.d", "/run/qubes/policy.d")
+# qrexec loads policy from BOTH of these, searching /run BEFORE /etc and keeping
+# the FIRST occurrence of each filename (RUNTIME_POLICY_PATH precedes POLICYPATH
+# in qubes-core-qrexec), so a /run file OVERRIDES an /etc file of the same name.
+# This tuple is in that precedence order.
+POLICY_DIRS = ("/run/qubes/policy.d", "/etc/qubes/policy.d")
 WS_TEMPLATE = "kratos-ws"          # disposable template (tagged kratos-persona)
 WS_LIVE = "kratos-ws-live"         # the running disposable's name
 GATEWAY = "sys-whonix"
@@ -238,12 +241,12 @@ def validate_with_real_parser(path):
     (e.g. this is not a Qubes dom0), so the caller falls back to the lint."""
     try:
         from qrexec.policy.parser import FilePolicy  # type: ignore
-        from pathlib import Path
         try:
-            # FilePolicy wants a pathlib.Path (or list), NOT a str — a str raises
-            # TypeError and we'd wrongly report the policy as rejected. Parse the
-            # whole policy directory so syntax is validated across all files.
-            FilePolicy(policy_path=Path(path).parent)
+            # Load with NO path argument so FilePolicy uses Qubes' OWN default
+            # locations and precedence (/run over /etc) — exactly what qrexec
+            # enforces (finding R5-2). Passing a single dir would miss /run and
+            # mis-model precedence.
+            FilePolicy()
             return True, []
         except TypeError:
             # Our own call is wrong (API drift) — don't claim Qubes rejected it.
@@ -266,27 +269,32 @@ def _prefs(vm, key):
 
 
 def effective_policy_files(policy_path):
-    """The *.policy files qrexec actually loads, in its load order.
+    """The *.policy files qrexec actually loads, in its precedence order.
 
-    qrexec merges BOTH /etc/qubes/policy.d and /run/qubes/policy.d and loads
-    them sorted by filename; when the same filename exists in both, the
-    /etc copy wins. Auditing only /etc (finding R4-9) would miss a runtime
-    allow rule dropped into /run/qubes/policy.d that shadows our deny in
-    30-kratos.policy and silently re-opens persona egress. We therefore
-    build the same merged, ordered set qrexec sees. Off a real dom0 the
-    extra directory is absent, so this collapses to the single file."""
+    qrexec merges /run/qubes/policy.d and /etc/qubes/policy.d, searching /run
+    FIRST and keeping the first occurrence of each filename, so a /run file
+    OVERRIDES an /etc file of the same name (finding R5-2 — the round-4 fix had
+    this backwards). Auditing only /etc (finding R4-9) would miss a runtime
+    allow rule dropped into /run that shadows our deny in 30-kratos.policy and
+    silently re-opens persona egress; auditing /etc OVER /run would inspect the
+    safe file while qrexec enforces the hostile one. We therefore reproduce the
+    real /run-wins order. Off a real dom0 those dirs are absent, so this
+    collapses to the single policy_path file."""
     import glob
-    dirs = list(POLICY_DIRS)
+    dirs = list(POLICY_DIRS)              # qrexec order: /run then /etc
     extra = os.path.dirname(policy_path) or "."
     if extra not in dirs:
-        dirs.insert(0, extra)
-    # basename -> chosen path, honoring /etc-wins precedence (first dir wins).
+        dirs.append(extra)                # lowest precedence; only off a real dom0
+    # basename -> chosen path, first dir wins (so /run wins, matching qrexec).
     chosen = {}
     for d in dirs:
         for f in sorted(glob.glob(os.path.join(d, "*.policy"))):
             chosen.setdefault(os.path.basename(f), f)
     files = [chosen[name] for name in sorted(chosen)]
-    if policy_path not in files and os.path.exists(policy_path):
+    # Make sure our own policy file is audited even if its directory was not
+    # scanned above — but never duplicate a basename a scanned dir already chose
+    # (a /run file of the same name legitimately overrides it).
+    if os.path.basename(policy_path) not in chosen and os.path.exists(policy_path):
         files.append(policy_path)
     return files
 
