@@ -127,6 +127,14 @@ class EffectivePolicy(unittest.TestCase):
                 f.write(POLICY)
             self.assertEqual(kq.audit_policy(kq.effective_policy_text(p)), [])
 
+    def test_real_policy_eval_falls_back_closed_off_dom0(self):
+        """Off a dom0 (no qrexec library), the upstream-evaluation path must say
+        ran=False with no findings, so cmd_audit keeps the lint — never a false
+        "engine says safe" (finding R6-H10, fail-closed fallback)."""
+        ran, problems = kq.evaluate_with_real_policy()
+        self.assertFalse(ran)
+        self.assertEqual(problems, [])
+
     def test_runtime_policy_dir_is_audited(self):
         """A runtime allow dropped into /run/qubes/policy.d must be caught too
         (finding R4-9): qrexec loads it, so the audit must see it."""

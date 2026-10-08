@@ -312,6 +312,78 @@ def effective_policy_text(policy_path):
     return "\n".join(parts)
 
 
+# Services a persona qube must never be ALLOWED to call OUT (to anything but
+# dom0's own refusal). Probed in BOTH directions against the real policy engine.
+_EVAL_SERVICES = (
+    "qubes.Filecopy", "qubes.ClipboardPaste", "qubes.OpenURL", "qubes.OpenInVM",
+    "qubes.VMShell", "qubes.VMRootShell", "qubes.NoSuchServiceKratosProbe",
+)
+
+
+def evaluate_with_real_policy():
+    """Ask Qubes' OWN policy engine what it would actually decide for the
+    persona, using real Request objects — not our approximate matcher
+    (finding R6-H10/R7). This catches earlier rules that allow the persona via
+    a concrete target or an @anyvm selector, which a hand-rolled lint can miss.
+
+    ADDITIVE and FAIL-CLOSED by design: it only ever REPORTS egress it positively
+    observes being allowed; if the qrexec library or system_info is unavailable,
+    or its API differs, it returns ran=False and the caller keeps the lint. An
+    error is never read as "safe". Returns (ran, problems)."""
+    try:
+        from qrexec.policy.parser import FilePolicy
+        from qrexec.policy.parser import AccessDenied
+        from qrexec.utils import get_system_info
+    except Exception:  # noqa: BLE001 - not a dom0 / unexpected API: fall back
+        return False, []
+    try:
+        system_info = get_system_info()
+        domains = sorted(system_info["domains"].keys())
+    except Exception:  # noqa: BLE001
+        return False, []
+
+    # Persona sources: the live disposable (what actually runs) and the template.
+    sources = [n for n in (WS_LIVE, WS_TEMPLATE) if n in domains]
+    if not sources:
+        return False, []        # nothing persona-ish exists to evaluate yet
+    # Targets: every domain, plus the special selectors a rule might resolve to.
+    targets = list(domains) + ["@adminvm", "dom0"]
+
+    problems = []
+    evaluated = 0
+    try:
+        policy = FilePolicy()        # Qubes' own default policy locations/order
+    except Exception:  # noqa: BLE001
+        return False, []
+
+    for src in sources:
+        for svc in _EVAL_SERVICES:
+            for tgt in targets:
+                if tgt == src:
+                    continue
+                try:
+                    from qrexec.policy.parser import Request  # local: API-tolerant
+                    req = Request(svc, "+", src, tgt, system_info=system_info,
+                                  ask_resolution_type=None, allow_resolution_type=None)
+                    res = policy.evaluate(req)
+                    evaluated += 1
+                except AccessDenied:
+                    evaluated += 1          # denied = exactly what we want
+                    continue
+                except Exception:           # noqa: BLE001 - API mismatch: don't claim safe
+                    return False, []
+                # A resolution object was returned => NOT denied. Allow is a hole;
+                # an ask-path from an unattended persona is also a way out.
+                verdict = type(res).__name__.lower()
+                if "allow" in verdict:
+                    problems.append(f"qrexec WOULD ALLOW {svc} from persona '{src}' to '{tgt}' (egress hole)")
+                elif "ask" in verdict:
+                    problems.append(f"qrexec would PROMPT for {svc} from persona '{src}' to '{tgt}' (persona egress path)")
+    if evaluated == 0:
+        return False, []        # we proved nothing; let the lint speak
+    return True, problems
+
+
 def cmd_audit():
     rc = 0
     if not os.path.exists(POLICY_PATH):
@@ -333,6 +405,17 @@ def cmd_audit():
         for p in audit_policy(text):
             rc = 1
             print(f"  FAIL  {p}")
+        # AND ask Qubes' own policy engine what it would really decide for the
+        # persona (finding R6-H10): this is the authority on selector semantics
+        # the lint only approximates. Additive — it only adds findings.
+        eran, eproblems = evaluate_with_real_policy()
+        if eran:
+            if eproblems:
+                rc = 1
+                for p in eproblems:
+                    print(f"  FAIL  {p}")
+            else:
+                print("  OK    Qubes' policy engine denies persona egress for every probed service/target")
     else:
         problems = audit_policy(text)
         if problems:
