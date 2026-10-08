@@ -30,7 +30,7 @@ problem. The rest are behaviour, infrastructure, and law.
 | IP / location via the network | Everything in Stealth Mode is forced through Tor; fail-closed firewall; no IPv6; optional VPN-before-Tor hides Tor use from the ISP | Global traffic correlation (below) |
 | App that ignores the proxy, or a leak | Transparent proxying in the Gateway + default-drop; the Workstation has no route except the Gateway, enforced and tested | A root exploit in the Gateway |
 | Normal-user malware pivoting to the persona | Separate `kstealth` user/session, `hidepid`, root-only vault — see THREAT_MODEL | A **root** exploit on the host |
-| Forensics after seizure (powered off) | LUKS2/argon2id full-disk encryption; separate encrypted vault; RAM-only logs; `init_on_free` zeroes freed RAM | A weak passphrase; coercion; a running machine |
+| Forensics after seizure (powered off) | LUKS2/argon2id full-disk encryption (select it in the installer); separate encrypted vault; volatile systemd journal (note: some services keep their own logs on the encrypted root); `init_on_free` zeroes freed RAM | A weak passphrase; coercion; a running machine |
 | Device fingerprinting on networks | Randomized MAC, generic hostname, no mDNS/LLMNR/connectivity pings | Hardware serial numbers visible to a present observer |
 | DMA / peripheral attacks | IOMMU on, FireWire blacklisted, USBGuard blocks new devices in Stealth Mode | Pre-boot/firmware implants |
 

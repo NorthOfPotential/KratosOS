@@ -15,9 +15,19 @@
 # (installed below) blocks clipboard/file/RPC out of anything tagged
 # kratos-persona.
 
-# The installed Whonix major version. Qubes 4.2 ships Whonix 17; when Qubes
-# moves to a newer Whonix, override this once at the top instead of editing
-# every template name below. A pillar value (kratos:whonix_version) wins if set.
+# The installed Whonix major version, overridable via the pillar
+# (kratos:whonix_version) so you don't edit every template name below.
+#
+# HEADS UP (finding R6-H9): the default below is 17, which pairs with the now
+# EOL Qubes 4.2. Current stable Qubes (4.3) ships Whonix 18
+# (whonix-gateway-18 / whonix-workstation-18). On a modern install you MUST set
+# the pillar to the version your Qubes actually has, e.g.:
+#     qubesctl --show-output state.apply kratos saltenv=user \
+#         pillar='{"kratos": {"whonix_version": "18"}}'
+# Moving the default to upstream Qubes/Whonix version discovery (so this can't
+# drift) is tracked as follow-up work; until then this default is intentionally
+# conservative rather than "newest", since a template name that isn't installed
+# fails the run.
 {% set whonix_version = salt['pillar.get']('kratos:whonix_version', '17') %}
 {% set whonix_ws = 'whonix-workstation-' ~ whonix_version %}
 {% set whonix_gw_template = 'qubes-template-whonix-gateway-' ~ whonix_version %}
@@ -56,12 +66,18 @@ kratos-vault:
 kratos-ws-dvm:
   qvm.vm:
     - name: kratos-ws
+    # `present` only accepts CREATION options (template, label, class, memory,
+    # vcpus, ...). template_for_dispvms is a VM PREFERENCE, not a creation arg
+    # (finding R6-H8): the upstream qvm.create parser would reject it here, so
+    # kratos-ws would never actually become a DispVM template and
+    # `qvm-create --class DispVM --template kratos-ws` would fail. Set it in
+    # prefs, matching the upstream Qubes formula.
     - present:
       - label: red
       - template: {{ whonix_ws }}
-      - template_for_dispvms: True
     - prefs:
       - netvm: sys-whonix
+      - template_for_dispvms: True
       - default_dispvm: ""
       - autostart: False
     # Don't build the persona workstation unless its Tor gateway is present.

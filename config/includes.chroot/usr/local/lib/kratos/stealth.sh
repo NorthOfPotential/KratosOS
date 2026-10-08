@@ -735,6 +735,11 @@ stealth_on() {
     load_config
     need_cmd virsh cryptsetup nft python3
     stealth_is_active && die "Stealth Mode is already on"
+    # Refuse to start on inert privacy settings that would otherwise imply a
+    # protection that isn't there (findings R6-H6/H7: CORR_BRIDGES, mixnet).
+    if command -v corr_assert_implemented >/dev/null 2>&1; then
+        corr_assert_implemented
+    fi
     if [[ "$STEALTH_REQUIRE_VPN" == yes && "$(saved_mode)" != vpn ]]; then
         die "STEALTH_REQUIRE_VPN=yes but network mode is '$(saved_mode)'; run: sudo kratos mode vpn"
     fi

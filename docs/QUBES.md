@@ -3,8 +3,10 @@
 This is the honest answer to "fix the root/hypervisor exploit like Qubes": you
 run **Qubes OS** as the base — its Xen hypervisor and dom0 are the isolation
 boundary — and layer the KratosOS workflow on top. A compromise of your everyday
-qube, or even a VM breakout, does not hand over the persona, because they are
-separate Xen domains, not processes under one shared Linux kernel.
+qube — *without* a Xen/dom0 escape — does not hand over the persona, because they
+are separate Xen domains, not processes under one shared Linux kernel. (A true
+hypervisor/dom0 escape is exactly the class of event that *can* cross domains;
+Qubes shrinks that attack surface, it does not make it zero.)
 
 KratosOS's own KVM Stealth Mode remains the single-machine, more-usable tier.
 This Qubes tier is for when a *targeted host exploit* is in your threat model.
@@ -27,10 +29,12 @@ sudo cp qubes/salt/kratos.top        /srv/user_salt/kratos.top
 sudo cp qubes/policy/30-kratos.policy /srv/user_salt/kratos/files/
 sudo cp qubes/dom0/kratos-q          /usr/local/bin/ && sudo chmod +x /usr/local/bin/kratos-q
 
-# 2. Apply it:
+# 2. Apply it (dom0 only — do NOT use `qubesctl --all`, which would apply
+#    enabled user states across every qube, far broader than configuring
+#    KratosOS in dom0):
 sudo qubesctl top.enable kratos saltenv=user
-sudo qubesctl --all state.apply saltenv=user
-# (or: kratos-q provision)
+sudo qubesctl state.apply kratos saltenv=user
+# (or just: kratos-q provision)
 
 # 3. Verify the sectioning:
 kratos-q audit         # policy denies + kratos-ws routes only through sys-whonix

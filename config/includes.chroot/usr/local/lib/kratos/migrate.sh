@@ -78,25 +78,48 @@ migrate_pick_user() {
     select u in "${users[@]}"; do [[ -n "$u" ]] && { echo "$u"; return; }; done
 }
 
+# Resolve a source subdirectory and require it to be a REAL directory (never a
+# symlink/NTFS reparse point) that stays UNDERNEATH the trusted source root
+# (already resolved). This stops an attacker-controlled export/disk from
+# pointing a top-level folder at, say, /root or /root/.ssh so the PRIVILEGED
+# copy discloses host files into staging (finding R6-H1). Prints the resolved
+# path on success; fails otherwise.
+_migrate_real_dir() {   # <path> <trusted-real-root>
+    local p="$1" root="$2" real
+    [[ -d "$p" && ! -L "$p" ]] || return 1
+    real="$(realpath -e -- "$p" 2>/dev/null)" || return 1
+    case "$real/" in "$root"/*|"$root"/) printf '%s\n' "$real"; return 0 ;; esac
+    return 1
+}
+# NOTE on rsync: `rsync -rt` (no -l/-a) copies only regular files and real
+# directories — it SKIPS symlinks and other non-regular objects found while
+# recursing. The only symlink it would follow is a command-line SOURCE that is
+# itself a symlink (with a trailing slash), which is exactly what
+# _migrate_real_dir rejects before we ever pass the path to rsync.
+
 # Copy a mounted Windows profile into the root-owned STAGING dir (never straight
 # into the user's home). migrate_windows publishes staging to $HOME as the user,
 # so a symlink planted in $HOME can't turn a root write into a root-write
 # primitive (finding R4-1).
 migrate_copy_from_disk() {
-    local profile="$1" stage="$2" f
+    local profile="$1" stage="$2" mountroot="$3" f realf
+    # The mount root confines every source path: a reparse point inside the
+    # untrusted NTFS image that escapes it is refused, not followed as root.
+    local root; root="$(realpath -e -- "$mountroot" 2>/dev/null)" \
+        || die "internal error: migration mount root is not resolvable"
     local excl=()
     for f in "${MIGRATE_EXCLUDES[@]}"; do excl+=(--exclude "$f"); done
     for f in "${MIGRATE_FOLDERS[@]}"; do
-        [[ -d "$profile/$f" ]] || continue
+        realf="$(_migrate_real_dir "$profile/$f" "$root")" || continue
         info "Copying $f..."
         rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "${excl[@]}" \
-            "$profile/$f/" "$stage/$f/"
+            "$realf/" "$stage/$f/"
     done
     # OneDrive: only files actually downloaded to the PC exist on disk
-    if [[ -d "$profile/OneDrive" ]]; then
+    if realf="$(_migrate_real_dir "$profile/OneDrive" "$root")"; then
         info "Copying OneDrive (only files that were downloaded locally)..."
         rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "${excl[@]}" \
-            "$profile/OneDrive/" "$stage/OneDrive/"
+            "$realf/" "$stage/OneDrive/"
     fi
     migrate_bookmarks "$profile" "$stage/Browser bookmarks"
 }
@@ -151,13 +174,22 @@ migrate_copy_from_export() {
     _migrate_safe_manifest "$src/manifest.sha256" \
         || die "manifest.sha256 is empty or contains unsafe paths (absolute or ..); refusing to import"
 
+    # Confine the source to the export folder: Files/ (and inventory/) must be
+    # REAL directories under $src, never symlinks pointing at host files that a
+    # privileged copy would then disclose (finding R6-H1).
+    local srcreal filesdir
+    srcreal="$(realpath -e -- "$src" 2>/dev/null)" || die "export folder not found: $src"
+    filesdir="$(_migrate_real_dir "$src/Files" "$srcreal")" \
+        || die "refusing to import: '$src/Files' is missing, a symlink, or escapes the export folder"
+
     info "Copying export to the staging area..."
-    rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= --exclude manifest.sha256 \
-        --exclude inventory --exclude export.log "$src/Files/" "$stage/"
+    rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= \
+        "$filesdir/" "$stage/"
 
     info "Verifying every file against the manifest made on Windows (all must pass)..."
     # sha256sum -c --strict fails on ANY mismatch AND on any malformed line, so a
-    # garbled/empty manifest can't masquerade as "zero failures".
+    # garbled/empty manifest can't masquerade as "zero failures". This proves
+    # every MANIFEST entry is present and matches.
     if sed 's#^\([0-9a-fA-F]\{64\}\)  Files/#\1  #' "$src/manifest.sha256" \
         | ( cd "$stage" && sha256sum -c --strict - >/dev/null 2>&1 ); then
         ok "all files verified against the manifest (corruption check)"
@@ -165,10 +197,29 @@ migrate_copy_from_export() {
         die "verification FAILED: the import is incomplete or altered. Nothing published, staging discarded. DO NOT wipe your backup."
     fi
 
-    if [[ -d "$src/inventory" ]]; then
+    # sha256sum -c only proves manifest ⊆ staged. Also require staged ⊆ manifest
+    # (finding R6-16): an attacker who dropped an EXTRA, unlisted file into the
+    # export (e.g. a .desktop autostart) would otherwise have it published
+    # unverified. And staging must hold only regular files + dirs — no symlink
+    # or device slipped through (rsync -rt skips them, so any is a red flag).
+    local manifest_set staged_set nonreg
+    nonreg="$(find "$stage" -mindepth 1 ! -type f ! -type d -print -quit 2>/dev/null)"
+    [[ -z "$nonreg" ]] || die "verification FAILED: a non-regular file ($nonreg) is present in the import; refusing to publish."
+    manifest_set="$(sed -n 's#^[0-9a-fA-F]\{64\}  Files/##p' "$src/manifest.sha256" | LC_ALL=C sort -u)"
+    staged_set="$( ( cd "$stage" && find . -type f -printf '%P\n' ) | LC_ALL=C sort -u)"
+    if [[ "$manifest_set" != "$staged_set" ]]; then
+        die "verification FAILED: the import contains files not listed in the manifest (unverified extras); refusing to publish. DO NOT wipe your backup."
+    fi
+    ok "every imported file is accounted for in the manifest (no unlisted extras)"
+
+    local invdir
+    if invdir="$(_migrate_real_dir "$src/inventory" "$srcreal")"; then
         install -d "$stage/Windows inventory"
-        cp -r "$src/inventory/." "$stage/Windows inventory/"
-        migrate_app_report "$src/inventory/installed-software.csv"
+        # rsync -rt (no -l) copies only regular files/dirs — symlinks in the
+        # untrusted inventory tree are skipped, and the root was confined above.
+        rsync -rt --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "$invdir/" "$stage/Windows inventory/"
+        local csv="$invdir/installed-software.csv"
+        [[ -f "$csv" && ! -L "$csv" ]] && migrate_app_report "$csv"
     fi
 }
 
@@ -292,8 +343,8 @@ migrate_windows() {
         root="$(migrate_mount "$from")"
         [[ -n "$user" ]] || user="$(migrate_pick_user "$root")"
         profile="$root/Users/$user"
-        [[ -d "$profile" ]] || die "no such Windows user: $user"
-        migrate_copy_from_disk "$profile" "$stage"
+        [[ -d "$profile" && ! -L "$profile" ]] || die "no such Windows user: $user"
+        migrate_copy_from_disk "$profile" "$stage" "$root"
         migrate_umount
         trap 'rm -rf "$stage"' EXIT
     elif [[ -d "$from" ]]; then

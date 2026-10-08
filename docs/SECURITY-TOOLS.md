@@ -33,15 +33,16 @@ into submenus:
 - **Run Script (sandboxed)** (`kratos-runscript <script>`) — runs a `.sh`/`.py`
   script inside a Firejail sandbox (no network, private `/tmp`, read-only home),
   for safely trying untrusted scripts.
-- **`kratos-sec install-metasploit`** — Metasploit isn't in Debian; this prints
-  the official Rapid7 instructions and, only if you confirm, runs their
-  installer.
+- **`kratos-sec install-metasploit`** — Metasploit isn't in Debian; this only
+  PRINTS the official Rapid7 install instructions (release downloads or their
+  APT repo) for you to review and run yourself. It deliberately does **not**
+  download or execute Rapid7's installer for you.
 
 ## Not in Debian (install separately)
 
 A few well-known tools aren't packaged by Debian and so aren't preinstalled:
 
-- **Metasploit Framework** — `kratos-sec install-metasploit` (official Rapid7 installer).
+- **Metasploit Framework** — `kratos-sec install-metasploit` prints the official Rapid7 instructions to follow yourself (it does not run an installer).
 - **Burp Suite** — download from PortSwigger; OWASP **ZAP** is preinstalled as a free alternative.
 - **Ghidra** — download from the NSA/ghidra releases; **radare2/rizin** are preinstalled.
 - **SecLists / wordlists** — clone `danielmiessler/SecLists`; `crunch` and `cewl` are preinstalled for generating your own.

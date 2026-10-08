@@ -146,6 +146,16 @@ def main():
     expect("UDP outside the tunnel blocked", udp("93.184.216.34", 443), False)
     expect("DHCP allowed", udp("10.99.0.1", 67, sport=68), True)
 
+    print("mode: vpn-bootstrap (cold boot, tunnel down — finding R6-17)")
+    load("vpn-bootstrap")
+    # Must let DHCP + the WireGuard handshake through so the network can reach
+    # network-online.target, but NOTHING clear-text (no leak window).
+    expect("DHCP allowed", udp("10.99.0.1", 67, sport=68), True)
+    expect("WireGuard to VPN endpoint allowed", udp(VPN_ENDPOINT, VPN_PORT), True)
+    expect("WireGuard to another server blocked", udp("10.99.0.51", VPN_PORT), False)
+    expect("clear-text DNS blocked", udp("9.9.9.9", 53), False)
+    expect("HTTPS blocked (no clearnet during bootstrap)", tcp("93.184.216.34", 443), False)
+
     print("mode: offline")
     load("offline")
     expect("HTTPS blocked", tcp("93.184.216.34", 443), False)

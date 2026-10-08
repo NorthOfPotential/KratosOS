@@ -207,6 +207,21 @@ corr_decoy_stop() {
     rm -f "$CORR_DECOY_PIDFILE"
 }
 
+# Fail CLOSED on settings that LOOK like privacy features but are not wired up
+# (findings R6-H6/H7). CORR_BRIDGES and CORR_MODE=mixnet are currently inert —
+# no code provisions Tor bridges or routes the persona through Nym — so letting
+# Stealth start with them set would give a false sense of concealment. Refuse
+# instead, with a clear "not implemented" message. Called from stealth_on.
+corr_assert_implemented() {
+    load_config
+    if [[ "${CORR_BRIDGES:-off}" != off ]]; then
+        die "CORR_BRIDGES='$CORR_BRIDGES' is NOT implemented: KratosOS does not yet provision Tor bridges into the Gateway. Set CORR_BRIDGES=off (configure bridges directly in the Gateway's torrc for now), or this would give a false sense that your ISP can't see Tor."
+    fi
+    if [[ "${CORR_MODE:-tor}" == mixnet ]]; then
+        die "CORR_MODE=mixnet is NOT implemented: KratosOS does not provision/route the persona through Nym. Set CORR_MODE=tor. (The workstation/nym helper is experimental and not wired into Stealth.)"
+    fi
+}
+
 corr_status() {
     load_config
     info "${BOLD}Correlation resistance${RESET}"
@@ -218,7 +233,10 @@ corr_status() {
         info "  link shaping: off (default; blends with normal traffic)"
     fi
     if [[ "$CORR_MODE" == mixnet ]]; then
-        warn "mixnet mode is experimental and needs nym-client in the Workstation"
+        warn "CORR_MODE=mixnet is NOT implemented — Stealth will refuse to start. Nym is not provisioned into the persona."
+    fi
+    if [[ "${CORR_BRIDGES:-off}" != off ]]; then
+        warn "CORR_BRIDGES='$CORR_BRIDGES' is NOT implemented — Stealth will refuse to start. Set bridges in the Gateway's torrc instead."
     fi
 }
 

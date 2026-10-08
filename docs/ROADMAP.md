@@ -1,7 +1,7 @@
 # Roadmap
 
 ## v0.2 (this version)
-- [x] KDE Plasma desktop image with Calamares installer (full-disk encryption)
+- [x] KDE Plasma desktop image with Calamares installer (offers full-disk encryption — the user selects it; enforcing/repo-testing encrypted install is follow-up)
 - [x] Network modes normal / vpn / offline with fail-closed switching
 - [x] WireGuard kill switch that also covers Stealth Mode traffic
 - [x] Stealth Mode: vault, host lockdown, Whonix Gateway + Workstation, ordered on/off
@@ -23,10 +23,10 @@
 
 ## Correlation / compartmentalization / anti-fingerprint (this version)
 - [x] sVirt per-VM confinement + no shared/bridged disks (COMPARTMENTALIZATION.md)
-- [x] Opt-in local-link traffic shaping: constant rate + jitter + decoy (CORRELATION-RESISTANCE.md)
+- [x] Opt-in local-link traffic shaping: rate limiting + jitter, with an optional decoy cover stream for continuous (average-rate) cover (CORRELATION-RESISTANCE.md). NB: the shaper is a rate *limiter*, not a constant-rate generator — only the decoy adds cover traffic.
 - [x] Stylometry normalizer `kratos stylo` + always-on timing guard in Stealth
 - [x] `kratos bootcheck` — /boot, ESP and TPM-PCR tamper detection
 - [x] Anti-fingerprint audit: defaults must blend (`kratos fingerprint`, tests)
 - [x] KratosOS-on-Qubes profile (qubes/: Salt + qrexec policy + kratos-q driver) — logic tested; live dom0 run pending
-- [x] Nym mixnet integration (workstation/nym/: config + fail-closed firewall, tested) — live Nym network run pending
+- [~] Nym mixnet components (workstation/nym/: client config + fail-closed firewall, unit-tested) — EXPERIMENTAL and NOT integrated: Stealth does not install/route Nym into the persona, and `CORR_MODE=mixnet` is refused until it does. End-to-end routing and a live Nym network run are pending.
 - [ ] Separate non-root QEMU uids + seccomp sandbox per VM

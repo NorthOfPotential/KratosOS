@@ -83,6 +83,24 @@ saved_mode() { echo vpn; }
 rm -f "$CORR_DECOY_PIDFILE" 2>/dev/null
 CORR_DECOY=off CORR_DECOY_SINK="10.0.0.1:9" corr_decoy_start >/dev/null 2>&1 || true
 if [[ ! -e "$CORR_DECOY_PIDFILE" ]]; then pass "CORR_DECOY=off does not start cover traffic"; else flunk "decoy started despite CORR_DECOY=off"; fi
+
+# findings R6-H6/H7: inert privacy switches must make Stealth refuse to start.
+# corr_assert_implemented calls die (exit) on refusal, so run it in a subshell.
+if ( CORR_BRIDGES=obfs4 CORR_MODE=tor corr_assert_implemented ) >/dev/null 2>&1; then
+    flunk "CORR_BRIDGES!=off was accepted (inert setting not refused)"
+else
+    pass "CORR_BRIDGES!=off is refused (not implemented)"
+fi
+if ( CORR_BRIDGES=off CORR_MODE=mixnet corr_assert_implemented ) >/dev/null 2>&1; then
+    flunk "CORR_MODE=mixnet was accepted (inert setting not refused)"
+else
+    pass "CORR_MODE=mixnet is refused (not implemented)"
+fi
+if ( CORR_BRIDGES=off CORR_MODE=tor corr_assert_implemented ) >/dev/null 2>&1; then
+    pass "default (bridges off, tor) is accepted"
+else
+    flunk "default correlation settings were wrongly refused"
+fi
 rm -rf "$rundir"
 
 echo

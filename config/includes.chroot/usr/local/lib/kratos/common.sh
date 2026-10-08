@@ -124,3 +124,16 @@ desktop_user() {
         id -nu "$PKEXEC_UID"
     fi
 }
+
+# Run a command as the DESKTOP USER who elevated us (sudo/pkexec), never as
+# root. Use it for anything that parses untrusted file content (mat2, clamscan,
+# document/image parsers): a parser bug then can't be a root compromise. Falls
+# back to running directly when we are not elevated or have no invoker.
+run_as_invoker() {
+    local who; who="$(desktop_user)"
+    if [[ $EUID -eq 0 && -n "$who" && "$who" != root ]] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$who" -- "$@"
+    else
+        "$@"
+    fi
+}
