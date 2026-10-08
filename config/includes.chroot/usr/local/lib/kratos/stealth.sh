@@ -15,11 +15,14 @@ WHONIX_SIGNING_FPR="916B8D99C38EAF5E8ADC7A2A8D66066A2EEACCDA"
 VAULT_IMG="$KRATOS_STATE/stealth.vault"
 VAULT_MAPPER="kratos-stealth"
 VAULT_MNT="$KRATOS_STATE/vault"
-# Ephemeral vault key for the zero-touch / amnesic flow. It lives on tmpfs
-# ($KRATOS_RUN = /run/kratos), so it never persists across a reboot: on a live
-# boot the whole persona is amnesic by construction. Persistent installs set
+# Ephemeral vault key for the zero-touch / amnesic flow. It lives on a dedicated
+# ramfs (NEVER swapped, unlike tmpfs — so the key can't leak to disk via swap
+# during provisioning, before host_lockdown's swapoff), under $KRATOS_RUN which
+# is itself tmpfs, so nothing persists across a reboot: on a live boot the whole
+# persona is amnesic by construction. Persistent installs set
 # STEALTH_VAULT_PERSIST=yes and use a passphrase instead.
-VAULT_KEYFILE="$KRATOS_RUN/vault.key"
+VAULT_KEYDIR="$KRATOS_RUN/keys"
+VAULT_KEYFILE="$VAULT_KEYDIR/vault.key"
 VAULT_XML="$VAULT_MNT/libvirt"
 STEALTH_FLAG="$KRATOS_RUN/stealth.active"
 STEALTH_ERROR="$KRATOS_RUN/stealth.error"
@@ -64,9 +67,25 @@ cryptsetup_pass() {
 # stealth.active here); the KEY file itself is 0600 root.
 stealth_make_ephemeral_key() {
     install -d -m 755 "$KRATOS_RUN"
+    install -d -m 700 "$VAULT_KEYDIR"
+    # Back the key dir with ramfs (unswappable). Best-effort: skip under the test
+    # harness (no stray mounts in a tmpdir) and tolerate a missing ramfs.
+    if [[ "${KRATOS_TEST:-}" != 1 ]] && ! mountpoint -q "$VAULT_KEYDIR"; then
+        mount -t ramfs -o mode=700 ramfs "$VAULT_KEYDIR" \
+            || warn "could not mount a ramfs for the vault key; it sits on tmpfs (swappable)"
+    fi
+    chmod 700 "$VAULT_KEYDIR"
     [[ -r "$VAULT_KEYFILE" ]] && return 0
     ( umask 077; head -c 64 /dev/urandom > "$VAULT_KEYFILE" )
     chmod 600 "$VAULT_KEYFILE"
+}
+
+# Drop the ephemeral key and release its ramfs (on teardown / panic).
+stealth_clear_ephemeral_key() {
+    [[ -e "$VAULT_KEYFILE" ]] && shred -u "$VAULT_KEYFILE" 2>/dev/null
+    rm -f "$VAULT_KEYFILE" 2>/dev/null || true
+    mountpoint -q "$VAULT_KEYDIR" 2>/dev/null && umount "$VAULT_KEYDIR" 2>/dev/null
+    return 0
 }
 
 # Is the vault usable right now? It exists AND we can open it (a persistent
@@ -730,6 +749,9 @@ stealth_off_steps() {
         return 1
     fi
     ok "vault locked"
+    # The vault is locked, so the amnesic key is no longer needed; drop it and
+    # release its ramfs.
+    stealth_clear_ephemeral_key
 
     info "${BOLD}Restoring normal host${RESET}"
     host_restore
@@ -759,6 +781,7 @@ stealth_kill() {
     rm -rf "$SPICE_DIR"
     umount -l "$VAULT_MNT" 2>/dev/null || true
     cryptsetup close "$VAULT_MAPPER" 2>/dev/null || true
+    stealth_clear_ephemeral_key
 }
 
 # Open the persona display. The viewer runs as kstealth in its own session,

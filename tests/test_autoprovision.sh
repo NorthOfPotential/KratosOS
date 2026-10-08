@@ -16,6 +16,7 @@ flunk() { echo "  FAIL  $1"; fail=1; }
 
 load() {
     tmp="$(mktemp -d)"
+    export KRATOS_TEST=1
     export KRATOS_LIB="$lib" KRATOS_ETC="$tmp/etc" KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run"
     mkdir -p "$KRATOS_ETC" "$KRATOS_STATE" "$KRATOS_RUN"
     : > "$KRATOS_ETC/whonix-signing-key.asc"     # presence is enough; verify is stubbed
