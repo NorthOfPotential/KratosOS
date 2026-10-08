@@ -1,0 +1,49 @@
+#!/usr/sbin/nft -f
+# KratosOS VPN COLD-BOOT bootstrap kill-switch (finding R6-17).
+#
+# Loaded by `kratos boot` when the saved mode is vpn, BEFORE the tunnel is up.
+# Its only job is to let the network come up far enough to reach
+# network-online.target — which, with NetworkManager connectivity checks
+# disabled, means "got a DHCP lease" — WITHOUT opening any clear-text path.
+# So it permits exactly:
+#   * DHCP (to obtain an address), and
+#   * encrypted WireGuard packets to the configured VPN server,
+# and nothing else: no clear-text app traffic and no DNS, so there is NO
+# clearnet leak window. kratos-mode.service then brings the tunnel up and
+# swaps in the full vpn.nft kill-switch.
+#
+# /run/kratos/vpn.nft (defines WG_IF/WG_ENDPOINT/WG_PORT) is written by
+# `kratos boot` from the stored config before this file is loaded.
+
+include "/run/kratos/vpn.nft"
+
+table inet kratos
+delete table inet kratos
+
+table inet kratos {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        udp sport 67 udp dport 68 accept
+    }
+
+    chain forward {
+        # No persona/Stealth traffic is forwarded during boot.
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy drop;
+        oifname "lo" accept
+        ct state invalid drop
+        meta nfproto ipv6 drop
+
+        udp sport 68 udp dport 67 accept
+        ip daddr $WG_ENDPOINT udp dport $WG_PORT accept
+        # Deliberately NO port-53 and NO general egress: nothing clear-text
+        # leaves while the tunnel is still down.
+        reject
+    }
+}

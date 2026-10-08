@@ -40,30 +40,40 @@ wg_validate() {
     return 0
 }
 
-wg_up() {
-    [[ -r "$WG_IMPORTED" ]] || die "no VPN configured; run: sudo kratos vpn-import <wireguard.conf>"
-    wg_validate "$WG_IMPORTED" || die "stored VPN config failed validation; re-import a clean one"
-
-    local endpoint host port dns
+# Write the nft defines (WG_IF/WG_ENDPOINT/WG_PORT) that vpn.nft and
+# vpn-bootstrap.nft include, from the STORED config. Does NOT bring the tunnel
+# up, so it is safe to call at cold boot before the network exists. Returns
+# non-zero (writing nothing) when there is no valid config/endpoint.
+_wg_write_defines() {
+    [[ -r "$WG_IMPORTED" ]] || return 1
+    wg_validate "$WG_IMPORTED" || return 1
+    local endpoint host port
     endpoint="$(awk -F' *= *' 'tolower($1)=="endpoint"{print $2; exit}' "$WG_IMPORTED")"
     host="${endpoint%:*}"
     port="${endpoint##*:}"
     # A hostname would need a clear-text DNS lookup outside the tunnel
-    [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-        || die "VPN Endpoint must be an IPv4 address, not '$host'"
-    [[ "$port" =~ ^[0-9]+$ ]] || die "VPN Endpoint has no port: '$endpoint'"
+    [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    install -d -m 755 "$KRATOS_RUN"
+    cat > "$KRATOS_RUN/vpn.nft" <<EOF
+define WG_IF = "$WG_IF"
+define WG_ENDPOINT = $host
+define WG_PORT = $port
+EOF
+}
+
+wg_up() {
+    [[ -r "$WG_IMPORTED" ]] || die "no VPN configured; run: sudo kratos vpn-import <wireguard.conf>"
+    wg_validate "$WG_IMPORTED" || die "stored VPN config failed validation; re-import a clean one"
+    _wg_write_defines || die "VPN Endpoint must be a literal IPv4 address with a port (no hostname — that would need a clear-text lookup)"
+
+    local dns
     dns="$(awk -F' *= *' 'tolower($1)=="dns"{print $2; exit}' "$WG_IMPORTED" | tr ',' ' ')"
 
     install -d -m 700 "$KRATOS_RUN/wg"
     # wg-quick would hand DNS to resolvconf; we configure resolved ourselves
     grep -iv '^[[:space:]]*dns[[:space:]]*=' "$WG_IMPORTED" > "$WG_RUNTIME"
     chmod 600 "$WG_RUNTIME"
-
-    cat > "$KRATOS_RUN/vpn.nft" <<EOF
-define WG_IF = "$WG_IF"
-define WG_ENDPOINT = $host
-define WG_PORT = $port
-EOF
 
     wg-quick up "$WG_RUNTIME" >/dev/null
     if [[ -n "$dns" ]]; then
@@ -110,8 +120,23 @@ net_boot() {
     load_ruleset offline
     case "$(saved_mode)" in
         normal) load_ruleset normal ;;
-        # The tunnel needs a network; kratos-mode.service brings it up later
-        vpn|offline) ;;
+        vpn)
+            # Cold boot with a saved VPN (finding R6-17): plain offline blocks
+            # DHCP, but NetworkManager needs a lease to reach
+            # network-online.target, which kratos-mode.service waits for before
+            # it can bring the tunnel up — a fail-closed deadlock. Load a
+            # bootstrap kill-switch that permits ONLY DHCP + the WireGuard
+            # endpoint (no clear-text app traffic, no DNS, so no leak window);
+            # the tunnel and full vpn.nft follow in kratos-mode.service. If no
+            # valid VPN config exists, stay fully offline (fail closed).
+            if _wg_write_defines; then
+                load_ruleset vpn-bootstrap
+            else
+                warn "saved mode is vpn but no valid VPN config found; staying offline until one is imported"
+            fi
+            ;;
+        # offline stays on the default-drop ruleset already loaded above.
+        offline) ;;
     esac
 }
 
