@@ -23,6 +23,7 @@ scenario() {
         rm -rf "${tmp:?}/etc" "${tmp:?}/state" "${tmp:?}/run" "${tmp:?}/vms"
         mkdir -p "$tmp/etc" "$tmp/state" "$tmp/run" "$tmp/vms"
         touch "$tmp/state/stealth.vault"
+        touch "$tmp/run/vault.key"    # amnesic key present => already provisioned
         log="$tmp/log"; : > "$log"
         # shellcheck source=/dev/null
         . "$lib/common.sh"; . "$lib/net.sh"; . "$lib/stealth.sh"; . "$lib/opsec.sh"

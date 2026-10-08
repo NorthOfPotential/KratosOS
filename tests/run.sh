@@ -42,6 +42,9 @@ run tests/test_stealth_order.sh
 step "Stealth required vs best-effort protections"
 run tests/test_stealth_require.sh
 
+step "Stealth zero-touch auto-provision (download/verify/vault logic)"
+run tests/test_autoprovision.sh
+
 step "branding (KratosOS identity, wallpaper, installer rename)"
 run tests/test_branding.sh
 
