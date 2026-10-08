@@ -125,6 +125,26 @@ vault_open() {
         || mount -o nodev,nosuid,noexec "/dev/mapper/$VAULT_MAPPER" "$VAULT_MNT" \
         || die "could not mount the stealth vault"
     chmod 700 "$VAULT_MNT"
+    _vault_grant_qemu_traverse
+}
+
+# The VMs run as libvirt-qemu (NOT root), so QEMU must be able to TRAVERSE the
+# vault mount to reach the disk file libvirt relabels to it — but 0700 root
+# blocks that, which would leave the VMs unable to open their disks (finding
+# R8-1). Grant libvirt-qemu an execute-only POSIX ACL on the mount dir: it can
+# traverse to a known path but still cannot LIST the directory or READ any file
+# (no r, no w). Everyone else remains fully excluded, and each disk's own
+# access is governed by libvirt's per-VM dynamic ownership + sVirt label, so
+# the Gateway still cannot open the Workstation's disk and vice versa.
+_vault_grant_qemu_traverse() {
+    local qemu_user="${STEALTH_QEMU_USER:-libvirt-qemu}"
+    getent passwd "$qemu_user" >/dev/null 2>&1 || return 0   # non-libvirt host
+    if command -v setfacl >/dev/null 2>&1; then
+        setfacl -m "u:${qemu_user}:x" "$VAULT_MNT" \
+            || die "could not grant $qemu_user traverse on the vault (setfacl failed); the VMs would be unable to open their disks"
+    else
+        die "setfacl (the 'acl' package) is required so $qemu_user can traverse the vault without weakening its 0700 permissions"
+    fi
 }
 
 vault_close() {
