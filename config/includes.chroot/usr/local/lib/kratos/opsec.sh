@@ -4,13 +4,15 @@
 opsec_scrub() {
     need_cmd mat2
     [[ $# -gt 0 ]] || die "usage: kratos scrub [--show] <files...>"
+    # mat2 parses hostile formats (PDF/Office/JPEG). Run it as the invoking user,
+    # NEVER as root, so a parser bug can't become a root compromise (R6-23).
     if [[ "$1" == --show ]]; then
         shift
-        mat2 --show "$@"
+        run_as_invoker mat2 --show "$@"
         return
     fi
     # mat2 writes "<name>.cleaned.<ext>" next to each file and keeps the original
-    mat2 "$@"
+    run_as_invoker mat2 "$@"
     ok "cleaned copies written as *.cleaned.*; check them, then: kratos shred <originals>"
 }
 
@@ -32,12 +34,21 @@ opsec_shred() {
 }
 
 opsec_scan() {
-    local target="${1:-$HOME}"
     need_cmd clamscan
+    # Default to the INVOKER's home, not root's, when elevated.
+    local target="${1:-}"
+    if [[ -z "$target" ]]; then
+        local who home; who="$(desktop_user)"
+        if [[ -n "$who" ]]; then home="$(getent passwd "$who" | cut -d: -f6)"; fi
+        target="${home:-$HOME}"
+    fi
     info "${BOLD}Malware scan:${RESET} $target"
-    clamscan -r -i --exclude-dir='^/proc|^/sys|^/dev' "$target" || true
+    # clamscan parses untrusted archives/documents — run it as the invoking
+    # user, not root; it only needs to READ the target (R6-24). The rootkit
+    # scan genuinely needs root and is kept as a separate, explicit phase.
+    run_as_invoker clamscan -r -i --exclude-dir='^/proc|^/sys|^/dev' "$target" || true
     if [[ $EUID -eq 0 ]] && command -v rkhunter >/dev/null; then
-        info "${BOLD}Rootkit scan${RESET}"
+        info "${BOLD}Rootkit scan${RESET} (system-wide, needs root)"
         rkhunter --check --sk --rwo || true
     else
         info "(run with sudo to include the rootkit scan)"
