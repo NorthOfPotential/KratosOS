@@ -79,11 +79,14 @@ cryptsetup_pass() {
 stealth_make_ephemeral_key() {
     install -d -m 755 "$KRATOS_RUN"
     install -d -m 700 "$VAULT_KEYDIR"
-    # Back the key dir with ramfs (unswappable). Best-effort: skip under the test
-    # harness (no stray mounts in a tmpdir) and tolerate a missing ramfs.
+    # Back the key dir with ramfs (unswappable, never paged to disk). This is a
+    # mandatory memory-confidentiality guarantee for the amnesic key, so it is
+    # FAIL-CLOSED (finding R5-4): if the mount can't be made, abort rather than
+    # silently leave the key on swappable tmpfs. The test harness has no real
+    # mount namespace, so it opts out explicitly via KRATOS_TEST=1.
     if [[ "${KRATOS_TEST:-}" != 1 ]] && ! mountpoint -q "$VAULT_KEYDIR"; then
         mount -t ramfs -o mode=700 ramfs "$VAULT_KEYDIR" \
-            || warn "could not mount a ramfs for the vault key; it sits on tmpfs (swappable)"
+            || die "cannot create unswappable (ramfs) storage for the amnesic vault key; refusing to place it on swappable tmpfs"
     fi
     chmod 700 "$VAULT_KEYDIR"
     [[ -r "$VAULT_KEYFILE" ]] && return 0
