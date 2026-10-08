@@ -78,26 +78,27 @@ migrate_pick_user() {
     select u in "${users[@]}"; do [[ -n "$u" ]] && { echo "$u"; return; }; done
 }
 
+# Copy a mounted Windows profile into the root-owned STAGING dir (never straight
+# into the user's home). migrate_windows publishes staging to $HOME as the user,
+# so a symlink planted in $HOME can't turn a root write into a root-write
+# primitive (finding R4-1).
 migrate_copy_from_disk() {
-    local profile="$1" dest="$2" f
+    local profile="$1" stage="$2" f
     local excl=()
     for f in "${MIGRATE_EXCLUDES[@]}"; do excl+=(--exclude "$f"); done
     for f in "${MIGRATE_FOLDERS[@]}"; do
         [[ -d "$profile/$f" ]] || continue
         info "Copying $f..."
         rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "${excl[@]}" \
-            "$profile/$f/" "$dest/$f/"
-        _MIGRATED_PATHS+=("$dest/$f")
+            "$profile/$f/" "$stage/$f/"
     done
     # OneDrive: only files actually downloaded to the PC exist on disk
     if [[ -d "$profile/OneDrive" ]]; then
         info "Copying OneDrive (only files that were downloaded locally)..."
         rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "${excl[@]}" \
-            "$profile/OneDrive/" "$dest/OneDrive/"
-        _MIGRATED_PATHS+=("$dest/OneDrive")
+            "$profile/OneDrive/" "$stage/OneDrive/"
     fi
-    migrate_bookmarks "$profile" "$dest/Browser bookmarks"
-    if [[ -d "$dest/Browser bookmarks" ]]; then _MIGRATED_PATHS+=("$dest/Browser bookmarks"); fi
+    migrate_bookmarks "$profile" "$stage/Browser bookmarks"
 }
 
 # Bookmarks only. Saved passwords are deliberately NOT migrated:
@@ -145,15 +146,12 @@ _migrate_safe_manifest() {
 # failure the staging tree is discarded and the destination is left untouched —
 # the import is fail-closed, so "migration finished" never prints on a mismatch.
 migrate_copy_from_export() {
-    local src="$1" dest="$2"
+    local src="$1" stage="$2"
     [[ -f "$src/manifest.sha256" ]] || die "$src has no manifest.sha256 (was it made by Export-WindowsData.ps1?)"
     _migrate_safe_manifest "$src/manifest.sha256" \
         || die "manifest.sha256 is empty or contains unsafe paths (absolute or ..); refusing to import"
 
-    local stage
-    stage="$(mktemp -d "$dest/.kratos-import.XXXXXX")" || die "cannot create a staging area in $dest"
-    trap 'rm -rf "$stage"' EXIT
-    info "Copying export to a staging area..."
+    info "Copying export to the staging area..."
     rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= --exclude manifest.sha256 \
         --exclude inventory --exclude export.log "$src/Files/" "$stage/"
 
@@ -164,26 +162,37 @@ migrate_copy_from_export() {
         | ( cd "$stage" && sha256sum -c --strict - >/dev/null 2>&1 ); then
         ok "all files verified against the manifest (corruption check)"
     else
-        die "verification FAILED: the import is incomplete or altered. Destination left unchanged, staging discarded. DO NOT wipe your backup."
+        die "verification FAILED: the import is incomplete or altered. Nothing published, staging discarded. DO NOT wipe your backup."
     fi
 
-    info "Publishing verified files..."
-    cp -a "$stage/." "$dest/"
-    # Record only the top-level entries we published, so ownership is fixed on
-    # exactly the imported trees — never the whole destination (finding 8).
-    local e
-    for e in "$stage"/* "$stage"/.[!.]*; do
-        [[ -e "$e" ]] || continue
-        _MIGRATED_PATHS+=("$dest/$(basename "$e")")
-    done
-    rm -rf "$stage"
-    trap - EXIT
-
     if [[ -d "$src/inventory" ]]; then
-        install -d "$dest/Windows inventory"
-        cp -r "$src/inventory/." "$dest/Windows inventory/"
-        _MIGRATED_PATHS+=("$dest/Windows inventory")
+        install -d "$stage/Windows inventory"
+        cp -r "$src/inventory/." "$stage/Windows inventory/"
         migrate_app_report "$src/inventory/installed-software.csv"
+    fi
+}
+
+# Publish the root-owned staging tree into $dest. When elevated by a desktop
+# user, do it AS THAT USER (runuser): a symlink they planted in $HOME then
+# cannot turn a root write into an arbitrary-path root write, and files land
+# owned by the user with no post-hoc chown (findings R4-1, 8).
+_migrate_publish() {
+    local stage="$1" dest="$2" owner="$3"
+    install -d -- "$dest"
+    info "Publishing verified files to $dest ..."
+    if [[ $EUID -eq 0 && -n "$owner" && "$owner" != root ]] && command -v runuser >/dev/null 2>&1; then
+        # Make the target DIRECTORY (not its contents) owned by the user so the
+        # publish can run as them; pre-existing files inside $dest keep their
+        # owner (no blanket chown). Then hand over the staging tree and rsync it
+        # in AS THE USER — a symlink the user planted can only ever write where
+        # the user already can, so there is no root-write primitive.
+        chown "$owner": "$dest" 2>/dev/null || true
+        chown -R "$owner": "$stage" 2>/dev/null || true
+        runuser -u "$owner" -- rsync -rt --no-perms \
+            --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "$stage"/ "$dest"/ \
+            || die "publish failed (as $owner) — nothing left half-written"
+    else
+        cp -a "$stage/." "$dest/"
     fi
 }
 
@@ -259,39 +268,46 @@ migrate_windows() {
         esac
     fi
     install -d -- "$dest"
-    _MIGRATED_PATHS=()          # top-level destination trees the import created
+
+    # Root-owned staging with a random name INSIDE $dest. $dest is realpath'd and
+    # confined to the invoker's home above, so a symlinked $dest is already
+    # rejected; the random 700 dir can't be pre-planted (mktemp fails if it
+    # exists). The user can traverse their own home to read it once we hand it
+    # over, so the publish can run as the user (see _migrate_publish).
+    local stage
+    stage="$(mktemp -d "$dest/.kratos-import.XXXXXX")" || die "cannot create a staging area in $dest"
+    chmod 700 "$stage"
 
     if [[ -b "$from" ]]; then
         need_root migrate --from "$from"
         need_cmd rsync
         local root profile
-        trap migrate_umount EXIT
+        trap 'migrate_umount; rm -rf "$stage"' EXIT
         root="$(migrate_mount "$from")"
         [[ -n "$user" ]] || user="$(migrate_pick_user "$root")"
         profile="$root/Users/$user"
         [[ -d "$profile" ]] || die "no such Windows user: $user"
-        migrate_copy_from_disk "$profile" "$dest"
+        migrate_copy_from_disk "$profile" "$stage"
         migrate_umount
-        trap - EXIT
+        trap 'rm -rf "$stage"' EXIT
     elif [[ -d "$from" ]]; then
         need_cmd rsync sha256sum
-        migrate_copy_from_export "$from" "$dest"
+        trap 'rm -rf "$stage"' EXIT
+        migrate_copy_from_export "$from" "$stage"
     else
+        rm -rf "$stage"
         die "--from must be an export folder or a partition like /dev/sdb3"
     fi
 
-    # Own ONLY the imported trees as the target user (finding 8), never the whole
-    # destination/home — pre-existing or admin-managed files under $dest must not
-    # have their ownership rewritten. Then scrub as that user, so hostile
-    # documents are never parsed by mat2 as root.
-    if [[ $EUID -eq 0 && "$owner" != root ]] && (( ${#_MIGRATED_PATHS[@]} )); then
-        local p
-        for p in "${_MIGRATED_PATHS[@]}"; do
-            [[ -e "$p" ]] || continue
-            chown -R -- "$owner": "$p"
-        done
-    fi
-    [[ "$scrub" == yes ]] && migrate_scrub "$dest" "$owner"
+    # Strip metadata on the STAGING tree, as the destination user (mat2 parses
+    # hostile formats — never as root), before anything is published.
+    [[ "$scrub" == yes ]] && migrate_scrub "$stage" "$owner"
+
+    # Publish into the user's home AS THE USER.
+    _migrate_publish "$stage" "$dest" "$owner"
+    rm -rf "$stage"
+    trap - EXIT
+
     ok "migration finished: $dest"
     info "Keep your backup drive until you have opened your important files here."
 }

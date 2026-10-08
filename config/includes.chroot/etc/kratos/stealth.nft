@@ -29,4 +29,21 @@ table inet kratos_stealth {
         # The VMs can't talk to services on the host
         iifname { "kx-ext", "kx-int" } drop
     }
+
+    chain output {
+        type filter hook output priority filter - 10; policy accept;
+        # Only constrain what the HOST sends TOWARD the VM networks; everything
+        # else leaves normally.
+        oifname != { "kx-ext", "kx-int" } accept
+        # Replies to traffic the VMs started are fine.
+        ct state established,related accept
+        # The host runs DHCP for the guest networks (dnsmasq on the bridge):
+        # allow server->client offers/acks, nothing more.
+        udp sport 67 udp dport 68 accept
+        # Anything else the host tries to INITIATE toward the VMs is dropped: a
+        # compromised host process must not be able to reach the persona VMs or
+        # inject into their networks. The VMs' only path out is the forwarded,
+        # marked kx-ext traffic the mode table governs — not host-originated.
+        drop
+    }
 }

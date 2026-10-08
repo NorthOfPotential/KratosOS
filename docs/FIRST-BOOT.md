@@ -26,14 +26,22 @@ stick in **live mode** before you install over anything. Tick each item.
       The first toggle takes a few minutes; later toggles are instant.
       - The download runs over your current network mode. For `you → VPN → Tor`,
         switch to `vpn` first so your ISP sees only the VPN during the fetch.
+      - The verified image is cached so later boots don't re-download it. The
+        cache refreshes when it ages past `STEALTH_WHONIX_MAX_AGE_DAYS` (90) or
+        when the mirror has a newer release — a valid signature proves the image
+        is genuine, not current. On an installed system the cache sits inside the
+        LUKS-encrypted root (encrypted at rest) but is a persistent on-disk
+        artifact; set `STEALTH_WHONIX_CACHE=no` to always fetch fresh and keep
+        nothing. On the live ISO the cache is on the ephemeral overlay anyway.
       - Want a persistent persona (keeps accounts/files across reboots)? Set
         `STEALTH_VAULT_PERSIST=yes` in `/etc/kratos/kratos.conf` and you'll be
         asked for a passphrase once. Offline install, or prefer to supply the
         image yourself? `sudo kratos stealth setup ~/Downloads/Whonix-*.libvirt.xz`
         still works (set `STEALTH_AUTOPROVISION=no` to require it).
 - [ ] The host locks down, the vault unlocks, Gateway then Workstation start,
-      and the correlation profile (`CORR_STEALTH_PROFILE`, default `balanced`)
-      pads the uplink. See docs/CORRELATION-RESISTANCE.md for the honest limits.
+      and the correlation profile (`CORR_STEALTH_PROFILE`, default `off`) is
+      applied. Set it to `balanced` to rate-limit + jitter the uplink; see
+      docs/CORRELATION-RESISTANCE.md for the honest limits.
 - [ ] Ctrl+Alt+F7 shows the persona desktop in its own session; Ctrl+Alt+F1 returns to normal.
 - [ ] In the Workstation, Whonix's systemcheck reports Tor connected; `check.torproject.org` confirms you're on Tor.
 - [ ] Tray → **Stealth Mode** off. The Workstation stops first, then everything else; the tray returns to "Normal".

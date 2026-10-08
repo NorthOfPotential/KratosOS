@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Traffic-shaping tests. Run as root in a network namespace (tests/run.sh uses
-# unshare -rn). Validates the tc qdiscs the shaper installs and removes. The
+# unshare -n). Validates the tc qdiscs the shaper installs and removes. The
 # decoy's rate math is covered deterministically by tests/test_decoy.py.
 #
 # The profile section sources the kratos libs and stubs load_config/
@@ -13,7 +13,7 @@ flunk() { echo "  FAIL  $1"; fail=1; }
 
 ip link set lo up 2>/dev/null
 
-echo "— constant-rate shaping (tbf) —"
+echo "— uplink rate-limiting (tbf) —"
 if tc qdisc replace dev lo root handle 1: tbf rate 1mbit burst 32kbit latency 400ms 2>/dev/null \
    && tc qdisc show dev lo | grep -q 'tbf.*rate 1Mbit'; then
     pass "token-bucket rate limit installs"
@@ -51,14 +51,15 @@ if shaped; then flunk "profile=off still shaped the uplink"; else pass "profile=
 
 if CORR_SHAPE_RATE=1mbit CORR_SHAPE_JITTER=15ms CORR_STEALTH_PROFILE=balanced \
        corr_stealth_apply >/dev/null 2>&1; then :; fi
-if tc qdisc show dev lo | grep -q tbf; then pass "profile=balanced installs constant-rate padding"; else flunk "balanced did not pad the uplink"; fi
+if tc qdisc show dev lo | grep -q tbf; then pass "profile=balanced rate-limits the uplink (tbf)"; else flunk "balanced did not shape the uplink"; fi
 corr_stealth_clear >/dev/null 2>&1
-if shaped; then flunk "corr_stealth_clear did not remove padding"; else pass "clear removes padding cleanly"; fi
+if shaped; then flunk "corr_stealth_clear did not remove shaping"; else pass "clear removes shaping cleanly"; fi
 
-# max applies the balanced host padding as a FLOOR (never weaker than balanced)
-# AND tells the user to enable the Nym mixnet for the real global defense.
-if CORR_SHAPE_RATE=1mbit CORR_STEALTH_PROFILE=max corr_stealth_apply >/dev/null 2>&1; then :; fi
-if tc qdisc show dev lo | grep -q tbf; then pass "profile=max is never weaker than balanced (pads the uplink)"; else flunk "profile=max applied no protection"; fi
+# max applies the same host shaping as balanced (never weaker) AND warns the
+# user the Nym mixnet is NOT active — it does not silently imply mixnet cover.
+if CORR_SHAPE_RATE=1mbit CORR_STEALTH_PROFILE=max corr_stealth_apply 2>"$rundir/max.err" >/dev/null; then :; fi
+if tc qdisc show dev lo | grep -q tbf; then pass "profile=max is never weaker than balanced (shapes the uplink)"; else flunk "profile=max applied no protection"; fi
+if grep -qi "nym mixnet is NOT active" "$rundir/max.err"; then pass "profile=max warns that the mixnet is not active"; else flunk "profile=max did not warn about the inactive mixnet"; fi
 corr_stealth_clear >/dev/null 2>&1
 tc qdisc del dev lo root 2>/dev/null; rm -rf "$rundir"
 

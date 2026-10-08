@@ -15,11 +15,14 @@ WHONIX_SIGNING_FPR="916B8D99C38EAF5E8ADC7A2A8D66066A2EEACCDA"
 VAULT_IMG="$KRATOS_STATE/stealth.vault"
 VAULT_MAPPER="kratos-stealth"
 VAULT_MNT="$KRATOS_STATE/vault"
-# Ephemeral vault key for the zero-touch / amnesic flow. It lives on tmpfs
-# ($KRATOS_RUN = /run/kratos), so it never persists across a reboot: on a live
-# boot the whole persona is amnesic by construction. Persistent installs set
+# Ephemeral vault key for the zero-touch / amnesic flow. It lives on a dedicated
+# ramfs (NEVER swapped, unlike tmpfs — so the key can't leak to disk via swap
+# during provisioning, before host_lockdown's swapoff), under $KRATOS_RUN which
+# is itself tmpfs, so nothing persists across a reboot: on a live boot the whole
+# persona is amnesic by construction. Persistent installs set
 # STEALTH_VAULT_PERSIST=yes and use a passphrase instead.
-VAULT_KEYFILE="$KRATOS_RUN/vault.key"
+VAULT_KEYDIR="$KRATOS_RUN/keys"
+VAULT_KEYFILE="$VAULT_KEYDIR/vault.key"
 VAULT_XML="$VAULT_MNT/libvirt"
 STEALTH_FLAG="$KRATOS_RUN/stealth.active"
 STEALTH_ERROR="$KRATOS_RUN/stealth.error"
@@ -47,13 +50,24 @@ read_stdin_pass() {
     [[ -n "$VAULT_PASS" ]] || die "no passphrase on stdin"
 }
 
-# Run cryptsetup with, in order of preference: the GUI passphrase, the ephemeral
-# key file (zero-touch amnesic vault), else an interactive prompt.
+# Run cryptsetup with the right key for the current vault mode.
+#
+# Amnesic mode (STEALTH_VAULT_PERSIST != yes, the default) ALWAYS uses the
+# in-RAM ephemeral key and NEVER a user passphrase — even if one was handed in
+# on stdin (finding R4-6). This is the authoritative enforcement: the tray/GUI
+# cannot silently downgrade the amnesic design by prompting for a passphrase,
+# and a persistence choice can't be made by whoever happens to type one.
+# Only persistent mode (=yes) uses the GUI passphrase, falling back to an
+# interactive prompt when none was supplied.
 cryptsetup_pass() {
-    if [[ -n "$VAULT_PASS" ]]; then
+    if [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]]; then
+        if [[ -r "$VAULT_KEYFILE" ]]; then
+            cryptsetup "$@" --key-file "$VAULT_KEYFILE"
+        else
+            cryptsetup "$@"   # no ephemeral key yet (pre make_ephemeral_key)
+        fi
+    elif [[ -n "$VAULT_PASS" ]]; then
         printf '%s' "$VAULT_PASS" | cryptsetup "$@" --key-file -
-    elif [[ "${STEALTH_VAULT_PERSIST:-no}" != yes && -r "$VAULT_KEYFILE" ]]; then
-        cryptsetup "$@" --key-file "$VAULT_KEYFILE"
     else
         cryptsetup "$@"
     fi
@@ -64,9 +78,25 @@ cryptsetup_pass() {
 # stealth.active here); the KEY file itself is 0600 root.
 stealth_make_ephemeral_key() {
     install -d -m 755 "$KRATOS_RUN"
+    install -d -m 700 "$VAULT_KEYDIR"
+    # Back the key dir with ramfs (unswappable). Best-effort: skip under the test
+    # harness (no stray mounts in a tmpdir) and tolerate a missing ramfs.
+    if [[ "${KRATOS_TEST:-}" != 1 ]] && ! mountpoint -q "$VAULT_KEYDIR"; then
+        mount -t ramfs -o mode=700 ramfs "$VAULT_KEYDIR" \
+            || warn "could not mount a ramfs for the vault key; it sits on tmpfs (swappable)"
+    fi
+    chmod 700 "$VAULT_KEYDIR"
     [[ -r "$VAULT_KEYFILE" ]] && return 0
     ( umask 077; head -c 64 /dev/urandom > "$VAULT_KEYFILE" )
     chmod 600 "$VAULT_KEYFILE"
+}
+
+# Drop the ephemeral key and release its ramfs (on teardown / panic).
+stealth_clear_ephemeral_key() {
+    [[ -e "$VAULT_KEYFILE" ]] && shred -u "$VAULT_KEYFILE" 2>/dev/null
+    rm -f "$VAULT_KEYFILE" 2>/dev/null || true
+    mountpoint -q "$VAULT_KEYDIR" 2>/dev/null && umount "$VAULT_KEYDIR" 2>/dev/null
+    return 0
 }
 
 # Is the vault usable right now? It exists AND we can open it (a persistent
@@ -242,6 +272,30 @@ _whonix_pick_latest() {   # <index-file> <baseurl> <flavor>
     printf '%s%s\n' "$base" "$name"
 }
 
+# Version string embedded in a Whonix KVM image filename, or empty.
+_whonix_file_version() {   # <path-or-name>
+    local b="${1##*/}"
+    [[ "$b" =~ Whonix-[^-]+-([0-9][0-9.]*)\.Intel_AMD64 ]] && printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+# Newest version the mirror currently advertises, or empty if it can't be
+# reached. Best-effort and quiet: a freshness check must never block provisioning
+# when offline. Honors STEALTH_WHONIX_URL (a pin means "this is latest").
+_whonix_remote_latest_version() {
+    local base="${STEALTH_WHONIX_BASEURL:-https://download.whonix.org/libvirt/}"
+    local flavor="${STEALTH_WHONIX_FLAVOR:-Xfce}" url idx
+    if [[ -n "${STEALTH_WHONIX_URL:-}" ]]; then
+        _whonix_file_version "$STEALTH_WHONIX_URL"; return 0
+    fi
+    base="${base%/}/"
+    idx="$(mktemp)"
+    if curl -fL --proto "=https" --tlsv1.2 --connect-timeout 20 -sS "$base" -o "$idx" 2>/dev/null \
+        && url="$(_whonix_pick_latest "$idx" "$base" "$flavor")"; then
+        _whonix_file_version "$url"
+    fi
+    rm -f "$idx"
+}
+
 # Download the latest Whonix KVM image + its .asc into <destdir>. Echoes the
 # archive path on stdout (progress/logs go to stderr). The signature is verified
 # by the caller against the pinned key, so a hostile mirror cannot substitute an
@@ -289,21 +343,52 @@ stealth_autoprovision() {
     # clearnet download) on every amnesic boot. On the live ISO the cache lives
     # on the ephemeral overlay, so a live boot still fetches fresh.
     local cache="$KRATOS_STATE/whonix-cache" archive="" cached=""
-    [[ -d "$cache" ]] && cached="$(find "$cache" -maxdepth 1 -name '*.libvirt.xz' 2>/dev/null | head -n1)"
+    # Pick the NEWEST cached image by version, never an arbitrary one, so an old
+    # file lingering in the cache can't be resurrected over a newer one.
+    if [[ "${STEALTH_WHONIX_CACHE:-yes}" == yes && -d "$cache" ]]; then
+        cached="$(find "$cache" -maxdepth 1 -name 'Whonix-*.libvirt.xz' 2>/dev/null | sort -V | tail -n1)"
+    fi
+    local use_cache=no
     if [[ -n "$cached" ]] && _whonix_verify_ok "$cached" "$cached.asc" "$key"; then
-        info "Using the previously downloaded, signature-verified Whonix image."
+        # A valid signature proves the image is GENUINE, not that it is CURRENT
+        # (finding R4-7): an attacker who can serve you a stale-but-signed image,
+        # or simple bit-rot over months, must not pin you to a vulnerable build.
+        use_cache=yes
+        local max_age="${STEALTH_WHONIX_MAX_AGE_DAYS:-90}"
+        if [[ "$max_age" =~ ^[0-9]+$ ]] && (( max_age > 0 )) \
+           && [[ -n "$(find "$cached" -maxdepth 0 -mtime +"$max_age" 2>/dev/null)" ]]; then
+            warn "cached Whonix image is older than ${max_age} days; refreshing."
+            use_cache=no
+        else
+            # If the mirror advertises a newer version, prefer it. Best-effort:
+            # when offline (empty result) we keep using the verified cache.
+            local remote_ver cached_ver
+            remote_ver="$(_whonix_remote_latest_version)"
+            cached_ver="$(_whonix_file_version "$cached")"
+            if [[ -n "$remote_ver" && -n "$cached_ver" && "$remote_ver" != "$cached_ver" ]] \
+               && [[ "$(printf '%s\n%s\n' "$cached_ver" "$remote_ver" | sort -V | tail -n1)" == "$remote_ver" ]]; then
+                warn "a newer Whonix image ($remote_ver > $cached_ver) is available; refreshing."
+                use_cache=no
+            fi
+        fi
+    fi
+    if [[ "$use_cache" == yes ]]; then
+        info "Using the previously downloaded, signature-verified Whonix image ($(_whonix_file_version "$cached"))."
         archive="$cached"
     else
-        info "${BOLD}First run: fetching and verifying Whonix${RESET} (one time; then just toggle)."
+        info "${BOLD}Fetching and verifying Whonix${RESET} (one time per release; then just toggle)."
         local stage
         stage="$(mktemp -d)"
         # shellcheck disable=SC2064
         trap "rm -rf '$stage'" RETURN
         archive="$(stealth_fetch_whonix "$stage")" || die "could not download Whonix (check your connection, or set STEALTH_WHONIX_URL)"
         verify_whonix "$archive" "$archive.asc" "$key"
-        # Cache the verified image (root-only) for next boot.
-        install -d -m 700 "$cache"
-        cp -f "$archive" "$archive.asc" "$cache/" && archive="$cache/$(basename "$archive")"
+        if [[ "${STEALTH_WHONIX_CACHE:-yes}" == yes ]]; then
+            # Replace the cache with ONLY this verified image, so stale older
+            # builds don't accumulate and can't be picked up later.
+            rm -rf "$cache"; install -d -m 700 "$cache"
+            cp -f "$archive" "$archive.asc" "$cache/" && archive="$cache/$(basename "$archive")"
+        fi
     fi
     _stealth_provision "$archive"
     ok "Whonix provisioned and verified."
@@ -650,7 +735,13 @@ stealth_on() {
     if [[ "$STEALTH_REQUIRE_VPN" == yes && "$(saved_mode)" != vpn ]]; then
         die "STEALTH_REQUIRE_VPN=yes but network mode is '$(saved_mode)'; run: sudo kratos mode vpn"
     fi
-    [[ "${1:-}" == --passphrase-stdin ]] && read_stdin_pass
+    if [[ "${1:-}" == --passphrase-stdin ]]; then
+        read_stdin_pass
+        # Amnesic vault ignores any passphrase (cryptsetup_pass enforces this);
+        # say so rather than letting the caller believe it set one.
+        [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]] && \
+            warn "amnesic vault: the supplied passphrase is ignored (the in-RAM key is used); set STEALTH_VAULT_PERSIST=yes for a passphrase vault"
+    fi
     # Zero-touch: on a fresh boot the vault doesn't exist yet (or its in-RAM key
     # is gone). Provision automatically — download + verify Whonix, build the
     # amnesic vault — so "boot the ISO, then toggle Stealth" is all it takes.
@@ -730,6 +821,9 @@ stealth_off_steps() {
         return 1
     fi
     ok "vault locked"
+    # The vault is locked, so the amnesic key is no longer needed; drop it and
+    # release its ramfs.
+    stealth_clear_ephemeral_key
 
     info "${BOLD}Restoring normal host${RESET}"
     host_restore
@@ -759,6 +853,7 @@ stealth_kill() {
     rm -rf "$SPICE_DIR"
     umount -l "$VAULT_MNT" 2>/dev/null || true
     cryptsetup close "$VAULT_MAPPER" 2>/dev/null || true
+    stealth_clear_ephemeral_key
 }
 
 # Open the persona display. The viewer runs as kstealth in its own session,
