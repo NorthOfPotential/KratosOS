@@ -159,6 +159,31 @@ def main():
         sh(f"nft -f {os.path.join(ROOT, 'stealth.nft')}")
         sh("nft delete table inet kratos_stealth")
 
+    # The host must not be able to INITIATE connections into the VM networks
+    # (finding R4-10). The functional harness has no kx-int/kx-ext veths, so
+    # assert the output chain exists with the right shape: a hooked output
+    # chain that permits only DHCP service + established replies toward the VM
+    # interfaces and drops the rest.
+    print("stealth firewall: host->VM output chain")
+    load("normal")
+    sh(f"nft -f {os.path.join(ROOT, 'stealth.nft')}")
+    out = subprocess.run("nft list chain inet kratos_stealth output",
+                         shell=True, capture_output=True, text=True).stdout
+    sh("nft delete table inet kratos_stealth")
+    lines = [ln.strip() for ln in out.splitlines()]
+    checks = [
+        ("output chain is hooked", "hook output" in out),
+        ("non-VM traffic still leaves", any(ln.startswith("oifname !=") and ln.endswith("accept")
+                                            and '"kx-int"' in ln and '"kx-ext"' in ln for ln in lines)),
+        ("established replies allowed", "ct state established,related accept" in out),
+        ("DHCP service allowed", "udp sport 67 udp dport 68 accept" in out),
+        ("host-initiated traffic to VMs dropped", "drop" in lines),
+    ]
+    for desc, ok in checks:
+        print(f"  {'PASS' if ok else 'FAIL'}  {desc}")
+        if not ok:
+            FAILURES.append(desc)
+
     if FAILURES:
         print(f"\n{len(FAILURES)} firewall test(s) failed")
         sys.exit(1)

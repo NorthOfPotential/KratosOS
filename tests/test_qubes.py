@@ -127,6 +127,46 @@ class EffectivePolicy(unittest.TestCase):
                 f.write(POLICY)
             self.assertEqual(kq.audit_policy(kq.effective_policy_text(p)), [])
 
+    def test_runtime_policy_dir_is_audited(self):
+        """A runtime allow dropped into /run/qubes/policy.d must be caught too
+        (finding R4-9): qrexec loads it, so the audit must see it."""
+        import tempfile, os
+        saved = kq.POLICY_DIRS
+        with tempfile.TemporaryDirectory() as etc, tempfile.TemporaryDirectory() as run:
+            with open(os.path.join(etc, "30-kratos.policy"), "w") as f:
+                f.write(POLICY)
+            # A lower-numbered runtime file sorts first => shadows our deny.
+            with open(os.path.join(run, "10-runtime.policy"), "w") as f:
+                f.write("qubes.Filecopy * @tag:kratos-persona @anyvm allow\n")
+            try:
+                kq.POLICY_DIRS = (etc, run)
+                text = kq.effective_policy_text(os.path.join(etc, "30-kratos.policy"))
+            finally:
+                kq.POLICY_DIRS = saved
+            self.assertIn("10-runtime.policy", text, "runtime policy dir was not read")
+            self.assertTrue(any("Filecopy" in p for p in kq.audit_policy(text)),
+                            "a /run allow that shadows our deny was not caught")
+
+    def test_etc_wins_on_filename_collision(self):
+        """When the same filename exists in both dirs, qrexec uses the /etc copy;
+        the audit must mirror that so it lints what is actually enforced."""
+        import tempfile, os
+        saved = kq.POLICY_DIRS
+        with tempfile.TemporaryDirectory() as etc, tempfile.TemporaryDirectory() as run:
+            # Same basename in both: /etc is the real deny, /run is a decoy allow.
+            with open(os.path.join(etc, "30-kratos.policy"), "w") as f:
+                f.write(POLICY)
+            with open(os.path.join(run, "30-kratos.policy"), "w") as f:
+                f.write("qubes.Filecopy * @tag:kratos-persona @anyvm allow\n")
+            try:
+                kq.POLICY_DIRS = (etc, run)
+                files = kq.effective_policy_files(os.path.join(etc, "30-kratos.policy"))
+            finally:
+                kq.POLICY_DIRS = saved
+            chosen = [f for f in files if f.endswith("30-kratos.policy")]
+            self.assertEqual(chosen, [os.path.join(etc, "30-kratos.policy")],
+                             "the /etc copy must win a filename collision")
+
 
 class PolicyAudit(unittest.TestCase):
     def test_shipped_policy_passes(self):
