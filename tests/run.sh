@@ -14,6 +14,7 @@ run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
     $inc/usr/local/bin/kratos-runscript $inc/usr/local/bin/kratos-sec \
     $inc/usr/local/lib/kratos/sectools-gen $inc/usr/local/lib/kratos/sec-shell \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
+    $inc/usr/local/libexec/kratos/* \
     workstation/gateway/kratos-gw-harden \
     build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
@@ -116,6 +117,9 @@ fi
 
 step "network privacy posture (DHCP/MAC, libvirt authz)"
 run tests/test_netprivacy.sh
+
+step "polkit action split"
+run tests/test_polkit.sh
 
 echo
 if (( status == 0 )); then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi

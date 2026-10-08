@@ -1,6 +1,10 @@
 #!/usr/sbin/nft -f
-# KratosOS mode: offline. Nothing leaves the machine except loopback.
-# Also loaded as a transitional state while switching modes.
+# KratosOS mode: offline. Blocks all IPv4/IPv6 (inet) traffic except loopback.
+# NOTE: this is an IP-layer filter, so link-layer frames (ARP/ND) could still
+# leave while an interface is up. `kratos mode offline` therefore ALSO brings
+# NetworkManager's links down (net_links off) so nothing leaves even at layer 2
+# (finding R6-18); this ruleset is the backstop. Also loaded as a transitional
+# state while switching modes (links come back up for normal/vpn).
 
 table inet kratos
 delete table inet kratos

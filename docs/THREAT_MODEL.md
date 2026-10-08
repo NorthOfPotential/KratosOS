@@ -124,18 +124,19 @@ and a disposable Workstation option.
 
 ## Known limitations called out by review (honest notes)
 
-- **One polkit action covers the whole `kratos` tool, and it uses
-  `auth_admin_keep`.** `org.kratos.manage` authorizes `/usr/local/bin/kratos`
-  regardless of subcommand with `<allow_active>auth_admin_keep</allow_active>`,
-  so one admin authentication is cached and a later low-risk action (e.g. a
-  network-mode change) shares that retained authorization with higher-risk paths
-  in the same binary (stealth, migrate, shred, scan). This is a real weakness:
-  malware in the active desktop session could ride the cached authorization to
-  invoke a higher-risk subcommand. Splitting the high-risk operations into
-  separate, narrowly-scoped privileged helpers with their own polkit actions
-  (and not retaining authorization for destructive arbitrary-path operations) is
-  planned and tracked; until then, treat an authenticated session as able to run
-  any `kratos` subcommand.
+- **Privileged GUI actions are split per surface (no single cached auth for
+  everything).** Each privileged surface runs through its own helper under
+  `/usr/local/libexec/kratos/` with its own polkit action, so an authentication
+  cached for one surface does not authorize another. Network mode
+  (`org.kratos.net`) and Stealth on/off (`org.kratos.stealth`) use
+  `auth_admin_keep` for tray usability; the destructive, arbitrary-path surfaces
+  — migration (`org.kratos.migrate`) and secure delete (`org.kratos.shred`) —
+  use `auth_admin` and are **never retained**, so each invocation
+  re-authenticates. (CLI users via `sudo` are governed by sudo, not polkit.)
+  Residual note: the helpers all exec the one `kratos` binary with a fixed
+  subcommand, so this scopes *authorization*, not the process boundary; a
+  deeper split into fully separate helper binaries with typed arguments remains
+  a future hardening step.
 - **`kratos shred` / Stealth log wiping is best-effort.** `shred` cannot
   guarantee physical overwrite on SSDs, flash (FTL), or copy-on-write/snapshotted
   storage, and `echo 3 > drop_caches` drops caches — it is not memory

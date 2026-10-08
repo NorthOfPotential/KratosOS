@@ -17,12 +17,19 @@ unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
       LIBVIRT_DEFAULT_URI 2>/dev/null || true
 
 # Production uses fixed, trusted paths. The KRATOS_* overrides (incl. KRATOS_LIB,
-# which selects the code this runs) exist ONLY for the test suite and are honored
-# ONLY when KRATOS_TEST=1 is set explicitly — so a stray KRATOS_LIB in the
-# environment can never redirect this privileged tool to attacker-controlled code.
-if [[ "${KRATOS_TEST:-}" != 1 ]]; then
+# which selects the code this runs) exist ONLY for the test suite. The INSTALLED
+# binary IGNORES them unconditionally (finding R6-26): the override is honored
+# only when this script runs from a path OTHER than the canonical install path
+# — i.e. straight from the source tree by the test harness — AND KRATOS_TEST=1.
+# A privileged production invocation (pkexec/sudo always exec the install path,
+# as do the per-surface helpers) therefore can never be redirected to
+# attacker-controlled code by an environment variable, with no in-binary
+# "disable enforcement" switch to trip.
+_self="$(readlink -f -- "$0" 2>/dev/null || echo "$0")"
+if [[ "$_self" == /usr/local/bin/kratos || "${KRATOS_TEST:-}" != 1 ]]; then
     unset KRATOS_LIB KRATOS_ETC KRATOS_STATE KRATOS_RUN
 fi
+unset _self
 
 KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 

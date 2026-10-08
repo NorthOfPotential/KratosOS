@@ -90,6 +90,10 @@ if [[ -n "$vc" && "$fw" -lt "$vc" ]]; then pass "vault locked after VMs are off"
 if [[ -n "$hr" && "$vc" -lt "$hr" ]]; then pass "host restored last"; else flunk "host restored last"; fi
 if [[ ! -e "$tmp/run/stealth.active" ]]; then pass "stealth flag cleared"; else flunk "stealth flag cleared"; fi
 if has "rc=0"; then pass "reports success"; else flunk "reports success"; fi
+# R6-H4/H5: a normal OFF keeps the boot-session vault key, so the next ON
+# reopens the SAME vault and preserves the Gateway's Tor guard state (instead of
+# rebuilding the whole vault and resetting guards every toggle).
+if [[ -e "$tmp/run/keys/vault.key" ]]; then pass "boot-session key kept across OFF (Tor guards preserved)"; else flunk "key shredded on normal OFF (guards would be lost)"; fi
 
 # ── 2. Workstation refuses to die ──────────────────────────────
 stuck_off() {

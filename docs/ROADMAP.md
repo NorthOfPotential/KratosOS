@@ -30,3 +30,16 @@
 - [x] KratosOS-on-Qubes profile (qubes/: Salt + qrexec policy + kratos-q driver) — logic tested; live dom0 run pending
 - [~] Nym mixnet components (workstation/nym/: client config + fail-closed firewall, unit-tested) — EXPERIMENTAL and NOT integrated: Stealth does not install/route Nym into the persona, and `CORR_MODE=mixnet` is refused until it does. End-to-end routing and a live Nym network run are pending.
 - [ ] Separate non-root QEMU uids + seccomp sandbox per VM
+
+## Release-assurance gates still open (honest status)
+- [ ] **ISO-build-and-boot as a release gate.** The `build-iso` CI job builds
+      a real image (and fails on real build errors), but it only runs on
+      dispatch/tags and there is no automated boot/install test. Booting the
+      built ISO in automation (nested virt), doing an encrypted Calamares
+      install, and exercising a real Whonix Stealth session + the Qubes layer on
+      Qubes 4.3/Whonix 18 remain the biggest unproven-together gaps.
+- [ ] **SUID/capability inventory as a release blocker.** The inventory runs
+      (report-only, `continue-on-error`) and is published as an artifact.
+      Per review it should become blocking only AFTER a real built-image
+      baseline is reviewed and the allowlist tightened — hard-gating the current
+      starter allowlist first would just push maintainers to disable the check.

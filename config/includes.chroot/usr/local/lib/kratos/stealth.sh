@@ -73,7 +73,12 @@ cryptsetup_pass() {
     fi
 }
 
-# Create the ephemeral vault key (amnesic flow) if it doesn't already exist.
+# Create the amnesic vault key if it doesn't already exist. This is a
+# BOOT-SESSION key: it lives on unswappable ramfs for the whole boot, is kept
+# across Stealth OFF->ON so the same vault (and the Gateway's Tor guard state)
+# can be reopened without a rebuild (findings R6-H4/H5), and is destroyed only
+# at reboot/shutdown (ramfs cleared) or by `kratos panic`. That is where true
+# amnesia happens; a normal OFF keeps it.
 # The runtime dir stays 0755 (listing it is harmless; the non-root tray reads
 # stealth.active here); the KEY file itself is 0600 root.
 stealth_make_ephemeral_key() {
@@ -139,11 +144,40 @@ vault_close() {
     fi
 }
 
+# Convert a size like 64G / 512M / 2T to bytes (empty on parse failure).
+_size_to_bytes() {
+    local s="${1:-}" n unit
+    [[ "$s" =~ ^([0-9]+)([KkMmGgTt]?)[Bb]?$ ]] || return 1
+    n="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2],,}"
+    case "$unit" in
+        k) echo $(( n * 1024 )) ;;
+        m) echo $(( n * 1024 * 1024 )) ;;
+        g) echo $(( n * 1024 * 1024 * 1024 )) ;;
+        t) echo $(( n * 1024 * 1024 * 1024 * 1024 )) ;;
+        *) echo "$n" ;;
+    esac
+}
+
 vault_create() {
     info "Creating the ${STEALTH_VAULT_SIZE} encrypted stealth vault."
     info "Use a passphrase you have never used anywhere else."
     install -d -m 755 "$KRATOS_STATE"
-    fallocate -l "$STEALTH_VAULT_SIZE" "$VAULT_IMG"
+    # Preflight free space (finding R6-19): a 64 GiB default fallocate fails on
+    # a small live-USB overlay or a nearly-full disk, breaking the flagship
+    # "boot and toggle" flow with a confusing error. Check first and fail with a
+    # clear, actionable message (shrink STEALTH_VAULT_SIZE) instead. ~256 MiB of
+    # headroom covers LUKS + ext4 metadata. Skipped under the test harness.
+    if [[ "${KRATOS_TEST:-}" != 1 ]]; then
+        local want avail
+        want="$(_size_to_bytes "$STEALTH_VAULT_SIZE")" \
+            || die "STEALTH_VAULT_SIZE='$STEALTH_VAULT_SIZE' is not a valid size (use e.g. 64G, 20G, 512M)"
+        avail="$(df -P -B1 "$KRATOS_STATE" 2>/dev/null | awk 'NR==2{print $4}')"
+        if [[ -n "$avail" ]] && (( avail < want + 256*1024*1024 )); then
+            die "not enough free space for a ${STEALTH_VAULT_SIZE} vault at $KRATOS_STATE (only $((avail/1024/1024)) MiB free). Set a smaller STEALTH_VAULT_SIZE in /etc/kratos/kratos.conf (e.g. STEALTH_VAULT_SIZE=$(( (avail/1024/1024/1024) > 4 ? (avail/1024/1024/1024 - 2) : 2 ))G) and try again."
+        fi
+    fi
+    fallocate -l "$STEALTH_VAULT_SIZE" "$VAULT_IMG" \
+        || die "could not allocate the ${STEALTH_VAULT_SIZE} vault at $VAULT_IMG (out of space?); set a smaller STEALTH_VAULT_SIZE"
     chmod 600 "$VAULT_IMG"
     local verify=()
     [[ -z "$VAULT_PASS" ]] && verify=(--verify-passphrase)
@@ -696,8 +730,24 @@ stealth_on_steps() {
     ok "Gateway started (connecting to Tor)"
     virsh_ create "$VAULT_XML/$WS.xml" >/dev/null || die "could not start the Workstation"
     ok "Workstation started"
-    give_display "$GW"
-    give_display "$WS"
+    # Hand ONLY the Workstation display to the persona seat (finding R6-15). The
+    # Gateway console is NOT exposed by default: if a hostile guest exploited the
+    # viewer, reaching the Tor Gateway's console would be a serious escalation.
+    # Opt in with STEALTH_GATEWAY_CONSOLE=yes for debugging only.
+    if [[ "${STEALTH_GATEWAY_CONSOLE:-no}" == yes ]]; then
+        warn "STEALTH_GATEWAY_CONSOLE=yes: exposing the Tor Gateway console to the persona seat (debug only)"
+        give_display "$GW" || warn "Gateway display not available"
+    fi
+    if ! give_display "$WS"; then
+        # The persona is running but has no usable display. This is an
+        # availability problem, not a containment one, so don't roll back a
+        # working persona — but record it and say so, instead of reporting a
+        # clean success (finding R6-30). Reopen later with: kratos stealth view
+        : > "$KRATOS_RUN/stealth.display_degraded" 2>/dev/null || true
+        warn "persona is running but its display socket never appeared; retry with: kratos stealth view"
+    else
+        rm -f "$KRATOS_RUN/stealth.display_degraded" 2>/dev/null || true
+    fi
 
     # Correlation-resistance profile (CORR_STEALTH_PROFILE). Best-effort: a
     # failure here must never block an otherwise-up persona.
@@ -718,7 +768,7 @@ stealth_on_steps() {
 give_display() {
     local sock="$SPICE_DIR/$1.sock" t=0
     while [[ ! -S "$sock" ]] && (( t < 10 )); do sleep 1; t=$((t + 1)); done
-    [[ -S "$sock" ]] || { warn "display socket for $1 not found"; return 0; }
+    [[ -S "$sock" ]] || { warn "display socket for $1 not found"; return 1; }
     # TOCTOU hardening (finding 18): QEMU (libvirt-qemu) owns SPICE_DIR, so a
     # compromised QEMU could swap this path between a check and a chown/chmod
     # done by path. fix-socket-perms opens the inode with O_PATH|O_NOFOLLOW,
@@ -811,10 +861,36 @@ stealth_off_steps() {
     rm -rf "$SPICE_DIR"
     # Remove any uplink padding the correlation profile installed.
     if command -v corr_stealth_clear >/dev/null 2>&1; then corr_stealth_clear || true; fi
+    # Verify the transient networks/firewall actually went away before we move on
+    # (finding R6-29). No live persona remains, so this is advisory state-drift
+    # hygiene, not fail-closed — but we re-remove and say so rather than assume.
+    # Skipped under the test harness (which stubs nft/virsh).
+    if [[ "${KRATOS_TEST:-}" != 1 ]]; then
+        local _leftover="" _n
+        for _n in kx-int kx-ext; do
+            virsh net-info "$_n" >/dev/null 2>&1 && _leftover+=" net:$_n"
+        done
+        nft list table inet kratos_stealth >/dev/null 2>&1 && _leftover+=" nft:kratos_stealth"
+        if [[ -n "$_leftover" ]]; then
+            warn "teardown left state behind:$_leftover — removing again"
+            for _n in kx-int kx-ext; do virsh net-destroy "$_n" >/dev/null 2>&1 || true; done
+            nft delete table inet kratos_stealth 2>/dev/null || true
+        fi
+    fi
     ok "stealth networks and firewall removed"
 
-    if [[ "${STEALTH_WORKSTATION:-persistent}" == disposable ]] && mountpoint -q "$VAULT_MNT"; then
-        stealth_reset_overlay && ok "Workstation reset to clean image (disposable)"
+    # Persona amnesia WITHOUT discarding anonymity infrastructure (findings
+    # R6-H4/H5). Reset ONLY the persona Workstation overlay — its browsing and
+    # session state — while leaving gateway.qcow2 (the Tor Gateway, and with it
+    # Tor's persistent entry-guard state) and the Workstation base image intact.
+    # Resetting guards every session would help an adversary-run relay get
+    # sampled, which Tor's guard design deliberately avoids; discarding the base
+    # would also throw away any in-session security updates. So:
+    #   * amnesic vault (default) OR disposable Workstation -> reset the overlay;
+    #   * a persistent vault with a persistent Workstation keeps the persona.
+    if mountpoint -q "$VAULT_MNT" \
+       && { [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]] || [[ "${STEALTH_WORKSTATION:-persistent}" == disposable ]]; }; then
+        stealth_reset_overlay && ok "persona Workstation reset to a clean overlay (Gateway/Tor guards kept)"
     fi
 
     info "${BOLD}Wiping artifacts and locking vault${RESET}"
@@ -829,9 +905,13 @@ stealth_off_steps() {
         return 1
     fi
     ok "vault locked"
-    # The vault is locked, so the amnesic key is no longer needed; drop it and
-    # release its ramfs.
-    stealth_clear_ephemeral_key
+    # NOTE: the in-RAM vault key is deliberately KEPT across OFF->ON for the rest
+    # of this boot (it is NOT shredded here), so the next activation reopens the
+    # SAME vault and preserves the Gateway's Tor guard state and the base image.
+    # The key lives on unswappable ramfs and is destroyed at reboot/shutdown
+    # (ramfs is gone) or by `kratos panic`, which is where true amnesia happens.
+    # The persona's own data was already reset above, so a locked vault after OFF
+    # exposes no browsing state even to a running-machine attacker.
 
     info "${BOLD}Restoring normal host${RESET}"
     host_restore
@@ -893,6 +973,15 @@ stealth_reset() {
     serialize
     load_config
     stealth_is_active && die "turn Stealth Mode off first"
+    # In amnesic mode the persona is already wiped to a clean overlay on every
+    # Stealth OFF, and after a reboot the in-RAM key is gone so there is no vault
+    # to reset — so 'stealth reset' is only meaningful for a persistent vault
+    # (finding R6-31). Refuse clearly instead of failing on a missing key.
+    if [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]]; then
+        [[ -r "$VAULT_KEYFILE" && -e "$VAULT_IMG" ]] \
+            || die "amnesic mode: nothing to reset — the persona is rebuilt clean on the next Stealth ON. 'stealth reset' is for a persistent vault (STEALTH_VAULT_PERSIST=yes)."
+        info "amnesic mode: the persona is already reset on every Stealth OFF; resetting the current overlay anyway."
+    fi
     confirm "Erase everything in the Workstation and restore a clean image?" || exit 0
     # Re-lock the vault on any exit path, including a failed overlay recreate.
     trap 'vault_close' EXIT

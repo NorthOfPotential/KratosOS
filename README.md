@@ -43,8 +43,8 @@ Turn it on from the shield icon in the system tray, or with `sudo kratos stealth
 1. **Stop the Workstation**, escalating to forced power-off and then kill. Verified gone. *If it can't be stopped, nothing else proceeds.*
 2. Stop the Gateway
 3. Remove stealth networks and firewall
-4. Shred VM logs, drop caches (reset the Workstation if set to *disposable*)
-5. Lock the vault
+4. Wipe the persona: reset the Workstation to a clean overlay (default amnesic vault, or *disposable*), while **keeping the Tor Gateway and its entry-guard state** so toggling Stealth doesn't churn your guards
+5. Shred VM logs, drop caches, lock the vault (the in-RAM key is kept for the boot so the next toggle reopens the same Gateway; a reboot or `kratos panic` discards it)
 6. Undo the host lockdown
 
 The VMs are transient: their definitions live **inside** the vault. With

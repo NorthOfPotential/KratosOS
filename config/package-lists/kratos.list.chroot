@@ -74,6 +74,9 @@ cage
 seatd
 ovmf
 cryptsetup
+# tpm2-tools: so `kratos bootcheck` can snapshot/verify TPM PCRs rather than
+# silently skipping them when the tooling is absent (finding R6-38).
+tpm2-tools
 gnupg
 xz-utils
 python3

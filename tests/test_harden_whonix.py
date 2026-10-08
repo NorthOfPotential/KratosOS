@@ -114,6 +114,22 @@ class HardenWhonixTest(unittest.TestCase):
             "<channel", '<interface type="bridge"><source bridge="br0"/></interface><channel', 1))
         self.assertNotEqual(self.prepare(ws_xml=ws).returncode, 0)
 
+    def test_refuses_tpm_persistent_state(self):
+        # finding R6-27: a persona TPM must be transient — no persistent_state.
+        ws = self.variant("Whonix-Workstation-Xfce.xml", lambda s: s.replace(
+            "</devices>",
+            '<tpm model="tpm-crb"><backend type="emulator" version="2.0" '
+            'persistent_state="yes"/></tpm></devices>', 1))
+        self.assertNotEqual(self.prepare(ws_xml=ws).returncode, 0)
+
+    def test_refuses_tpm_explicit_state_source(self):
+        # finding R6-27: swtpm state must not be pinned to a chosen path.
+        ws = self.variant("Whonix-Workstation-Xfce.xml", lambda s: s.replace(
+            "</devices>",
+            '<tpm model="tpm-crb"><backend type="emulator" version="2.0">'
+            '<source type="file" path="/var/lib/evil/tpm"/></backend></tpm></devices>', 1))
+        self.assertNotEqual(self.prepare(ws_xml=ws).returncode, 0)
+
     def test_refuses_internal_network_that_forwards(self):
         net = self.variant("Whonix_internal_network.xml",
                            lambda s: s.replace("<bridge", '<forward mode="nat"/><bridge'))
@@ -122,6 +138,13 @@ class HardenWhonixTest(unittest.TestCase):
     def test_refuses_host_address_on_internal_network(self):
         net = self.variant("Whonix_internal_network.xml", lambda s: s.replace(
             "</network>", '<ip address="10.152.152.1" netmask="255.255.192.0"/></network>'))
+        self.assertNotEqual(self.prepare(int_xml=net).returncode, 0)
+
+    def test_refuses_unexpected_network_element(self):
+        # finding R6-28: an unexpected network feature (here a <dns> forwarder)
+        # must be rejected, not carried through unexamined.
+        net = self.variant("Whonix_internal_network.xml", lambda s: s.replace(
+            "</network>", '<dns><forwarder addr="8.8.8.8"/></dns></network>'))
         self.assertNotEqual(self.prepare(int_xml=net).returncode, 0)
 
     # ── check catches tampering after setup ────────────────────

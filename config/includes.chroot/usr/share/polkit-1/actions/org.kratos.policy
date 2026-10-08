@@ -4,16 +4,64 @@
 <policyconfig>
   <vendor>KratosOS</vendor>
 
-  <action id="org.kratos.manage">
-    <description>Change KratosOS network or Stealth Mode</description>
-    <message>Authentication is required to change KratosOS security settings</message>
+  <!-- Per-surface privileged actions (findings R6-12/R6-25). Each helper under
+       /usr/local/libexec/kratos fixes ONE kratos subcommand, so polkit scopes
+       authorization to that surface instead of one cached auth for the whole
+       tool. Low-risk, frequently-toggled surfaces (network mode, Stealth
+       on/off) use auth_admin_keep for tray usability; the DESTRUCTIVE,
+       arbitrary-path surfaces (migrate, shred) use auth_admin and are NEVER
+       retained, so each invocation re-authenticates. (CLI users via sudo are
+       unaffected; this governs the GUI/pkexec path.) -->
+
+  <action id="org.kratos.net">
+    <description>Change the KratosOS network mode</description>
+    <message>Authentication is required to change the KratosOS network mode</message>
     <icon_name>security-high</icon_name>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/kratos</annotate>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/kratos/kratos-net</annotate>
+  </action>
+
+  <action id="org.kratos.stealth">
+    <description>Control KratosOS Stealth Mode</description>
+    <message>Authentication is required to control KratosOS Stealth Mode</message>
+    <icon_name>security-high</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/kratos/kratos-stealth</annotate>
+  </action>
+
+  <action id="org.kratos.migrate">
+    <description>Import Windows data into KratosOS</description>
+    <message>Authentication is required to import data (this reads disks/exports as root)</message>
+    <icon_name>security-high</icon_name>
+    <!-- Reads attacker-controllable media and takes arbitrary paths: never
+         retain the authorization. -->
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/kratos/kratos-migrate</annotate>
+  </action>
+
+  <action id="org.kratos.shred">
+    <description>Securely delete files with KratosOS</description>
+    <message>Authentication is required to permanently delete files</message>
+    <icon_name>security-high</icon_name>
+    <!-- Destructive, arbitrary-path: never retain the authorization. -->
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/kratos/kratos-shred</annotate>
   </action>
 
   <!-- INTENTIONAL TRADEOFF: panic is passwordless for the active session so it
