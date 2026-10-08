@@ -55,8 +55,11 @@ if tc qdisc show dev lo | grep -q tbf; then pass "profile=balanced installs cons
 corr_stealth_clear >/dev/null 2>&1
 if shaped; then flunk "corr_stealth_clear did not remove padding"; else pass "clear removes padding cleanly"; fi
 
-if CORR_STEALTH_PROFILE=max corr_stealth_apply >/dev/null 2>&1; then :; fi
-if shaped; then flunk "profile=max host-shaped (should defer to the mixnet)"; else pass "profile=max does not host-shape"; fi
+# max applies the balanced host padding as a FLOOR (never weaker than balanced)
+# AND tells the user to enable the Nym mixnet for the real global defense.
+if CORR_SHAPE_RATE=1mbit CORR_STEALTH_PROFILE=max corr_stealth_apply >/dev/null 2>&1; then :; fi
+if tc qdisc show dev lo | grep -q tbf; then pass "profile=max is never weaker than balanced (pads the uplink)"; else flunk "profile=max applied no protection"; fi
+corr_stealth_clear >/dev/null 2>&1
 tc qdisc del dev lo root 2>/dev/null; rm -rf "$rundir"
 
 echo

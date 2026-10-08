@@ -10,7 +10,10 @@
 
 CORR_SHAPE_IF="${CORR_SHAPE_IF:-kratos0}"   # the WireGuard uplink
 CORR_DECOY_PIDFILE="$KRATOS_RUN/decoy.pid"
-CORR_SHAPED_FILE="$KRATOS_RUN/corr.shaped"  # records which iface(s) we shaped
+CORR_SHAPED_FILE="$KRATOS_RUN/corr.shaped"  # ifaces shaped by `corr shape on`
+# The Stealth correlation profile records its shaping SEPARATELY, so turning
+# Stealth off never tears down link shaping the user set up by hand.
+CORR_STEALTH_SHAPED_FILE="$KRATOS_RUN/corr.stealth.shaped"
 
 corr_shape_iface() {
     # Shape the physical path the ISP sees. With the VPN up that is the real
@@ -18,16 +21,16 @@ corr_shape_iface() {
     ip route show default 2>/dev/null | awk '/default/ {print $5; exit}'
 }
 
-# Apply constant-rate shaping + jitter to ONE interface and record it so
-# teardown restores only what we touched. Shared by `corr shape on` and the
-# Stealth correlation profile.
-_corr_shape_dev() {   # <dev> <rate> <jitter>
-    local dev="$1" rate="$2" jitter="$3"
+# Apply constant-rate shaping + jitter to ONE interface and record it in the
+# given record file so teardown restores only what that feature touched.
+# Shared by `corr shape on` and the Stealth correlation profile (separate files).
+_corr_shape_dev() {   # <dev> <rate> <jitter> <record-file>
+    local dev="$1" rate="$2" jitter="$3" record="$4"
     # Root: token-bucket filter for a constant sustained rate (hides bursts).
     # Child: netem adds random jitter (breaks fine-grained timing correlation).
     tc qdisc replace dev "$dev" root handle 1: tbf rate "$rate" burst 32kbit latency 400ms
     tc qdisc replace dev "$dev" parent 1:1 handle 10: netem delay "$jitter" "$jitter" distribution normal
-    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$CORR_SHAPED_FILE"
+    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$record"
 }
 
 corr_shape_on() {
@@ -41,7 +44,7 @@ corr_shape_on() {
     warn "volume/timing analysis but is itself a signal you are doing something."
     warn "It does NOT defeat a global adversary. See docs/CORRELATION-RESISTANCE.md."
 
-    _corr_shape_dev "$dev" "$CORR_SHAPE_RATE" "$CORR_SHAPE_JITTER"
+    _corr_shape_dev "$dev" "$CORR_SHAPE_RATE" "$CORR_SHAPE_JITTER" "$CORR_SHAPED_FILE"
     ok "shaping $dev at $CORR_SHAPE_RATE, jitter $CORR_SHAPE_JITTER"
 
     if [[ "$CORR_DECOY" == on ]]; then
@@ -67,13 +70,21 @@ corr_stealth_apply() {
     case "$profile" in
         off) return 0 ;;
         max)
-            warn "CORR_STEALTH_PROFILE=max: route the persona through the Nym mixnet"
-            warn "(CORR_MODE=mixnet, needs nym-client in the Workstation) for global-"
-            warn "correlation resistance — high latency. See docs/CORRELATION-RESISTANCE.md."
-            return 0 ;;
+            # max = the Nym mixnet is the persona's real global-correlation
+            # defense — but it needs nym-client in the Workstation and seconds of
+            # latency, and we can't force it from the host. So ALSO apply the
+            # balanced host padding as a floor: max is never weaker than balanced.
+            warn "CORR_STEALTH_PROFILE=max: for global-correlation resistance the persona"
+            warn "must use the Nym mixnet (CORR_MODE=mixnet, nym-client in the Workstation)."
+            if [[ "${CORR_MODE:-tor}" != mixnet ]]; then
+                warn "CORR_MODE is '${CORR_MODE:-tor}', not mixnet — applying the balanced host"
+                warn "padding as a floor. Set CORR_MODE=mixnet for the real max defense."
+            fi
+            ;;
         balanced) : ;;
         *) warn "unknown CORR_STEALTH_PROFILE '$profile'; treating as balanced" ;;
     esac
+    # balanced and max both pad the host uplink.
     if ! command -v tc >/dev/null 2>&1; then
         warn "tc unavailable; skipping constant-rate uplink padding"; return 0
     fi
@@ -81,7 +92,7 @@ corr_stealth_apply() {
     if [[ -z "$dev" ]]; then
         warn "no default-route interface to pad; skipping uplink padding"; return 0
     fi
-    _corr_shape_dev "$dev" "${CORR_SHAPE_RATE:-1mbit}" "${CORR_SHAPE_JITTER:-15ms}"
+    _corr_shape_dev "$dev" "${CORR_SHAPE_RATE:-1mbit}" "${CORR_SHAPE_JITTER:-15ms}" "$CORR_STEALTH_SHAPED_FILE"
     ok "uplink padded to a constant ${CORR_SHAPE_RATE:-1mbit} + jitter (local-observer resistance)"
     if [[ -n "${CORR_DECOY_SINK:-}" ]]; then
         corr_decoy_start
@@ -94,11 +105,21 @@ corr_stealth_clear() {
     command -v tc >/dev/null 2>&1 || return 0
     corr_decoy_stop
     local dev
-    if [[ -r "$CORR_SHAPED_FILE" ]]; then
+    # Remove ONLY the interfaces the Stealth profile recorded (never the user's
+    # own `corr shape on`, which uses a different record file).
+    if [[ -r "$CORR_STEALTH_SHAPED_FILE" ]]; then
         while read -r dev; do
             if [[ -n "$dev" ]]; then tc qdisc del dev "$dev" root 2>/dev/null || true; fi
-        done < "$CORR_SHAPED_FILE"
-        rm -f "$CORR_SHAPED_FILE"
+        done < "$CORR_STEALTH_SHAPED_FILE"
+        rm -f "$CORR_STEALTH_SHAPED_FILE"
+    fi
+    # Belt-and-suspenders: if padding was applied but never recorded (e.g. the
+    # record write failed), the profile only ever shapes the default-route iface,
+    # so clear that too — UNLESS the user shaped it themselves via
+    # `corr shape on` (recorded separately), which we must not tear down.
+    dev="$(corr_shape_iface)"
+    if [[ -n "$dev" ]] && ! { [[ -r "$CORR_SHAPED_FILE" ]] && grep -qxF "$dev" "$CORR_SHAPED_FILE"; }; then
+        tc qdisc del dev "$dev" root 2>/dev/null || true
     fi
 }
 

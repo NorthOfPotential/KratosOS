@@ -60,8 +60,10 @@ cryptsetup_pass() {
 }
 
 # Create the ephemeral vault key (amnesic flow) if it doesn't already exist.
+# The runtime dir stays 0755 (listing it is harmless; the non-root tray reads
+# stealth.active here); the KEY file itself is 0600 root.
 stealth_make_ephemeral_key() {
-    install -d -m 700 "$KRATOS_RUN"
+    install -d -m 755 "$KRATOS_RUN"
     [[ -r "$VAULT_KEYFILE" ]] && return 0
     ( umask 077; head -c 64 /dev/urandom > "$VAULT_KEYFILE" )
     chmod 600 "$VAULT_KEYFILE"
@@ -119,9 +121,11 @@ vault_create() {
     vault_open
 }
 
-# Verify a Whonix download against the Whonix signing key.
-verify_whonix() {
+# Check a Whonix download against the pinned signing key. Returns non-zero (and
+# prints why) instead of dying, so callers can probe a cached image.
+_whonix_verify_ok() {
     local archive="$1" sig="$2" key="$3" gnupg result=ok
+    [[ -r "$archive" && -r "$sig" ]] || { echo "missing archive or signature" >&2; return 1; }
     gnupg="$(mktemp -d)"
     if ! GNUPGHOME="$gnupg" gpg -q --import "$key" 2>/dev/null; then
         result="cannot import key $key"
@@ -133,7 +137,14 @@ verify_whonix() {
         result="SIGNATURE CHECK FAILED for $archive. Do not use this download."
     fi
     rm -rf "$gnupg"
-    [[ "$result" == ok ]] || die "$result"
+    [[ "$result" == ok ]] && return 0
+    echo "$result" >&2
+    return 1
+}
+
+# Verify a Whonix download against the Whonix signing key (fatal on failure).
+verify_whonix() {
+    _whonix_verify_ok "$1" "$2" "$3" || die "Whonix verification failed — do not use this download"
     ok "Whonix signature verified"
 }
 
@@ -273,13 +284,27 @@ stealth_autoprovision() {
     local key="${KRATOS_ETC}/whonix-signing-key.asc"
     [[ -r "$key" ]] || die "the Whonix signing key is missing ($key); cannot verify a download"
 
-    info "${BOLD}First run: fetching and verifying Whonix${RESET} (one time; then just toggle)."
-    local stage archive
-    stage="$(mktemp -d)"
-    # shellcheck disable=SC2064
-    trap "rm -rf '$stage'" RETURN
-    archive="$(stealth_fetch_whonix "$stage")" || die "could not download Whonix (check your connection, or set STEALTH_WHONIX_URL)"
-    verify_whonix "$archive" "$archive.asc" "$key"
+    # Reuse a previously downloaded+verified image if one is cached, so an
+    # installed system doesn't re-fetch ~1 GB of Whonix (and re-expose the
+    # clearnet download) on every amnesic boot. On the live ISO the cache lives
+    # on the ephemeral overlay, so a live boot still fetches fresh.
+    local cache="$KRATOS_STATE/whonix-cache" archive="" cached=""
+    [[ -d "$cache" ]] && cached="$(find "$cache" -maxdepth 1 -name '*.libvirt.xz' 2>/dev/null | head -n1)"
+    if [[ -n "$cached" ]] && _whonix_verify_ok "$cached" "$cached.asc" "$key"; then
+        info "Using the previously downloaded, signature-verified Whonix image."
+        archive="$cached"
+    else
+        info "${BOLD}First run: fetching and verifying Whonix${RESET} (one time; then just toggle)."
+        local stage
+        stage="$(mktemp -d)"
+        # shellcheck disable=SC2064
+        trap "rm -rf '$stage'" RETURN
+        archive="$(stealth_fetch_whonix "$stage")" || die "could not download Whonix (check your connection, or set STEALTH_WHONIX_URL)"
+        verify_whonix "$archive" "$archive.asc" "$key"
+        # Cache the verified image (root-only) for next boot.
+        install -d -m 700 "$cache"
+        cp -f "$archive" "$archive.asc" "$cache/" && archive="$cache/$(basename "$archive")"
+    fi
     _stealth_provision "$archive"
     ok "Whonix provisioned and verified."
 }
