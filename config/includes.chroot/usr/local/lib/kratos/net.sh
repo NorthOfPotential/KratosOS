@@ -103,14 +103,37 @@ net_mode() {
 
     case "$mode" in
         vpn)
+            net_links on
             wg_up
             load_ruleset vpn
             ;;
-        normal) load_ruleset normal ;;
-        offline) ;;
+        normal)
+            net_links on
+            load_ruleset normal
+            ;;
+        offline)
+            # True offline: the inet ruleset blocks IPv4/IPv6, but link-layer
+            # frames (ARP, etc.) still reveal presence/MAC to the LAN (finding
+            # R6-18). Bring NetworkManager's devices down so NOTHING leaves,
+            # not even at layer 2. Best-effort; the kill-switch ruleset stays as
+            # the backstop. Re-enabled when switching to normal/vpn above.
+            net_links off
+            ;;
     esac
     echo "$mode" > "$KRATOS_STATE/mode"
     ok "network mode: $mode"
+}
+
+# Bring NetworkManager-managed links up/off. Best-effort: absence of nmcli (or
+# a non-NM setup) must not break mode switching — the firewall is the real
+# boundary. We do NOT globally block ARP in nftables (that would break normal
+# and vpn neighbour resolution); instead offline simply has no up links.
+net_links() {
+    command -v nmcli >/dev/null 2>&1 || return 0
+    case "$1" in
+        off) nmcli networking off >/dev/null 2>&1 || true ;;
+        on)  nmcli networking on  >/dev/null 2>&1 || true ;;
+    esac
 }
 
 # Called by kratos-firewall.service before any network interface comes up.

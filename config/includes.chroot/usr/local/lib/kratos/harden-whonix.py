@@ -187,11 +187,20 @@ def check_domain(root):
             raise Violation(f"{name}: <{el.tag}> is not in the allowed device set "
                             f"(possible host<->guest bridge)")
     # An emulated TPM is guest-local and fine; a passthrough TPM is a real host
-    # device bridged into the guest — refuse it.
+    # device bridged into the guest — refuse it. Also refuse any PERSISTENT or
+    # externally-located emulator state (finding R6-27): swtpm state must not be
+    # pinned outside the encrypted persona vault, and a persona TPM must be
+    # transient so nothing TPM-related lingers on the host after Stealth is off.
     for tpm in devices.findall("tpm"):
         backend = tpm.find("backend")
         if backend is None or backend.get("type") != "emulator":
             raise Violation(f"{name}: <tpm> must use an emulator backend, not host passthrough")
+        if (backend.get("persistent_state") or "").lower() in ("yes", "on", "true", "1"):
+            raise Violation(f"{name}: <tpm> emulator must not set persistent_state (no persona TPM state may survive on the host)")
+        # An explicit <backend><source .../></backend> would place swtpm state at
+        # a chosen path — refuse it so state can't land outside the vault.
+        if backend.find("source") is not None or backend.get("path"):
+            raise Violation(f"{name}: <tpm> emulator must not specify an explicit state source/path (keep it transient, inside the vault)")
     # No <qemu:commandline>/<qemu:override> escape hatch at the domain root.
     for child in root:
         if child.tag.startswith("{" + QEMU_NS + "}"):
@@ -275,8 +284,21 @@ def harden_network(root, name):
     bridge.set("delay", "0")
 
 
+# Top-level network elements we understand and consider safe. Anything else in
+# the upstream network XML (portgroups, <route>, <dns> forwarders, <bandwidth>,
+# <dnsmasq:options>, qemu overrides, ...) is REJECTED rather than carried
+# through unexamined (finding R6-28). This is a blocklist-to-allowlist shift for
+# the network XML, mirroring the device allowlist; a full from-scratch rebuild
+# of kx-int/kx-ext from Kratos templates remains a future high-assurance step.
+_ALLOWED_NET_ELEMENTS = frozenset({"name", "uuid", "forward", "bridge", "mac", "ip", "domain", "mtu"})
+
+
 def check_network(root):
     name = root.findtext("name")
+    for el in list(root):
+        if el.tag not in _ALLOWED_NET_ELEMENTS:
+            raise Violation(f"network {name}: <{el.tag}> is not in the allowed network element set "
+                            f"{sorted(_ALLOWED_NET_ELEMENTS)} — refusing unexpected network feature")
     bridge = root.find("bridge")
     if bridge is None or bridge.get("name") != name:
         raise Violation(f"network {name}: bridge must be named {name}")

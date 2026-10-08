@@ -43,6 +43,8 @@ bootcheck_record() {
     ok "recorded boot baseline ($n files)"
     if [[ -s "$BOOTCHECK_PCRS" ]]; then
         ok "recorded TPM PCR baseline"
+    elif ! command -v tpm2_pcrread >/dev/null 2>&1; then
+        warn "TPM measurement UNAVAILABLE: tpm2-tools (tpm2_pcrread) is not installed, so firmware/boot PCRs are NOT baselined — only file hashes are (finding R6-38)"
     else
         warn "no TPM found; only file hashes are baselined"
     fi
@@ -70,12 +72,16 @@ bootcheck_verify() {
     rm -f "$cur"
 
     if [[ -s "$BOOTCHECK_PCRS" ]]; then
-        if diff -q "$BOOTCHECK_PCRS" <(bootcheck_pcr_snapshot) >/dev/null; then
+        if ! command -v tpm2_pcrread >/dev/null 2>&1; then
+            warn "a TPM PCR baseline exists but tpm2_pcrread is gone — CANNOT verify firmware/boot measurements (install tpm2-tools)"
+        elif diff -q "$BOOTCHECK_PCRS" <(bootcheck_pcr_snapshot) >/dev/null; then
             ok "TPM PCRs match baseline"
         else
             bad "TPM PCRs CHANGED — firmware/boot measurements differ"
             rc=1
         fi
+    elif ! command -v tpm2_pcrread >/dev/null 2>&1; then
+        warn "TPM PCR verification unavailable (tpm2-tools not installed); checked file hashes only"
     fi
     if (( rc == 0 )); then
         ok "boot integrity OK"
