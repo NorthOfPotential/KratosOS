@@ -18,17 +18,17 @@
 # The installed Whonix major version, overridable via the pillar
 # (kratos:whonix_version) so you don't edit every template name below.
 #
-# HEADS UP (finding R6-H9): the default below is 17, which pairs with the now
-# EOL Qubes 4.2. Current stable Qubes (4.3) ships Whonix 18
-# (whonix-gateway-18 / whonix-workstation-18). On a modern install you MUST set
-# the pillar to the version your Qubes actually has, e.g.:
+# Default is 18 (finding R6-H9): current stable Qubes (4.3) ships Whonix 18
+# (whonix-gateway-18 / whonix-workstation-18); Qubes 4.2 / Whonix 17 is EOL. On
+# an older install, set the pillar to the version your Qubes actually has:
 #     qubesctl --show-output state.apply kratos saltenv=user \
-#         pillar='{"kratos": {"whonix_version": "18"}}'
-# Moving the default to upstream Qubes/Whonix version discovery (so this can't
-# drift) is tracked as follow-up work; until then this default is intentionally
-# conservative rather than "newest", since a template name that isn't installed
-# fails the run.
-{% set whonix_version = salt['pillar.get']('kratos:whonix_version', '17') %}
+#         pillar='{"kratos": {"whonix_version": "17"}}'
+# We don't auto-pick the "highest installed" template, because only certain
+# Qubes/Whonix pairings are supported; the kratos-require-ws-template check
+# below fails the run loudly if the selected template isn't actually present,
+# rather than silently building against a missing/unsupported one. (Using
+# upstream Qubes version discovery is tracked as further follow-up.)
+{% set whonix_version = salt['pillar.get']('kratos:whonix_version', '18') %}
 {% set whonix_ws = 'whonix-workstation-' ~ whonix_version %}
 {% set whonix_gw_template = 'qubes-template-whonix-gateway-' ~ whonix_version %}
 
@@ -51,6 +51,15 @@
 kratos-require-whonix:
   cmd.run:
     - name: 'qvm-check --quiet sys-whonix || { echo "ERROR: sys-whonix not found; install {{ whonix_gw_template }} and create the sys-whonix gateway, then re-apply." >&2; exit 1; }'
+
+# ---- The selected Whonix WORKSTATION template must exist (finding R6-H9) ----
+# Don't silently build the persona DispVM template against a missing/unsupported
+# Whonix version. Fail loudly and name the pillar override if the template for
+# the configured version isn't installed, so a stale default can't quietly pin
+# the persona to an absent (or EOL) template.
+kratos-require-ws-template:
+  cmd.run:
+    - name: 'qvm-check --quiet {{ whonix_ws }} || { echo "ERROR: template {{ whonix_ws }} is not installed. Install the Whonix workstation template for your Qubes release, or set the kratos:whonix_version pillar to the version you actually have, then re-apply." >&2; exit 1; }'
 
 # ---- Vault qube: persona secrets, no network ever ----
 kratos-vault:
@@ -80,9 +89,11 @@ kratos-ws-dvm:
       - template_for_dispvms: True
       - default_dispvm: ""
       - autostart: False
-    # Don't build the persona workstation unless its Tor gateway is present.
+    # Don't build the persona workstation unless its Tor gateway AND the
+    # selected Whonix workstation template are both present.
     - require:
       - cmd: kratos-require-whonix
+      - cmd: kratos-require-ws-template
 
 # Tag the disposable template (and thus its disposables) as the persona, using
 # the official qvm.tags state — idempotent, and no shelling out to qvm-tags.

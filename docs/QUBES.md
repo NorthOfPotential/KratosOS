@@ -19,7 +19,11 @@ This Qubes tier is for when a *targeted host exploit* is in your threat model.
 | `qubes/policy/30-kratos.policy` | qrexec policy: deny clipboard, file-copy, OpenInVM/URL and RPC **out of** any persona qube — dom0 enforces "nothing leaves the persona" |
 | `qubes/dom0/kratos-q` | dom0 driver: `on` starts `sys-whonix` then a fresh **disposable** persona workstation; `off` kills+removes it (amnesic); `audit` checks the sectioning |
 
-## Install (on a working Qubes OS 4.x with Whonix templates)
+## Install (on a working Qubes OS 4.3 with Whonix 18 templates)
+
+> The Salt formula defaults to Whonix **18** (current Qubes 4.3). On an older
+> release, pass `pillar='{"kratos": {"whonix_version": "17"}}'`. The formula
+> fails loudly if the selected gateway/workstation templates aren't installed.
 
 ```bash
 # 1. Put the formula where dom0's Salt looks, and the policy in place:
