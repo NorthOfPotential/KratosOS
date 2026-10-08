@@ -18,6 +18,18 @@ corr_shape_iface() {
     ip route show default 2>/dev/null | awk '/default/ {print $5; exit}'
 }
 
+# Apply constant-rate shaping + jitter to ONE interface and record it so
+# teardown restores only what we touched. Shared by `corr shape on` and the
+# Stealth correlation profile.
+_corr_shape_dev() {   # <dev> <rate> <jitter>
+    local dev="$1" rate="$2" jitter="$3"
+    # Root: token-bucket filter for a constant sustained rate (hides bursts).
+    # Child: netem adds random jitter (breaks fine-grained timing correlation).
+    tc qdisc replace dev "$dev" root handle 1: tbf rate "$rate" burst 32kbit latency 400ms
+    tc qdisc replace dev "$dev" parent 1:1 handle 10: netem delay "$jitter" "$jitter" distribution normal
+    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$CORR_SHAPED_FILE"
+}
+
 corr_shape_on() {
     load_config
     need_cmd tc ip
@@ -29,18 +41,64 @@ corr_shape_on() {
     warn "volume/timing analysis but is itself a signal you are doing something."
     warn "It does NOT defeat a global adversary. See docs/CORRELATION-RESISTANCE.md."
 
-    # Root: token-bucket filter for a constant sustained rate (hides bursts).
-    # Child: netem adds random jitter (breaks fine-grained timing correlation).
-    tc qdisc replace dev "$dev" root handle 1: tbf \
-        rate "$CORR_SHAPE_RATE" burst 32kbit latency 400ms
-    tc qdisc replace dev "$dev" parent 1:1 handle 10: netem \
-        delay "$CORR_SHAPE_JITTER" "$CORR_SHAPE_JITTER" distribution normal
-    # Record exactly which interface we touched, so shaping off restores only it.
-    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$CORR_SHAPED_FILE"
+    _corr_shape_dev "$dev" "$CORR_SHAPE_RATE" "$CORR_SHAPE_JITTER"
     ok "shaping $dev at $CORR_SHAPE_RATE, jitter $CORR_SHAPE_JITTER"
 
     if [[ "$CORR_DECOY" == on ]]; then
         corr_decoy_start
+    fi
+}
+
+# ── Stealth correlation profile (applied automatically when Stealth starts) ──
+# Driven by CORR_STEALTH_PROFILE:
+#   off      - nothing beyond Tor's own defaults (ConnectionPadding +
+#              vanguards-lite are already on inside the Whonix Gateway).
+#   balanced - DEFAULT. Pad the host uplink to a CONSTANT rate + jitter (and
+#              decoy fill if a sink is set) so a LOCAL observer can't read your
+#              volume/timing, on top of Tor's padding. Low latency, a little
+#              slower. Does NOT defeat a global passive adversary (an unsolved
+#              problem for low-latency onion routing).
+#   max      - use the Nym mixnet for the persona (CORR_MODE=mixnet): end-to-end
+#              cover traffic + per-message mixing = the real global-correlation
+#              defense, at seconds of latency. Experimental.
+corr_stealth_apply() {
+    load_config
+    local profile="${CORR_STEALTH_PROFILE:-balanced}"
+    case "$profile" in
+        off) return 0 ;;
+        max)
+            warn "CORR_STEALTH_PROFILE=max: route the persona through the Nym mixnet"
+            warn "(CORR_MODE=mixnet, needs nym-client in the Workstation) for global-"
+            warn "correlation resistance — high latency. See docs/CORRELATION-RESISTANCE.md."
+            return 0 ;;
+        balanced) : ;;
+        *) warn "unknown CORR_STEALTH_PROFILE '$profile'; treating as balanced" ;;
+    esac
+    if ! command -v tc >/dev/null 2>&1; then
+        warn "tc unavailable; skipping constant-rate uplink padding"; return 0
+    fi
+    local dev; dev="$(corr_shape_iface)"
+    if [[ -z "$dev" ]]; then
+        warn "no default-route interface to pad; skipping uplink padding"; return 0
+    fi
+    _corr_shape_dev "$dev" "${CORR_SHAPE_RATE:-1mbit}" "${CORR_SHAPE_JITTER:-15ms}"
+    ok "uplink padded to a constant ${CORR_SHAPE_RATE:-1mbit} + jitter (local-observer resistance)"
+    if [[ -n "${CORR_DECOY_SINK:-}" ]]; then
+        corr_decoy_start
+    else
+        info "tip: set CORR_DECOY_SINK to also fill idle gaps with decoy traffic"
+    fi
+}
+
+corr_stealth_clear() {
+    command -v tc >/dev/null 2>&1 || return 0
+    corr_decoy_stop
+    local dev
+    if [[ -r "$CORR_SHAPED_FILE" ]]; then
+        while read -r dev; do
+            if [[ -n "$dev" ]]; then tc qdisc del dev "$dev" root 2>/dev/null || true; fi
+        done < "$CORR_SHAPED_FILE"
+        rm -f "$CORR_SHAPED_FILE"
     fi
 }
 

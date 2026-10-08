@@ -585,6 +585,13 @@ stealth_on_steps() {
     ok "Workstation started"
     give_display "$GW"
     give_display "$WS"
+
+    # Correlation-resistance profile (CORR_STEALTH_PROFILE). Best-effort: a
+    # failure here must never block an otherwise-up persona.
+    if command -v corr_stealth_apply >/dev/null 2>&1; then
+        info "${BOLD}Correlation resistance${RESET}"
+        corr_stealth_apply || warn "correlation profile could not be fully applied"
+    fi
 }
 
 # Hand a VM's display socket to the dedicated stealth user ONLY.
@@ -678,6 +685,8 @@ stealth_off_steps() {
     virsh_ net-destroy kx-ext >/dev/null 2>&1 || true
     nft delete table inet kratos_stealth 2>/dev/null || true
     rm -rf "$SPICE_DIR"
+    # Remove any uplink padding the correlation profile installed.
+    if command -v corr_stealth_clear >/dev/null 2>&1; then corr_stealth_clear || true; fi
     ok "stealth networks and firewall removed"
 
     if [[ "${STEALTH_WORKSTATION:-persistent}" == disposable ]] && mountpoint -q "$VAULT_MNT"; then
@@ -721,6 +730,7 @@ stealth_kill() {
     virsh_ destroy "$WS" >/dev/null 2>&1 || true
     virsh_ destroy "$GW" >/dev/null 2>&1 || true
     pkill -KILL -f "guest=kx-" 2>/dev/null || true
+    if command -v corr_stealth_clear >/dev/null 2>&1; then corr_stealth_clear || true; fi
     rm -rf "$SPICE_DIR"
     umount -l "$VAULT_MNT" 2>/dev/null || true
     cryptsetup close "$VAULT_MAPPER" 2>/dev/null || true
