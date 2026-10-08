@@ -50,13 +50,24 @@ read_stdin_pass() {
     [[ -n "$VAULT_PASS" ]] || die "no passphrase on stdin"
 }
 
-# Run cryptsetup with, in order of preference: the GUI passphrase, the ephemeral
-# key file (zero-touch amnesic vault), else an interactive prompt.
+# Run cryptsetup with the right key for the current vault mode.
+#
+# Amnesic mode (STEALTH_VAULT_PERSIST != yes, the default) ALWAYS uses the
+# in-RAM ephemeral key and NEVER a user passphrase — even if one was handed in
+# on stdin (finding R4-6). This is the authoritative enforcement: the tray/GUI
+# cannot silently downgrade the amnesic design by prompting for a passphrase,
+# and a persistence choice can't be made by whoever happens to type one.
+# Only persistent mode (=yes) uses the GUI passphrase, falling back to an
+# interactive prompt when none was supplied.
 cryptsetup_pass() {
-    if [[ -n "$VAULT_PASS" ]]; then
+    if [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]]; then
+        if [[ -r "$VAULT_KEYFILE" ]]; then
+            cryptsetup "$@" --key-file "$VAULT_KEYFILE"
+        else
+            cryptsetup "$@"   # no ephemeral key yet (pre make_ephemeral_key)
+        fi
+    elif [[ -n "$VAULT_PASS" ]]; then
         printf '%s' "$VAULT_PASS" | cryptsetup "$@" --key-file -
-    elif [[ "${STEALTH_VAULT_PERSIST:-no}" != yes && -r "$VAULT_KEYFILE" ]]; then
-        cryptsetup "$@" --key-file "$VAULT_KEYFILE"
     else
         cryptsetup "$@"
     fi
@@ -669,7 +680,13 @@ stealth_on() {
     if [[ "$STEALTH_REQUIRE_VPN" == yes && "$(saved_mode)" != vpn ]]; then
         die "STEALTH_REQUIRE_VPN=yes but network mode is '$(saved_mode)'; run: sudo kratos mode vpn"
     fi
-    [[ "${1:-}" == --passphrase-stdin ]] && read_stdin_pass
+    if [[ "${1:-}" == --passphrase-stdin ]]; then
+        read_stdin_pass
+        # Amnesic vault ignores any passphrase (cryptsetup_pass enforces this);
+        # say so rather than letting the caller believe it set one.
+        [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]] && \
+            warn "amnesic vault: the supplied passphrase is ignored (the in-RAM key is used); set STEALTH_VAULT_PERSIST=yes for a passphrase vault"
+    fi
     # Zero-touch: on a fresh boot the vault doesn't exist yet (or its in-RAM key
     # is gone). Provision automatically — download + verify Whonix, build the
     # amnesic vault — so "boot the ISO, then toggle Stealth" is all it takes.

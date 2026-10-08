@@ -14,11 +14,34 @@ from PyQt6.QtWidgets import (
 KRATOS = "/usr/local/bin/kratos"
 STEALTH_FLAG = "/run/kratos/stealth.active"
 MODE_FILE = "/var/lib/kratos/mode"
+CONF_FILE = "/etc/kratos/kratos.conf"
 MODES = (("normal", "Normal"), ("vpn", "VPN (kill switch)"), ("offline", "Offline"))
 
 
 def stealth_active():
     return os.path.exists(STEALTH_FLAG)
+
+
+def conf_value(key, default=""):
+    """Read a KEY=value from kratos.conf (best effort; env-override wins)."""
+    env = os.environ.get(key)
+    if env is not None:
+        return env
+    try:
+        with open(CONF_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f"{key}="):
+                    val = line.split("=", 1)[1].split("#", 1)[0].strip()
+                    return val.strip('"').strip("'")
+    except OSError:
+        pass
+    return default
+
+
+def vault_persists():
+    """True only when the vault is a persistent passphrase vault (not amnesic)."""
+    return conf_value("STEALTH_VAULT_PERSIST", "no").lower() == "yes"
 
 
 def current_mode():
@@ -159,12 +182,19 @@ class Tray(QSystemTrayIcon):
                 self._run("Stealth Mode: OFF", ["stealth", "off"])
             return
         self.stealth.setChecked(False)
+        view = lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"])
+        if not vault_persists():
+            # Amnesic vault (default): the key lives only in RAM and is thrown
+            # away on lock. Prompting for a passphrase here would defeat that
+            # design (finding R4-6), so just toggle it on — no passphrase.
+            self._run("Stealth Mode: ON", ["stealth", "on"], on_success=view)
+            return
         pw, ok = QInputDialog.getText(
             None, "Stealth Mode", "Stealth vault passphrase:", QLineEdit.EchoMode.Password)
         if not ok or not pw:
             return
         self._run("Stealth Mode: ON", ["stealth", "on", "--passphrase-stdin"], pw,
-                  on_success=lambda: subprocess.Popen(["pkexec", KRATOS, "stealth", "view"]))
+                  on_success=view)
         del pw
 
     def set_mode(self, mode):
