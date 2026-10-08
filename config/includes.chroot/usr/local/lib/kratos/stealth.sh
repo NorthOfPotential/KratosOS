@@ -272,6 +272,30 @@ _whonix_pick_latest() {   # <index-file> <baseurl> <flavor>
     printf '%s%s\n' "$base" "$name"
 }
 
+# Version string embedded in a Whonix KVM image filename, or empty.
+_whonix_file_version() {   # <path-or-name>
+    local b="${1##*/}"
+    [[ "$b" =~ Whonix-[^-]+-([0-9][0-9.]*)\.Intel_AMD64 ]] && printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+# Newest version the mirror currently advertises, or empty if it can't be
+# reached. Best-effort and quiet: a freshness check must never block provisioning
+# when offline. Honors STEALTH_WHONIX_URL (a pin means "this is latest").
+_whonix_remote_latest_version() {
+    local base="${STEALTH_WHONIX_BASEURL:-https://download.whonix.org/libvirt/}"
+    local flavor="${STEALTH_WHONIX_FLAVOR:-Xfce}" url idx
+    if [[ -n "${STEALTH_WHONIX_URL:-}" ]]; then
+        _whonix_file_version "$STEALTH_WHONIX_URL"; return 0
+    fi
+    base="${base%/}/"
+    idx="$(mktemp)"
+    if curl -fL --proto "=https" --tlsv1.2 --connect-timeout 20 -sS "$base" -o "$idx" 2>/dev/null \
+        && url="$(_whonix_pick_latest "$idx" "$base" "$flavor")"; then
+        _whonix_file_version "$url"
+    fi
+    rm -f "$idx"
+}
+
 # Download the latest Whonix KVM image + its .asc into <destdir>. Echoes the
 # archive path on stdout (progress/logs go to stderr). The signature is verified
 # by the caller against the pinned key, so a hostile mirror cannot substitute an
@@ -319,21 +343,52 @@ stealth_autoprovision() {
     # clearnet download) on every amnesic boot. On the live ISO the cache lives
     # on the ephemeral overlay, so a live boot still fetches fresh.
     local cache="$KRATOS_STATE/whonix-cache" archive="" cached=""
-    [[ -d "$cache" ]] && cached="$(find "$cache" -maxdepth 1 -name '*.libvirt.xz' 2>/dev/null | head -n1)"
+    # Pick the NEWEST cached image by version, never an arbitrary one, so an old
+    # file lingering in the cache can't be resurrected over a newer one.
+    if [[ "${STEALTH_WHONIX_CACHE:-yes}" == yes && -d "$cache" ]]; then
+        cached="$(find "$cache" -maxdepth 1 -name 'Whonix-*.libvirt.xz' 2>/dev/null | sort -V | tail -n1)"
+    fi
+    local use_cache=no
     if [[ -n "$cached" ]] && _whonix_verify_ok "$cached" "$cached.asc" "$key"; then
-        info "Using the previously downloaded, signature-verified Whonix image."
+        # A valid signature proves the image is GENUINE, not that it is CURRENT
+        # (finding R4-7): an attacker who can serve you a stale-but-signed image,
+        # or simple bit-rot over months, must not pin you to a vulnerable build.
+        use_cache=yes
+        local max_age="${STEALTH_WHONIX_MAX_AGE_DAYS:-90}"
+        if [[ "$max_age" =~ ^[0-9]+$ ]] && (( max_age > 0 )) \
+           && [[ -n "$(find "$cached" -maxdepth 0 -mtime +"$max_age" 2>/dev/null)" ]]; then
+            warn "cached Whonix image is older than ${max_age} days; refreshing."
+            use_cache=no
+        else
+            # If the mirror advertises a newer version, prefer it. Best-effort:
+            # when offline (empty result) we keep using the verified cache.
+            local remote_ver cached_ver
+            remote_ver="$(_whonix_remote_latest_version)"
+            cached_ver="$(_whonix_file_version "$cached")"
+            if [[ -n "$remote_ver" && -n "$cached_ver" && "$remote_ver" != "$cached_ver" ]] \
+               && [[ "$(printf '%s\n%s\n' "$cached_ver" "$remote_ver" | sort -V | tail -n1)" == "$remote_ver" ]]; then
+                warn "a newer Whonix image ($remote_ver > $cached_ver) is available; refreshing."
+                use_cache=no
+            fi
+        fi
+    fi
+    if [[ "$use_cache" == yes ]]; then
+        info "Using the previously downloaded, signature-verified Whonix image ($(_whonix_file_version "$cached"))."
         archive="$cached"
     else
-        info "${BOLD}First run: fetching and verifying Whonix${RESET} (one time; then just toggle)."
+        info "${BOLD}Fetching and verifying Whonix${RESET} (one time per release; then just toggle)."
         local stage
         stage="$(mktemp -d)"
         # shellcheck disable=SC2064
         trap "rm -rf '$stage'" RETURN
         archive="$(stealth_fetch_whonix "$stage")" || die "could not download Whonix (check your connection, or set STEALTH_WHONIX_URL)"
         verify_whonix "$archive" "$archive.asc" "$key"
-        # Cache the verified image (root-only) for next boot.
-        install -d -m 700 "$cache"
-        cp -f "$archive" "$archive.asc" "$cache/" && archive="$cache/$(basename "$archive")"
+        if [[ "${STEALTH_WHONIX_CACHE:-yes}" == yes ]]; then
+            # Replace the cache with ONLY this verified image, so stale older
+            # builds don't accumulate and can't be picked up later.
+            rm -rf "$cache"; install -d -m 700 "$cache"
+            cp -f "$archive" "$archive.asc" "$cache/" && archive="$cache/$(basename "$archive")"
+        fi
     fi
     _stealth_provision "$archive"
     ok "Whonix provisioned and verified."

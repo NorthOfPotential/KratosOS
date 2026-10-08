@@ -122,4 +122,60 @@ echo "— autoprovision happy path fetches, verifies, provisions —"
 ) && pass "verifies the download, then provisions" \
   || flunk "autoprovision did not verify+provision in order"
 
+echo "— a verified, current cached image is reused (no re-download) —"
+(
+    load
+    export STEALTH_AUTOPROVISION=yes STEALTH_WHONIX_CACHE=yes STEALTH_WHONIX_MAX_AGE_DAYS=90
+    saved_mode() { echo normal; }
+    need_cmd() { :; }
+    mkdir -p "$KRATOS_STATE/whonix-cache"
+    : > "$KRATOS_STATE/whonix-cache/Whonix-Xfce-17.4.0.0.Intel_AMD64.qcow2.libvirt.xz"
+    : > "$KRATOS_STATE/whonix-cache/Whonix-Xfce-17.4.0.0.Intel_AMD64.qcow2.libvirt.xz.asc"
+    _whonix_verify_ok() { return 0; }                   # cache verifies
+    _whonix_remote_latest_version() { echo 17.4.0.0; }  # mirror has the same version
+    stealth_fetch_whonix() { echo "FETCHED" >> "$tmp/calls2"; echo "$tmp/x.libvirt.xz"; }
+    _stealth_provision() { echo "provision $1" >> "$tmp/calls2"; }
+    stealth_autoprovision >/dev/null 2>&1
+    ! grep -q FETCHED "$tmp/calls2" \
+        && grep -q "whonix-cache/Whonix-Xfce-17.4.0.0" "$tmp/calls2"
+) && pass "reuses the newest verified cache without downloading" \
+  || flunk "did not reuse a current cached image"
+
+echo "— a newer image on the mirror refreshes the cache —"
+(
+    load
+    export STEALTH_AUTOPROVISION=yes STEALTH_WHONIX_CACHE=yes STEALTH_WHONIX_MAX_AGE_DAYS=0
+    saved_mode() { echo normal; }
+    need_cmd() { :; }
+    mkdir -p "$KRATOS_STATE/whonix-cache"
+    : > "$KRATOS_STATE/whonix-cache/Whonix-Xfce-17.3.0.0.Intel_AMD64.qcow2.libvirt.xz"
+    : > "$KRATOS_STATE/whonix-cache/Whonix-Xfce-17.3.0.0.Intel_AMD64.qcow2.libvirt.xz.asc"
+    _whonix_verify_ok() { return 0; }
+    _whonix_remote_latest_version() { echo 17.4.0.0; }   # newer than cache
+    verify_whonix() { :; }
+    stealth_fetch_whonix() { echo "FETCHED" >> "$tmp/calls3"; echo "$tmp/new.libvirt.xz"; }
+    _stealth_provision() { echo "provision $1" >> "$tmp/calls3"; }
+    stealth_autoprovision >/dev/null 2>&1
+    grep -q FETCHED "$tmp/calls3"
+) && pass "refreshes when the mirror advertises a newer version" \
+  || flunk "did not refresh for a newer image"
+
+echo "— STEALTH_WHONIX_CACHE=no never reuses a cached image —"
+(
+    load
+    export STEALTH_AUTOPROVISION=yes STEALTH_WHONIX_CACHE=no
+    saved_mode() { echo normal; }
+    need_cmd() { :; }
+    mkdir -p "$KRATOS_STATE/whonix-cache"
+    : > "$KRATOS_STATE/whonix-cache/Whonix-Xfce-17.9.9.9.Intel_AMD64.qcow2.libvirt.xz"
+    : > "$KRATOS_STATE/whonix-cache/Whonix-Xfce-17.9.9.9.Intel_AMD64.qcow2.libvirt.xz.asc"
+    _whonix_verify_ok() { return 0; }
+    verify_whonix() { :; }
+    stealth_fetch_whonix() { echo "FETCHED" >> "$tmp/calls4"; echo "$tmp/n.libvirt.xz"; }
+    _stealth_provision() { :; }
+    stealth_autoprovision >/dev/null 2>&1
+    grep -q FETCHED "$tmp/calls4"
+) && pass "cache disabled => always downloads fresh" \
+  || flunk "cache=no still reused a cached image"
+
 exit "$fail"
