@@ -38,7 +38,8 @@ everyone.
 
 ### 2. Local-link shaping (opt-in, `CORR_LINK_SHAPING=on`, needs `vpn` mode)
 `kratos corr shape on` installs, on your **you→VPN uplink only**:
-- a **token-bucket rate limit** (`CORR_SHAPE_RATE`) so bursts become a flat rate;
+- a **token-bucket rate limit** (`CORR_SHAPE_RATE`) that caps bursts to a ceiling
+  (it limits, it does not by itself generate constant traffic);
 - **netem jitter** (`CORR_SHAPE_JITTER`) so fine-grained timing is smeared;
 - optional **decoy traffic** (`CORR_DECOY`, via `kratos-decoy`) to a sink inside
   the tunnel, filling the pipe with cover so volume is constant.
@@ -115,24 +116,28 @@ Stealth Mode applies one profile automatically on start:
 
 | Profile | What it does | Latency | Against a LOCAL observer (ISP) | Against a GLOBAL adversary |
 |---|---|---|---|---|
-| `off` | Tor defaults only (connection padding + vanguards-lite, on inside the Whonix Gateway). Maximum blend-in. | lowest | volume/timing visible | not defeated |
-| `balanced` **(default)** | Also pad the host uplink to a **constant rate + jitter** (plus decoy fill if `CORR_DECOY_SINK` is set). | low, a little slower | volume/timing **blinded** | not defeated |
-| `max` | Route the persona through the **Nym mixnet** (`CORR_MODE=mixnet`): end-to-end cover traffic + per-message mixing. | seconds | blinded | **real resistance** |
+| `off` **(default)** | Tor defaults only (connection padding + vanguards-lite, on inside the Whonix Gateway). Maximum blend-in. | lowest | volume/timing visible | not defeated |
+| `balanced` | **Rate-limit** the host uplink (`CORR_SHAPE_RATE`) + add **jitter**. A decoy cover stream is added only if `CORR_DECOY_SINK` is set *and* network mode is `vpn`. | low, a little slower | bursts smoothed; idle-vs-active still visible without a decoy | not defeated |
+| `max` | Same host shaping as `balanced`, and **warns** that the Nym mixnet is not active. It does **not** route through Nym. | low, a little slower | same as `balanced` | not defeated |
 
-**Why `balanced` is the default here:** it's the best low-latency anti-correlation
-KratosOS can do on the host — a constant-rate pipe denies a local/regional
-observer the volume-and-timing signal that end-to-end confirmation leans on,
-layered on top of Tor's own padding. It is explicitly *a little slower* (the
-token-bucket caps throughput), which is the accepted cost.
+**Why `off` is the default:** it is the honest baseline. The `balanced`/`max`
+shaping is a rate **limiter** plus jitter, not a traffic **generator**: with no
+running decoy it smooths bursts and perturbs fine timing, but it does **not**
+hide idle-vs-active periods, so calling it "constant-rate padding" would be a
+lie. A constant-rate pipe only exists when you also run a decoy cover stream
+(`CORR_DECOY` + `CORR_DECOY_SINK`) through the VPN tunnel. Shaping also makes
+your uplink look *unusual* to the same local observer, so it is a deliberate
+opt-in, not something we switch on for every user.
 
-**The honest tradeoff (read this):** a constant-rate uplink does not look like an
-ordinary Tor/VPN user, so to the *same* local observer you now stand out as
-"someone running padding." You are trading *blend-in* for *volume/timing
-blinding*. If your threat model is a local observer doing traffic analysis, that
-trade is worth it. If it is "don't be noticed using Tor at all," set
-`CORR_STEALTH_PROFILE=off` (and use bridges). Neither setting defeats a true
-global passive adversary on low-latency Tor — **only `max` (the mixnet) does**,
-and it costs seconds of latency. Tune the rate with `CORR_SHAPE_RATE`.
+**The honest tradeoff (read this):** turning on `balanced` trades *blend-in* for
+*partial volume/timing blinding* against a local observer, and only becomes true
+constant-rate cover with a decoy running inside the tunnel. If your threat model
+is "a local observer doing traffic analysis," enable it (and ideally a decoy);
+if it is "don't be noticed using Tor at all," leave it `off` and use bridges.
+Neither `balanced` nor `max` defeats a true global passive adversary on
+low-latency Tor — **only the Nym mixnet (`CORR_MODE=mixnet`) does**, at seconds
+of latency, and `max` does *not* enable it for you (KratosOS does not yet
+provision `nym-client` into the persona). Tune the rate with `CORR_SHAPE_RATE`.
 
 ## How we compare to Vanguards and MUFFLER
 
