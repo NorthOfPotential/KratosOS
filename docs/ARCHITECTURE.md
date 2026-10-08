@@ -47,8 +47,11 @@ libvirt/kx-*.xml         hardened, validated VM and network definitions
 
 VMs and networks are created with `virsh create` / `net-create` (transient), so
 `/etc/libvirt` never holds them. VM displays are SPICE over a UNIX socket in
-`/run/kratos/spice/`, owned by the desktop user. That gives screen and input
-only: the desktop user has no libvirt rights and can't reconfigure the VMs.
+`/run/kratos/spice/`, which is `root:kstealth` (mode 0710) — the dedicated
+`kstealth` persona-seat user, NOT the ordinary desktop user, who has no access
+at all. Each socket is handed to `kstealth` race-free (inode-pinned, no symlink
+follow). That gives the persona seat screen and input only: it has no libvirt
+rights and can't reconfigure the VMs.
 
 ## Ordering guarantees (tested in `tests/test_stealth_order.sh`)
 

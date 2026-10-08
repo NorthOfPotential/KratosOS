@@ -198,8 +198,12 @@ net_status() {
     else
         bad "IPv6 enabled"
     fi
-    if resolvectl status 2>/dev/null | grep -q '+DNSOverTLS'; then
-        ok "DNS over TLS"
+    # Be honest about what protects DNS in each mode: DoT in normal mode;
+    # inside the WireGuard tunnel (NOT DoT) in vpn mode (finding R6-61).
+    if [[ "$(saved_mode)" == vpn ]]; then
+        info "  DNS: via the VPN's resolver, inside the WireGuard tunnel (not DoT)"
+    elif resolvectl status 2>/dev/null | grep -q '+DNSOverTLS'; then
+        ok "DNS over TLS (system resolver; plain port-53 blocked)"
     else
         warn "DNS over TLS not active"
     fi

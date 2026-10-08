@@ -34,7 +34,7 @@ Turn it on from the shield icon in the system tray, or with `sudo kratos stealth
 
 **ON** (in this order):
 1. **Host lockdown:** swap off, suspend/hibernate blocked, Bluetooth and webcam off, new USB devices blocked, on-access malware scanning on, reconnect with a fresh random MAC
-2. **Unlock the stealth vault:** a separate LUKS2 container with its own passphrase
+2. **Unlock the stealth vault:** a separate LUKS2 container. By default it is *amnesic* — a random key kept only in RAM and destroyed when Stealth turns off, so each session is rebuilt fresh and nothing persists (no passphrase to type). Set `STEALTH_VAULT_PERSIST=yes` for a persistent vault unlocked with a passphrase you choose.
 3. **Isolation check:** refuses to start if the Workstation has any network path other than the Gateway, or has clipboard/file sharing/USB redirection
 4. **Stealth firewall:** the Workstation's network is never forwarded or reachable from the host
 5. **Start Gateway** (Tor), **then Workstation**, and open its window
@@ -48,19 +48,23 @@ Turn it on from the shield icon in the system tray, or with `sudo kratos stealth
 6. Undo the host lockdown
 
 The VMs are transient: their definitions live **inside** the vault. With
-Stealth Mode off, the system holds no record of them; there's only an encrypted
-file.
+Stealth Mode off, the system holds no record of the running persona; the vault
+is an encrypted file (and in the default amnesic mode its key is gone from RAM).
+Note: on an installed system with Whonix caching enabled (the default), a
+verified Whonix image is also kept under `/var/lib/kratos/whonix-cache/` — inside
+the LUKS-encrypted root, so encrypted at rest, but it is a persistent on-disk
+artifact that reveals Whonix use. Set `STEALTH_WHONIX_CACHE=no` to keep nothing.
 
 ## Everyday privacy (always on)
 
 | | |
 |---|---|
 | Firewall | Nothing can connect in. LAN announcements (mDNS, LLMNR, SSDP, NetBIOS) blocked. SMB never goes to the internet. |
-| DNS | DNS over TLS to Quad9 (or the VPN's DNS in VPN mode) |
+| DNS | Normal mode: the system resolver uses DNS over TLS to Quad9 and plain port-53 DNS is blocked (an app doing its own DoH over 443 is not forced through it). VPN mode: DNS goes to the VPN's resolver, plaintext *inside* the WireGuard tunnel (protected by the tunnel, not DoT). |
 | Network identity | Random MAC per connection, hostname not sent via DHCP, IPv6 off, no connectivity-check pings |
 | VPN | `kratos vpn-import` a WireGuard config (e.g. Proton VPN). Kill switch tested: nothing leaves outside the tunnel. |
 | Browser | Firefox with telemetry off, strict tracking protection, HTTPS-only, uBlock Origin, no WebRTC IP leak |
-| System | Logs in RAM only, no recent-files history, AppArmor, Firejail sandboxes, USBGuard, hardened kernel options |
+| System | systemd journal is volatile (RAM); some services (e.g. auditd) still keep their own logs on the encrypted root — not a blanket "no logs on disk". No recent-files history, AppArmor, Firejail sandboxes, USBGuard, hardened kernel options |
 | Tools | `kratos scrub` (metadata), `kratos shred`, `kratos scan` (ClamAV + rkhunter), panic button |
 
 ## Migrating from Windows 11
@@ -70,7 +74,7 @@ file.
    powershell -ExecutionPolicy Bypass -File Export-WindowsData.ps1 -Destination E:\
    ```
    It copies your files, bookmarks and software list, and writes a SHA-256 manifest and a checklist. Make a second copy.
-2. **Install KratosOS** from the USB stick (full-disk encryption on).
+2. **Install KratosOS** from the USB stick. In the Calamares installer, choose the **encrypted** install option (select "Encrypt system" / enter a passphrase) — KratosOS ships the upstream Calamares encryption option but does not yet force it, so this is a manual choice you must make.
 3. **Import:** `kratos migrate --from /media/$USER/<drive>/KratosExport`. It verifies every file against the manifest and suggests Linux replacements for your Windows software.
 
 Full guide: [`docs/MIGRATION.md`](docs/MIGRATION.md).

@@ -124,12 +124,18 @@ and a disposable Workstation option.
 
 ## Known limitations called out by review (honest notes)
 
-- **One polkit action covers the whole `kratos` tool.** `org.kratos.manage`
-  authorizes `/usr/local/bin/kratos` regardless of subcommand, so a retained
-  authorization for a low-risk action (e.g. a network-mode change) also covers
-  higher-risk paths in the same binary. We do **not** use `auth_admin_keep` for
-  the sensitive actions to limit this; splitting the high-risk operations
-  (stealth, migrate) into separate narrowly-scoped privileged helpers is planned.
+- **One polkit action covers the whole `kratos` tool, and it uses
+  `auth_admin_keep`.** `org.kratos.manage` authorizes `/usr/local/bin/kratos`
+  regardless of subcommand with `<allow_active>auth_admin_keep</allow_active>`,
+  so one admin authentication is cached and a later low-risk action (e.g. a
+  network-mode change) shares that retained authorization with higher-risk paths
+  in the same binary (stealth, migrate, shred, scan). This is a real weakness:
+  malware in the active desktop session could ride the cached authorization to
+  invoke a higher-risk subcommand. Splitting the high-risk operations into
+  separate, narrowly-scoped privileged helpers with their own polkit actions
+  (and not retaining authorization for destructive arbitrary-path operations) is
+  planned and tracked; until then, treat an authenticated session as able to run
+  any `kratos` subcommand.
 - **`kratos shred` / Stealth log wiping is best-effort.** `shred` cannot
   guarantee physical overwrite on SSDs, flash (FTL), or copy-on-write/snapshotted
   storage, and `echo 3 > drop_caches` drops caches — it is not memory
