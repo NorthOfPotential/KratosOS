@@ -37,23 +37,29 @@ TORRC
 chmod 644 "$dropdir/50_kratos_corr.conf"
 echo "+ wrote $dropdir/50_kratos_corr.conf (ConnectionPadding on, reduced-padding off)"
 
-# 2) Full vanguards add-on (optional; present in Whonix repos).
+# 2) Full vanguards add-on (optional; present in Whonix repos). Track whether it
+#    actually ended up enabled, so the final message doesn't overclaim.
+vg_full=0
 if systemctl list-unit-files 2>/dev/null | grep -q '^vanguards'; then
-    systemctl enable --now vanguards 2>/dev/null \
-        && echo "+ enabled the full vanguards add-on (systemd unit)" \
-        || echo "- could not enable the vanguards unit; check 'systemctl status vanguards'"
+    if systemctl enable --now vanguards 2>/dev/null; then
+        vg_full=1; echo "+ enabled the full vanguards add-on (systemd unit)"
+    else
+        echo "- vanguards unit present but did not start; check 'systemctl status vanguards'"
+    fi
 elif command -v apt-get >/dev/null 2>&1; then
     echo "  installing the vanguards add-on..."
-    if apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends vanguards >/dev/null 2>&1; then
-        systemctl enable --now vanguards 2>/dev/null \
-            && echo "+ installed and enabled the full vanguards add-on" \
-            || echo "- vanguards installed but the unit did not start; check 'systemctl status vanguards'"
+    apt-get update >/dev/null 2>&1 || true   # best-effort; a cached pkg can still install
+    if apt-get install -y --no-install-recommends vanguards >/dev/null 2>&1; then
+        if systemctl enable --now vanguards 2>/dev/null; then
+            vg_full=1; echo "+ installed and enabled the full vanguards add-on"
+        else
+            echo "- vanguards installed but the unit did not start; check 'systemctl status vanguards'"
+        fi
     else
-        echo "- could not install 'vanguards' (offline, or not in the repos). vanguards-lite"
-        echo "  is still active by default; the full add-on is optional."
+        echo "- could not install 'vanguards' (offline, or not in the repos); vanguards-lite stays active."
     fi
 else
-    echo "- no apt here; skipping the full add-on. vanguards-lite is still active."
+    echo "- no apt here; skipping the full add-on; vanguards-lite stays active."
 fi
 
 # 3) Reload Tor so the padding drop-in takes effect.
@@ -62,4 +68,12 @@ if systemctl reload-or-restart tor@default 2>/dev/null || systemctl reload-or-re
 else
     echo "- could not reload Tor automatically; restart it to apply the padding config"
 fi
-echo "done. vanguards-lite was already on; this added full vanguards + max padding."
+
+# Honest summary: only claim the full add-on if it actually enabled.
+if [ "$vg_full" -eq 1 ]; then
+    echo "done. Enabled the FULL vanguards add-on + max connection padding (vanguards-lite was already on)."
+else
+    echo "done. Max connection padding applied; vanguards-LITE remains active (it always is)."
+    echo "The FULL add-on was NOT enabled — see the messages above. That is fine for a"
+    echo "browsing persona; the full add-on mainly helps onion-service operators."
+fi

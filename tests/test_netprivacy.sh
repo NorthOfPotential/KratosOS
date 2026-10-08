@@ -24,11 +24,15 @@ chk "$nm" '^connection\.llmnr=0'                 "LLMNR off"
 echo "— optional Gateway hardening helper (vanguards + padding) —"
 gwh="$here/../workstation/gateway/kratos-gw-harden"
 if [[ -f "$gwh" ]]; then
+    # Assert the real logic (not just the word 'vanguards' in a comment): the
+    # padding directives, an actual `systemctl enable --now vanguards`, and an
+    # `apt-get install ... vanguards` fallback; and that it parses.
     if grep -qE '^ConnectionPadding 1' "$gwh" && grep -qE '^ReducedConnectionPadding 0' "$gwh" \
-       && grep -q 'vanguards' "$gwh" && bash -n "$gwh"; then
-        pass "gw-harden enables full padding + the vanguards add-on and parses"
+       && grep -qE 'systemctl enable --now vanguards' "$gwh" \
+       && grep -qE 'apt-get install .*vanguards' "$gwh" && bash -n "$gwh"; then
+        pass "gw-harden enables full padding + actually enables/installs vanguards, and parses"
     else
-        flunk "gw-harden missing padding/vanguards directives or has a syntax error"
+        flunk "gw-harden missing padding/vanguards LOGIC or has a syntax error"
     fi
 else
     flunk "Gateway hardening helper not shipped"

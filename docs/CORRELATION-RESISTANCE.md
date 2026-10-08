@@ -146,16 +146,21 @@ Stealth padding profile addresses; the two are complementary. The **full
 `vanguards` add-on** (adds layer-3 guards + rendguard/bandguards monitors) is
 stronger but mainly benefits onion-*service* operators, and its extra hop costs
 latency — so it is **opt-in, not default**, for a low-latency browsing persona.
-To enable it, run the shipped helper **inside the Gateway** (there is no
-host→guest channel by design):
+
+The helper ships on the KratosOS host for reference at
+`/usr/share/kratos/gateway/kratos-gw-harden`. Because KratosOS keeps **no
+host→guest channel by design**, it is not present inside the Gateway — copy its
+contents into the kx-gw Gateway (paste it into an editor there, or fetch it over
+the persona's own network) and run it as root:
 
 ```
-# in the kx-gw Gateway, as root:
-sudo /usr/share/kratos/gateway/kratos-gw-harden
+# inside the kx-gw Gateway, as root, after pasting the script in:
+sudo bash kratos-gw-harden
 ```
 
 It enables the full add-on and turns on maximum Tor connection padding
-(`ConnectionPadding 1`, `ReducedConnectionPadding 0`).
+(`ConnectionPadding 1`, `ReducedConnectionPadding 0`), and prints honestly
+whether the full add-on actually enabled (vanguards-lite is always on regardless).
 
 **MUFFLER (2025).** MUFFLER obfuscates flow correlation at Tor's **final egress
 hop** by shuffling/splitting N real connections onto M virtual connections
