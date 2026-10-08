@@ -135,6 +135,77 @@ class EffectivePolicy(unittest.TestCase):
         self.assertFalse(ran)
         self.assertEqual(problems, [])
 
+    def _fake_engine(self, allow_pairs=(), ask_pairs=(), raise_on_none_resolution=False):
+        """Build a (policy, Request, AccessDenied, system_info) seam that mimics
+        qrexec: deny (raise AccessDenied) unless (src,tgt,svc) is in allow/ask."""
+        class AccessDenied(Exception):
+            pass
+
+        class AllowResolution:  # names matter: verdict() checks the class name
+            pass
+
+        class AskResolution:
+            pass
+
+        class Request:
+            def __init__(self, service, argument, source, target, *,
+                         system_info, allow_resolution_type=AllowResolution,
+                         ask_resolution_type=AskResolution):
+                # Reproduce the real bug: constructing an allow with a None
+                # resolution type blows up (as Allow.evaluate would).
+                if raise_on_none_resolution and allow_resolution_type is None:
+                    raise TypeError("None is not callable")
+                self.key = (source, target, service)
+
+        class Policy:
+            def evaluate(self, req):
+                if req.key in allow_pairs:
+                    return AllowResolution()
+                if req.key in ask_pairs:
+                    return AskResolution()
+                raise AccessDenied()
+
+        system_info = {"domains": {"kratos-ws-live": {}, "personal": {}, "sys-whonix": {}}}
+        return (Policy(), Request, AccessDenied, system_info)
+
+    def test_real_eval_catches_egress_and_inbound_allow(self):
+        """With a real engine (faked), an allow in EITHER direction is reported
+        (findings R8-2 resolution types, R8-3 both directions)."""
+        eng = self._fake_engine(allow_pairs={
+            ("kratos-ws-live", "personal", "qubes.Filecopy"),      # egress hole
+            ("personal", "kratos-ws-live", "qubes.ClipboardPaste"),  # inbound hole
+        })
+        ran, problems = kq.evaluate_with_real_policy(_engine=eng)
+        self.assertTrue(ran)
+        self.assertTrue(any("egress hole" in p and "Filecopy" in p for p in problems),
+                        f"egress allow not reported: {problems}")
+        self.assertTrue(any("inbound hole" in p and "ClipboardPaste" in p for p in problems),
+                        f"inbound allow not reported: {problems}")
+
+    def test_real_eval_reports_ask_as_path(self):
+        eng = self._fake_engine(ask_pairs={
+            ("kratos-ws-live", "sys-whonix", "qubes.OpenURL")})
+        ran, problems = kq.evaluate_with_real_policy(_engine=eng)
+        self.assertTrue(ran)
+        self.assertTrue(any("path" in p and "OpenURL" in p for p in problems))
+
+    def test_real_eval_all_deny_is_clean(self):
+        ran, problems = kq.evaluate_with_real_policy(_engine=self._fake_engine())
+        self.assertTrue(ran)
+        self.assertEqual(problems, [])
+
+    def test_real_eval_does_not_pass_none_resolution_types(self):
+        """Regression for R8-2: the loop must NOT pass None resolution types
+        (which would make the real engine raise on an allow and self-disable).
+        A fake that raises when given None must therefore never be triggered —
+        the evaluation still runs and finds the allow."""
+        eng = self._fake_engine(
+            allow_pairs={("kratos-ws-live", "personal", "qubes.Filecopy")},
+            raise_on_none_resolution=True)
+        ran, problems = kq.evaluate_with_real_policy(_engine=eng)
+        self.assertTrue(ran, "evaluator self-disabled (passed None resolution types?)")
+        self.assertTrue(any("Filecopy" in p for p in problems))
+
     def test_runtime_policy_dir_is_audited(self):
         """A runtime allow dropped into /run/qubes/policy.d must be caught too
         (finding R4-9): qrexec loads it, so the audit must see it."""
