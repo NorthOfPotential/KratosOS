@@ -73,7 +73,12 @@ cryptsetup_pass() {
     fi
 }
 
-# Create the ephemeral vault key (amnesic flow) if it doesn't already exist.
+# Create the amnesic vault key if it doesn't already exist. This is a
+# BOOT-SESSION key: it lives on unswappable ramfs for the whole boot, is kept
+# across Stealth OFF->ON so the same vault (and the Gateway's Tor guard state)
+# can be reopened without a rebuild (findings R6-H4/H5), and is destroyed only
+# at reboot/shutdown (ramfs cleared) or by `kratos panic`. That is where true
+# amnesia happens; a normal OFF keeps it.
 # The runtime dir stays 0755 (listing it is harmless; the non-root tray reads
 # stealth.active here); the KEY file itself is 0600 root.
 stealth_make_ephemeral_key() {
@@ -813,8 +818,18 @@ stealth_off_steps() {
     if command -v corr_stealth_clear >/dev/null 2>&1; then corr_stealth_clear || true; fi
     ok "stealth networks and firewall removed"
 
-    if [[ "${STEALTH_WORKSTATION:-persistent}" == disposable ]] && mountpoint -q "$VAULT_MNT"; then
-        stealth_reset_overlay && ok "Workstation reset to clean image (disposable)"
+    # Persona amnesia WITHOUT discarding anonymity infrastructure (findings
+    # R6-H4/H5). Reset ONLY the persona Workstation overlay — its browsing and
+    # session state — while leaving gateway.qcow2 (the Tor Gateway, and with it
+    # Tor's persistent entry-guard state) and the Workstation base image intact.
+    # Resetting guards every session would help an adversary-run relay get
+    # sampled, which Tor's guard design deliberately avoids; discarding the base
+    # would also throw away any in-session security updates. So:
+    #   * amnesic vault (default) OR disposable Workstation -> reset the overlay;
+    #   * a persistent vault with a persistent Workstation keeps the persona.
+    if mountpoint -q "$VAULT_MNT" \
+       && { [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]] || [[ "${STEALTH_WORKSTATION:-persistent}" == disposable ]]; }; then
+        stealth_reset_overlay && ok "persona Workstation reset to a clean overlay (Gateway/Tor guards kept)"
     fi
 
     info "${BOLD}Wiping artifacts and locking vault${RESET}"
@@ -829,9 +844,13 @@ stealth_off_steps() {
         return 1
     fi
     ok "vault locked"
-    # The vault is locked, so the amnesic key is no longer needed; drop it and
-    # release its ramfs.
-    stealth_clear_ephemeral_key
+    # NOTE: the in-RAM vault key is deliberately KEPT across OFF->ON for the rest
+    # of this boot (it is NOT shredded here), so the next activation reopens the
+    # SAME vault and preserves the Gateway's Tor guard state and the base image.
+    # The key lives on unswappable ramfs and is destroyed at reboot/shutdown
+    # (ramfs is gone) or by `kratos panic`, which is where true amnesia happens.
+    # The persona's own data was already reset above, so a locked vault after OFF
+    # exposes no browsing state even to a running-machine attacker.
 
     info "${BOLD}Restoring normal host${RESET}"
     host_restore
