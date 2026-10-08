@@ -189,6 +189,37 @@ class HardenWhonixTest(unittest.TestCase):
             '<device path="/dev/tpm0"/></backend></tpm></devices>'))
         self.assertNotEqual(run("check", self.out).returncode, 0)
 
+    def test_check_detects_a_second_disk(self):
+        # Exactly one <disk> total (finding 1): an extra disk of any subtype
+        # (here a host LUN) must be refused, not ignored by a device="disk" count.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</devices>", '<disk type="block" device="lun">'
+            '<source dev="/dev/sda"/><target dev="vdb" bus="scsi"/></disk></devices>'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_check_detects_evdev_input(self):
+        # A host input device (type=evdev with a <source>) is a host->guest path.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</devices>", '<input type="evdev"><source dev="/dev/input/event0"/></input></devices>'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_check_detects_egd_rng_backend(self):
+        # RNG must draw from the host CSPRNG, never an EGD/TCP backend.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace(
+            "</devices>", '<rng model="virtio"><backend model="egd" type="udp">'
+            '<source mode="connect" host="10.0.0.1" service="1234"/></backend></rng></devices>'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
+    def test_check_detects_host_block_disk(self):
+        # The one disk must be file-backed; a host block device is refused.
+        self.prepare()
+        self.tamper("kx-ws", lambda s: s.replace('type="file" device="disk"',
+                                                 'type="block" device="disk"'))
+        self.assertNotEqual(run("check", self.out).returncode, 0)
+
     def test_prepare_strips_an_unknown_device(self):
         # A hostile device injected into the SOURCE must be stripped by prepare,
         # so the prepared output still passes check.

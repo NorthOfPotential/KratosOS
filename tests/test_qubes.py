@@ -104,6 +104,30 @@ class Executor(unittest.TestCase):
         self.assertIn(["qvm-remove", "-f", kq.WS_LIVE], log, "remove skipped after kill failed")
 
 
+class EffectivePolicy(unittest.TestCase):
+    """The lint must see the whole policy directory in load order (finding 4)."""
+
+    def test_earlier_file_allow_is_caught(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            # An earlier-sorting file opens a hole the persona policy later denies.
+            with open(os.path.join(d, "10-hole.policy"), "w") as f:
+                f.write("qubes.Filecopy * @tag:kratos-persona @anyvm allow\n")
+            with open(os.path.join(d, "30-kratos.policy"), "w") as f:
+                f.write(POLICY)
+            text = kq.effective_policy_text(os.path.join(d, "30-kratos.policy"))
+            self.assertTrue(any("Filecopy" in p for p in kq.audit_policy(text)),
+                            "an earlier file's allow that shadows our deny was not caught")
+
+    def test_single_file_dir_is_unchanged(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "30-kratos.policy")
+            with open(p, "w") as f:
+                f.write(POLICY)
+            self.assertEqual(kq.audit_policy(kq.effective_policy_text(p)), [])
+
+
 class PolicyAudit(unittest.TestCase):
     def test_shipped_policy_passes(self):
         self.assertEqual(kq.audit_policy(POLICY), [])

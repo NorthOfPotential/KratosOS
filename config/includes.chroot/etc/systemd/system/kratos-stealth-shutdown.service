@@ -1,8 +1,11 @@
 [Unit]
 Description=KratosOS: shut down Stealth Mode cleanly on reboot/poweroff
-# Stopped (ExecStop runs) before libvirtd and networking go away
+# Stopped (ExecStop runs) before libvirtd and networking go away. This is an
+# ORDERING-only relationship: no Requires=libvirtd.service, which would pull the
+# daemon in at boot and defeat its socket activation (finding 5). ExecStop's
+# `kratos stealth off` drives virsh, which socket-activates libvirtd only if a
+# Stealth session is actually up.
 After=libvirtd.service network.target kratos-firewall.service
-Requires=libvirtd.service
 
 [Service]
 Type=oneshot

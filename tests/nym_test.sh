@@ -34,6 +34,20 @@ else
     flunk "an established-state accept is not gated by the nym uid (bypass): $bad_est"
 fi
 
+# The output base policy must be drop: with the only established-accept gated to
+# the nym uid, a pre-existing socket owned by any other uid leaving via the real
+# NIC (not lo) matches no accept and hits this policy drop — so it is severed,
+# not grandfathered (finding 15). NOTE: exercising that against a live
+# pre-existing TCP connection needs a second namespace with a replying peer (a
+# true ESTABLISHED flow), the same two-host harness forward_test documents as a
+# live-system gap; here we assert the ruleset guarantee that makes it hold.
+out_policy="$(awk '/chain output \{/{o=1} o&&/policy/{print; exit}' <<<"$rules")"
+if grep -q 'policy drop' <<<"$out_policy"; then
+    pass "output base policy is drop (non-nym established flows are severed)"
+else
+    flunk "output base policy is not drop: $out_policy"
+fi
+
 # Load it for real in this netns and probe egress as two users.
 ip link set lo up 2>/dev/null
 # A stand-in network so egress actually reaches the firewall (not ENETUNREACH).

@@ -10,12 +10,27 @@
 
 CORR_SHAPE_IF="${CORR_SHAPE_IF:-kratos0}"   # the WireGuard uplink
 CORR_DECOY_PIDFILE="$KRATOS_RUN/decoy.pid"
-CORR_SHAPED_FILE="$KRATOS_RUN/corr.shaped"  # records which iface(s) we shaped
+CORR_SHAPED_FILE="$KRATOS_RUN/corr.shaped"  # ifaces shaped by `corr shape on`
+# The Stealth correlation profile records its shaping SEPARATELY, so turning
+# Stealth off never tears down link shaping the user set up by hand.
+CORR_STEALTH_SHAPED_FILE="$KRATOS_RUN/corr.stealth.shaped"
 
 corr_shape_iface() {
     # Shape the physical path the ISP sees. With the VPN up that is the real
     # NIC carrying WireGuard; find the interface holding the default route.
     ip route show default 2>/dev/null | awk '/default/ {print $5; exit}'
+}
+
+# Apply constant-rate shaping + jitter to ONE interface and record it in the
+# given record file so teardown restores only what that feature touched.
+# Shared by `corr shape on` and the Stealth correlation profile (separate files).
+_corr_shape_dev() {   # <dev> <rate> <jitter> <record-file>
+    local dev="$1" rate="$2" jitter="$3" record="$4"
+    # Root: token-bucket filter for a constant sustained rate (hides bursts).
+    # Child: netem adds random jitter (breaks fine-grained timing correlation).
+    tc qdisc replace dev "$dev" root handle 1: tbf rate "$rate" burst 32kbit latency 400ms
+    tc qdisc replace dev "$dev" parent 1:1 handle 10: netem delay "$jitter" "$jitter" distribution normal
+    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$record"
 }
 
 corr_shape_on() {
@@ -29,18 +44,82 @@ corr_shape_on() {
     warn "volume/timing analysis but is itself a signal you are doing something."
     warn "It does NOT defeat a global adversary. See docs/CORRELATION-RESISTANCE.md."
 
-    # Root: token-bucket filter for a constant sustained rate (hides bursts).
-    # Child: netem adds random jitter (breaks fine-grained timing correlation).
-    tc qdisc replace dev "$dev" root handle 1: tbf \
-        rate "$CORR_SHAPE_RATE" burst 32kbit latency 400ms
-    tc qdisc replace dev "$dev" parent 1:1 handle 10: netem \
-        delay "$CORR_SHAPE_JITTER" "$CORR_SHAPE_JITTER" distribution normal
-    # Record exactly which interface we touched, so shaping off restores only it.
-    install -d -m 755 "$KRATOS_RUN"; printf '%s\n' "$dev" >> "$CORR_SHAPED_FILE"
+    _corr_shape_dev "$dev" "$CORR_SHAPE_RATE" "$CORR_SHAPE_JITTER" "$CORR_SHAPED_FILE"
     ok "shaping $dev at $CORR_SHAPE_RATE, jitter $CORR_SHAPE_JITTER"
 
     if [[ "$CORR_DECOY" == on ]]; then
         corr_decoy_start
+    fi
+}
+
+# ── Stealth correlation profile (applied automatically when Stealth starts) ──
+# Driven by CORR_STEALTH_PROFILE:
+#   off      - nothing beyond Tor's own defaults (ConnectionPadding +
+#              vanguards-lite are already on inside the Whonix Gateway).
+#   balanced - DEFAULT. Pad the host uplink to a CONSTANT rate + jitter (and
+#              decoy fill if a sink is set) so a LOCAL observer can't read your
+#              volume/timing, on top of Tor's padding. Low latency, a little
+#              slower. Does NOT defeat a global passive adversary (an unsolved
+#              problem for low-latency onion routing).
+#   max      - use the Nym mixnet for the persona (CORR_MODE=mixnet): end-to-end
+#              cover traffic + per-message mixing = the real global-correlation
+#              defense, at seconds of latency. Experimental.
+corr_stealth_apply() {
+    load_config
+    local profile="${CORR_STEALTH_PROFILE:-balanced}"
+    case "$profile" in
+        off) return 0 ;;
+        max)
+            # max = the Nym mixnet is the persona's real global-correlation
+            # defense — but it needs nym-client in the Workstation and seconds of
+            # latency, and we can't force it from the host. So ALSO apply the
+            # balanced host padding as a floor: max is never weaker than balanced.
+            warn "CORR_STEALTH_PROFILE=max: for global-correlation resistance the persona"
+            warn "must use the Nym mixnet (CORR_MODE=mixnet, nym-client in the Workstation)."
+            if [[ "${CORR_MODE:-tor}" != mixnet ]]; then
+                warn "CORR_MODE is '${CORR_MODE:-tor}', not mixnet — applying the balanced host"
+                warn "padding as a floor. Set CORR_MODE=mixnet for the real max defense."
+            fi
+            ;;
+        balanced) : ;;
+        *) warn "unknown CORR_STEALTH_PROFILE '$profile'; treating as balanced" ;;
+    esac
+    # balanced and max both pad the host uplink.
+    if ! command -v tc >/dev/null 2>&1; then
+        warn "tc unavailable; skipping constant-rate uplink padding"; return 0
+    fi
+    local dev; dev="$(corr_shape_iface)"
+    if [[ -z "$dev" ]]; then
+        warn "no default-route interface to pad; skipping uplink padding"; return 0
+    fi
+    _corr_shape_dev "$dev" "${CORR_SHAPE_RATE:-1mbit}" "${CORR_SHAPE_JITTER:-15ms}" "$CORR_STEALTH_SHAPED_FILE"
+    ok "uplink padded to a constant ${CORR_SHAPE_RATE:-1mbit} + jitter (local-observer resistance)"
+    if [[ -n "${CORR_DECOY_SINK:-}" ]]; then
+        corr_decoy_start
+    else
+        info "tip: set CORR_DECOY_SINK to also fill idle gaps with decoy traffic"
+    fi
+}
+
+corr_stealth_clear() {
+    command -v tc >/dev/null 2>&1 || return 0
+    corr_decoy_stop
+    local dev
+    # Remove ONLY the interfaces the Stealth profile recorded (never the user's
+    # own `corr shape on`, which uses a different record file).
+    if [[ -r "$CORR_STEALTH_SHAPED_FILE" ]]; then
+        while read -r dev; do
+            if [[ -n "$dev" ]]; then tc qdisc del dev "$dev" root 2>/dev/null || true; fi
+        done < "$CORR_STEALTH_SHAPED_FILE"
+        rm -f "$CORR_STEALTH_SHAPED_FILE"
+    fi
+    # Belt-and-suspenders: if padding was applied but never recorded (e.g. the
+    # record write failed), the profile only ever shapes the default-route iface,
+    # so clear that too — UNLESS the user shaped it themselves via
+    # `corr shape on` (recorded separately), which we must not tear down.
+    dev="$(corr_shape_iface)"
+    if [[ -n "$dev" ]] && ! { [[ -r "$CORR_SHAPED_FILE" ]] && grep -qxF "$dev" "$CORR_SHAPED_FILE"; }; then
+        tc qdisc del dev "$dev" root 2>/dev/null || true
     fi
 }
 
@@ -69,13 +148,14 @@ corr_decoy_start() {
     # Dummy traffic INSIDE the tunnel to a sink, so the ISP sees a filled,
     # constant pipe instead of your real bursts. It only needs to send UDP, so
     # run it UNPRIVILEGED (nobody) rather than from the root kratos process.
-    if command -v setpriv >/dev/null 2>&1; then
-        setpriv --reuid 65534 --regid 65534 --clear-groups \
-            kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
-    else
-        warn "setpriv unavailable; running decoy without dropping privileges"
-        kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
+    # The decoy only needs to send UDP; it must never run as root (finding 14).
+    # If we can't drop privileges, refuse to start it rather than run it as root.
+    if ! command -v setpriv >/dev/null 2>&1; then
+        warn "setpriv unavailable; NOT starting the decoy (it must not run as root)"
+        return 0
     fi
+    setpriv --reuid 65534 --regid 65534 --clear-groups \
+        kratos-decoy "$CORR_DECOY_SINK" "$CORR_SHAPE_RATE" &
     echo $! > "$CORR_DECOY_PIDFILE"
     ok "decoy traffic to $CORR_DECOY_SINK started"
 }

@@ -33,7 +33,10 @@ serialize() {
     [[ -n "${_KRATOS_LOCKED:-}" ]] && return 0   # already held in this process
     command -v flock >/dev/null 2>&1 || die "flock is unavailable; refusing to run without the concurrency lock"
     install -d -m 755 "$KRATOS_RUN" 2>/dev/null || true
-    exec {_KRATOS_LOCK_FD}>"$KRATOS_RUN/lock" || return 0
+    # Failing to open the lock file must be fatal, not a silent pass: proceeding
+    # without the lock breaks the concurrency invariant (finding 13).
+    exec {_KRATOS_LOCK_FD}>"$KRATOS_RUN/lock" \
+        || die "cannot open the Kratos operation lock ($KRATOS_RUN/lock); refusing to run unserialized"
     flock -n "$_KRATOS_LOCK_FD" \
         || die "another kratos operation is in progress; try again in a moment"
     _KRATOS_LOCKED=1

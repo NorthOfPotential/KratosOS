@@ -14,6 +14,7 @@ run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
     $inc/usr/local/bin/kratos-runscript $inc/usr/local/bin/kratos-sec \
     $inc/usr/local/lib/kratos/sectools-gen $inc/usr/local/lib/kratos/sec-shell \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
+    workstation/gateway/kratos-gw-harden \
     build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
 step "nftables syntax"
@@ -29,7 +30,7 @@ if nft -c -f "$tmp/nym.nft"; then echo "ok   workstation/nym/nym.nft"; else echo
 rm -rf "$tmp"
 
 step "python syntax"
-run python3 -m py_compile $inc/usr/local/bin/kratos-tray $inc/usr/local/bin/kratos-decoy $inc/usr/local/lib/kratos/harden-whonix.py $inc/usr/local/lib/kratos/stylo.py tests/forward_test.py tests/firewall_test.py && echo ok
+run python3 -m py_compile $inc/usr/local/bin/kratos-tray $inc/usr/local/bin/kratos-decoy $inc/usr/local/lib/kratos/harden-whonix.py $inc/usr/local/lib/kratos/stylo.py $inc/usr/local/lib/kratos/fix-socket-perms tests/forward_test.py tests/firewall_test.py && echo ok
 run python3 -m json.tool $inc/etc/firefox/policies/policies.json >/dev/null && echo "ok   policies.json"
 run python3 -c "import ast,sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]" qubes/dom0/kratos-q workstation/nym/kratos-nym && echo "ok   kratos-q, kratos-nym"
 
@@ -41,6 +42,9 @@ run tests/test_stealth_order.sh
 
 step "Stealth required vs best-effort protections"
 run tests/test_stealth_require.sh
+
+step "Stealth zero-touch auto-provision (download/verify/vault logic)"
+run tests/test_autoprovision.sh
 
 step "branding (KratosOS identity, wallpaper, installer rename)"
 run tests/test_branding.sh
@@ -84,7 +88,7 @@ run tests/bootcheck_test.sh
 
 step "traffic shaping (network namespace)"
 if [[ $EUID -eq 0 ]]; then
-    run unshare -rn bash tests/corr_test.sh
+    run unshare -n bash tests/corr_test.sh
 else
     echo "skipped (needs root)"
 fi

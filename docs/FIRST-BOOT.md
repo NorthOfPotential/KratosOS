@@ -19,9 +19,21 @@ stick in **live mode** before you install over anything. Tick each item.
 - [ ] **Test the kill switch:** in vpn mode, `sudo ip link set kratos0 down`, then try to load a page — it must fail. Bring it back with `sudo kratos mode vpn`.
 
 ## 4. Stealth Mode (needs VT-x/AMD-V enabled in BIOS; won't run nested unless the host VM allows it)
-- [ ] Download the Whonix **KVM** image, its `.asc`, and `derivative.asc` from whonix.org/wiki/KVM.
-- [ ] `sudo kratos stealth setup ~/Downloads/Whonix-*.libvirt.xz` — signature verifies, vault is created (new passphrase).
-- [ ] Tray → **Stealth Mode** on. The host locks down, the vault unlocks, Gateway then Workstation start.
+- [ ] **Zero-touch: just toggle it.** Tray → **Stealth Mode** on (or `sudo kratos stealth on`).
+      On the first toggle KratosOS automatically downloads the Whonix KVM image,
+      verifies it against the pinned Whonix signing key, and builds an amnesic
+      vault (a random key kept only in RAM) — no manual download or passphrase.
+      The first toggle takes a few minutes; later toggles are instant.
+      - The download runs over your current network mode. For `you → VPN → Tor`,
+        switch to `vpn` first so your ISP sees only the VPN during the fetch.
+      - Want a persistent persona (keeps accounts/files across reboots)? Set
+        `STEALTH_VAULT_PERSIST=yes` in `/etc/kratos/kratos.conf` and you'll be
+        asked for a passphrase once. Offline install, or prefer to supply the
+        image yourself? `sudo kratos stealth setup ~/Downloads/Whonix-*.libvirt.xz`
+        still works (set `STEALTH_AUTOPROVISION=no` to require it).
+- [ ] The host locks down, the vault unlocks, Gateway then Workstation start,
+      and the correlation profile (`CORR_STEALTH_PROFILE`, default `balanced`)
+      pads the uplink. See docs/CORRELATION-RESISTANCE.md for the honest limits.
 - [ ] Ctrl+Alt+F7 shows the persona desktop in its own session; Ctrl+Alt+F1 returns to normal.
 - [ ] In the Workstation, Whonix's systemcheck reports Tor connected; `check.torproject.org` confirms you're on Tor.
 - [ ] Tray → **Stealth Mode** off. The Workstation stops first, then everything else; the tray returns to "Normal".

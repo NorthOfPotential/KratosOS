@@ -21,6 +21,37 @@ chk "$nm" '^ipv4\.dhcp-fqdn=$'                   "no DHCP FQDN sent"
 chk "$nm" '^connection\.mdns=0'                  "mDNS off"
 chk "$nm" '^connection\.llmnr=0'                 "LLMNR off"
 
+echo "— optional Gateway hardening helper (vanguards + padding) —"
+gwh="$here/../workstation/gateway/kratos-gw-harden"
+if [[ -f "$gwh" ]]; then
+    # Assert the real logic (not just the word 'vanguards' in a comment): the
+    # padding directives, an actual `systemctl enable --now vanguards`, and an
+    # `apt-get install ... vanguards` fallback; and that it parses.
+    if grep -qE '^ConnectionPadding 1' "$gwh" && grep -qE '^ReducedConnectionPadding 0' "$gwh" \
+       && grep -qE 'systemctl enable --now vanguards' "$gwh" \
+       && grep -qE 'apt-get install .*vanguards' "$gwh" && bash -n "$gwh"; then
+        pass "gw-harden enables full padding + actually enables/installs vanguards, and parses"
+    else
+        flunk "gw-harden missing padding/vanguards LOGIC or has a syntax error"
+    fi
+else
+    flunk "Gateway hardening helper not shipped"
+fi
+
+echo "— networking is a hard dependent of the firewall (finding 6) —"
+nmdrop="$root/etc/systemd/system/NetworkManager.service.d/10-kratos-firewall.conf"
+fw="$root/etc/systemd/system/kratos-firewall.service"
+if [[ -f "$nmdrop" ]] && grep -qE '^Requires=kratos-firewall\.service' "$nmdrop"; then
+    pass "NetworkManager Requires the firewall unit (fails closed if it fails)"
+else
+    flunk "no NetworkManager drop-in requiring kratos-firewall.service"
+fi
+if grep -qE 'ExecStartPre=.*offline\.nft' "$fw"; then
+    pass "firewall preloads a minimal default-drop before the full ruleset"
+else
+    flunk "firewall unit does not preload the default-drop layer"
+fi
+
 echo "— libvirt authorization (finding 26) —"
 if [[ -f "$lvrule" ]] && grep -qE 'org\.libvirt\.' "$lvrule" && grep -qE 'polkit\.Result\.NO' "$lvrule"; then
     pass "an explicit polkit rule denies non-root libvirt management"

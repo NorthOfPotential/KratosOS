@@ -87,14 +87,17 @@ migrate_copy_from_disk() {
         info "Copying $f..."
         rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "${excl[@]}" \
             "$profile/$f/" "$dest/$f/"
+        _MIGRATED_PATHS+=("$dest/$f")
     done
     # OneDrive: only files actually downloaded to the PC exist on disk
     if [[ -d "$profile/OneDrive" ]]; then
         info "Copying OneDrive (only files that were downloaded locally)..."
         rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "${excl[@]}" \
             "$profile/OneDrive/" "$dest/OneDrive/"
+        _MIGRATED_PATHS+=("$dest/OneDrive")
     fi
     migrate_bookmarks "$profile" "$dest/Browser bookmarks"
+    if [[ -d "$dest/Browser bookmarks" ]]; then _MIGRATED_PATHS+=("$dest/Browser bookmarks"); fi
 }
 
 # Bookmarks only. Saved passwords are deliberately NOT migrated:
@@ -166,12 +169,20 @@ migrate_copy_from_export() {
 
     info "Publishing verified files..."
     cp -a "$stage/." "$dest/"
+    # Record only the top-level entries we published, so ownership is fixed on
+    # exactly the imported trees — never the whole destination (finding 8).
+    local e
+    for e in "$stage"/* "$stage"/.[!.]*; do
+        [[ -e "$e" ]] || continue
+        _MIGRATED_PATHS+=("$dest/$(basename "$e")")
+    done
     rm -rf "$stage"
     trap - EXIT
 
     if [[ -d "$src/inventory" ]]; then
         install -d "$dest/Windows inventory"
         cp -r "$src/inventory/." "$dest/Windows inventory/"
+        _MIGRATED_PATHS+=("$dest/Windows inventory")
         migrate_app_report "$src/inventory/installed-software.csv"
     fi
 }
@@ -248,6 +259,7 @@ migrate_windows() {
         esac
     fi
     install -d -- "$dest"
+    _MIGRATED_PATHS=()          # top-level destination trees the import created
 
     if [[ -b "$from" ]]; then
         need_root migrate --from "$from"
@@ -268,9 +280,17 @@ migrate_windows() {
         die "--from must be an export folder or a partition like /dev/sdb3"
     fi
 
-    # Own the imported files as the target user FIRST (bounded to $dest), THEN
-    # scrub as that user, so hostile documents are never parsed by mat2 as root.
-    [[ $EUID -eq 0 && "$owner" != root ]] && chown -R -- "$owner": "$dest"
+    # Own ONLY the imported trees as the target user (finding 8), never the whole
+    # destination/home — pre-existing or admin-managed files under $dest must not
+    # have their ownership rewritten. Then scrub as that user, so hostile
+    # documents are never parsed by mat2 as root.
+    if [[ $EUID -eq 0 && "$owner" != root ]] && (( ${#_MIGRATED_PATHS[@]} )); then
+        local p
+        for p in "${_MIGRATED_PATHS[@]}"; do
+            [[ -e "$p" ]] || continue
+            chown -R -- "$owner": "$p"
+        done
+    fi
     [[ "$scrub" == yes ]] && migrate_scrub "$dest" "$owner"
     ok "migration finished: $dest"
     info "Keep your backup drive until you have opened your important files here."

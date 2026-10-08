@@ -21,6 +21,10 @@ install -d config/includes.chroot/usr/share/doc/kratos
 cp docs/*.md config/includes.chroot/usr/share/doc/kratos/
 install -d config/includes.chroot/usr/share/kratos
 cp migration/Export-WindowsData.ps1 config/includes.chroot/usr/share/kratos/
+# Ship the optional persona-Gateway hardening helper for reference (it is run
+# INSIDE the Whonix Gateway by the user; KratosOS keeps no host->guest channel).
+install -d config/includes.chroot/usr/share/kratos/gateway
+cp workstation/gateway/kratos-gw-harden config/includes.chroot/usr/share/kratos/gateway/
 
 # Same hardening as the installed system (etc/default/grub.d/kratos.cfg):
 #   init_on_alloc/init_on_free  zero memory, so freed data doesn't linger in RAM

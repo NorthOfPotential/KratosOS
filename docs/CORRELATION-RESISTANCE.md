@@ -108,3 +108,71 @@ could open arbitrary direct connections and bypass the SOCKS/mixnet path. So
 `kratos-nym` is a locked, dedicated service account that runs nothing but the
 Nym client, and the systemd unit should be sandboxed (no new privileges, private
 tmp/dev, minimal filesystem). Don't run anything else under it.
+
+## The Stealth correlation profile (`CORR_STEALTH_PROFILE`)
+
+Stealth Mode applies one profile automatically on start:
+
+| Profile | What it does | Latency | Against a LOCAL observer (ISP) | Against a GLOBAL adversary |
+|---|---|---|---|---|
+| `off` | Tor defaults only (connection padding + vanguards-lite, on inside the Whonix Gateway). Maximum blend-in. | lowest | volume/timing visible | not defeated |
+| `balanced` **(default)** | Also pad the host uplink to a **constant rate + jitter** (plus decoy fill if `CORR_DECOY_SINK` is set). | low, a little slower | volume/timing **blinded** | not defeated |
+| `max` | Route the persona through the **Nym mixnet** (`CORR_MODE=mixnet`): end-to-end cover traffic + per-message mixing. | seconds | blinded | **real resistance** |
+
+**Why `balanced` is the default here:** it's the best low-latency anti-correlation
+KratosOS can do on the host — a constant-rate pipe denies a local/regional
+observer the volume-and-timing signal that end-to-end confirmation leans on,
+layered on top of Tor's own padding. It is explicitly *a little slower* (the
+token-bucket caps throughput), which is the accepted cost.
+
+**The honest tradeoff (read this):** a constant-rate uplink does not look like an
+ordinary Tor/VPN user, so to the *same* local observer you now stand out as
+"someone running padding." You are trading *blend-in* for *volume/timing
+blinding*. If your threat model is a local observer doing traffic analysis, that
+trade is worth it. If it is "don't be noticed using Tor at all," set
+`CORR_STEALTH_PROFILE=off` (and use bridges). Neither setting defeats a true
+global passive adversary on low-latency Tor — **only `max` (the mixnet) does**,
+and it costs seconds of latency. Tune the rate with `CORR_SHAPE_RATE`.
+
+## How we compare to Vanguards and MUFFLER
+
+Two defenses people ask about, and where KratosOS stands:
+
+**Tor Vanguards (guard-discovery defense).** `vanguards-lite` — layer-2 guard
+pinning, built into Tor 0.4.7+ — is **already active by default inside the
+persona Whonix Gateway**, so our circuits already resist guard-discovery
+attacks. This is a *different* threat from the volume/timing correlation the
+Stealth padding profile addresses; the two are complementary. The **full
+`vanguards` add-on** (adds layer-3 guards + rendguard/bandguards monitors) is
+stronger but mainly benefits onion-*service* operators, and its extra hop costs
+latency — so it is **opt-in, not default**, for a low-latency browsing persona.
+
+The helper ships on the KratosOS host for reference at
+`/usr/share/kratos/gateway/kratos-gw-harden`. Because KratosOS keeps **no
+host→guest channel by design**, it is not present inside the Gateway — copy its
+contents into the kx-gw Gateway (paste it into an editor there, or fetch it over
+the persona's own network) and run it as root:
+
+```
+# inside the kx-gw Gateway, as root, after pasting the script in:
+sudo bash kratos-gw-harden
+```
+
+It enables the full add-on and turns on maximum Tor connection padding
+(`ConnectionPadding 1`, `ReducedConnectionPadding 0`), and prints honestly
+whether the full add-on actually enabled (vanguards-lite is always on regardless).
+
+**MUFFLER (2025).** MUFFLER obfuscates flow correlation at Tor's **final egress
+hop** by shuffling/splitting N real connections onto M virtual connections
+between the exit relay and the destination. It must be deployed at the **exit
+side** — a client (all KratosOS controls) cannot deploy it unilaterally, so
+there is nothing to "implement" here. Its goal — defeating end-to-end flow
+correlation — is precisely what a **mixnet** provides end-to-end, which is our
+`CORR_STEALTH_PROFILE=max` (Nym) path. For a client, the mixnet is the
+deployable route to that property; MUFFLER is not deployable at all.
+
+**So:** we already have the vanguards baseline (lite), offer the full add-on as
+an opt-in, and for the flow-correlation property MUFFLER targets we rely on the
+Nym mixnet rather than an exit-side scheme a client can't run. None of this
+changes the honest top-line: only the mixnet gives a real story against a
+global passive adversary on anything resembling low latency.

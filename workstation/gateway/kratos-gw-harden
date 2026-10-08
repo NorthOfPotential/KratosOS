@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# kratos-gw-harden — OPT-IN extra Tor hardening, run ONCE inside the persona
+# Whonix GATEWAY (kx-gw), not on the host.
+#
+# What it adds, and why it's opt-in:
+#   * Full Tor **vanguards** add-on (layer-2 + layer-3 guards, rendguard/
+#     bandguards monitors). vanguards-LITE (layer-2 only) is already built into
+#     Tor 0.4.7+ and ON by default in the Gateway — that is the right level for a
+#     low-latency browsing persona. The full add-on mainly helps if you HOST or
+#     heavily VISIT onion services, and its layer-3 guards add a hop (more
+#     latency). Enable it only if that is your use case.
+#   * Maximum Tor connection padding (ConnectionPadding 1, ReducedConnection
+#     Padding 0): more cover cells on entry connections at a little extra
+#     bandwidth — complements KratosOS's host-side uplink padding.
+#
+# This does NOT defeat a global passive adversary on low-latency Tor; for that
+# use the Nym mixnet (CORR_STEALTH_PROFILE=max). See docs/CORRELATION-RESISTANCE.md.
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "run this inside the Whonix Gateway as root: sudo kratos-gw-harden" >&2
+    exit 1
+fi
+if ! command -v tor >/dev/null 2>&1; then
+    echo "this is meant to run INSIDE the Whonix Gateway (no 'tor' found here)." >&2
+    exit 1
+fi
+
+# 1) Max connection padding via a torrc.d drop-in (Whonix reads /usr/local/etc/torrc.d).
+dropdir=/usr/local/etc/torrc.d
+install -d -m 755 "$dropdir"
+cat > "$dropdir/50_kratos_corr.conf" <<'TORRC'
+# KratosOS: maximum connection padding (cover cells on entry connections).
+ConnectionPadding 1
+ReducedConnectionPadding 0
+TORRC
+chmod 644 "$dropdir/50_kratos_corr.conf"
+echo "+ wrote $dropdir/50_kratos_corr.conf (ConnectionPadding on, reduced-padding off)"
+
+# 2) Full vanguards add-on (optional; present in Whonix repos). Track whether it
+#    actually ended up enabled, so the final message doesn't overclaim.
+vg_full=0
+if systemctl list-unit-files 2>/dev/null | grep -q '^vanguards'; then
+    if systemctl enable --now vanguards 2>/dev/null; then
+        vg_full=1; echo "+ enabled the full vanguards add-on (systemd unit)"
+    else
+        echo "- vanguards unit present but did not start; check 'systemctl status vanguards'"
+    fi
+elif command -v apt-get >/dev/null 2>&1; then
+    echo "  installing the vanguards add-on..."
+    apt-get update >/dev/null 2>&1 || true   # best-effort; a cached pkg can still install
+    if apt-get install -y --no-install-recommends vanguards >/dev/null 2>&1; then
+        if systemctl enable --now vanguards 2>/dev/null; then
+            vg_full=1; echo "+ installed and enabled the full vanguards add-on"
+        else
+            echo "- vanguards installed but the unit did not start; check 'systemctl status vanguards'"
+        fi
+    else
+        echo "- could not install 'vanguards' (offline, or not in the repos); vanguards-lite stays active."
+    fi
+else
+    echo "- no apt here; skipping the full add-on; vanguards-lite stays active."
+fi
+
+# 3) Reload Tor so the padding drop-in takes effect.
+if systemctl reload-or-restart tor@default 2>/dev/null || systemctl reload-or-restart tor 2>/dev/null; then
+    echo "+ reloaded Tor"
+else
+    echo "- could not reload Tor automatically; restart it to apply the padding config"
+fi
+
+# Honest summary: only claim the full add-on if it actually enabled.
+if [ "$vg_full" -eq 1 ]; then
+    echo "done. Enabled the FULL vanguards add-on + max connection padding (vanguards-lite was already on)."
+else
+    echo "done. Max connection padding applied; vanguards-LITE remains active (it always is)."
+    echo "The FULL add-on was NOT enabled — see the messages above. That is fine for a"
+    echo "browsing persona; the full add-on mainly helps onion-service operators."
+fi

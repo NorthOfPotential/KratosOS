@@ -30,6 +30,8 @@ esac
 
 echo "Running '$script' in a Firejail sandbox (no network, empty private home, no D-Bus/X11)..."
 # shellcheck disable=SC2086
-exec firejail --quiet --noprofile --net=none --private --private-tmp --private-dev \
-    --nosound --no3d --notv --nodvd --nodbus --x11=none --caps.drop=all --seccomp --nonewprivs \
+exec firejail --quiet --noprofile --net=none --private --private-cwd --private-tmp --private-dev \
+    --novideo --nosound --no3d --notv --nodvd --nou2f --noinput \
+    --nodbus --x11=none --caps.drop=all --seccomp --nonewprivs \
+    --machine-id --disable-mnt --read-only=/srv --read-only=/opt \
     -- "$interp" "$iarg" < "$script"

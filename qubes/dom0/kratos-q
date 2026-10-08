@@ -15,6 +15,7 @@ Command construction and the policy audit are pure functions so they can be
 unit-tested off a Qubes host; main() executes them with subprocess. Live use
 requires an actual Qubes OS dom0 with Whonix templates installed.
 """
+import os
 import re
 import subprocess
 import sys
@@ -235,10 +236,16 @@ def validate_with_real_parser(path):
     (e.g. this is not a Qubes dom0), so the caller falls back to the lint."""
     try:
         from qrexec.policy.parser import FilePolicy  # type: ignore
-        import os as _os
+        from pathlib import Path
         try:
-            FilePolicy(policy_path=_os.path.dirname(path) or "/etc/qubes/policy.d")
+            # FilePolicy wants a pathlib.Path (or list), NOT a str — a str raises
+            # TypeError and we'd wrongly report the policy as rejected. Parse the
+            # whole policy directory so syntax is validated across all files.
+            FilePolicy(policy_path=Path(path).parent)
             return True, []
+        except TypeError:
+            # Our own call is wrong (API drift) — don't claim Qubes rejected it.
+            return False, []
         except Exception as e:  # noqa: BLE001 - surface the parser's own verdict
             return True, [f"Qubes qrexec parser rejected the policy: {e}"]
     except ImportError:
@@ -256,14 +263,35 @@ def _prefs(vm, key):
                           capture_output=True, text=True).stdout.strip()
 
 
+def effective_policy_text(policy_path):
+    """Concatenate EVERY *.policy file in the policy directory, in qrexec load
+    order (lexical by filename), so the lint sees the effective first-match
+    policy — an earlier file (e.g. 10-foo.policy) that allows persona egress
+    would otherwise shadow our deny in 30-kratos.policy and go unnoticed
+    (finding 4). Off a real dom0 the directory holds only our file, so this is
+    identical to reading it alone."""
+    import glob
+    d = os.path.dirname(policy_path) or "."
+    files = sorted(glob.glob(os.path.join(d, "*.policy")))
+    if policy_path not in files and os.path.exists(policy_path):
+        files.append(policy_path)
+    parts = []
+    for f in files:
+        try:
+            with open(f, encoding="utf-8") as fh:
+                parts.append(f"# <<< {os.path.basename(f)} >>>\n" + fh.read())
+        except OSError:
+            continue
+    return "\n".join(parts)
+
+
 def cmd_audit():
     rc = 0
-    try:
-        with open(POLICY_PATH, encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
+    if not os.path.exists(POLICY_PATH):
         print(f"audit: policy not installed at {POLICY_PATH}", file=sys.stderr)
         return 1
+    # Lint the EFFECTIVE policy (all files, load order), not just our one file.
+    text = effective_policy_text(POLICY_PATH)
 
     # Prefer Qubes' real parser; fall back to our lint only when it is absent.
     ran, problems = validate_with_real_parser(POLICY_PATH)
@@ -285,7 +313,7 @@ def cmd_audit():
             for p in problems:
                 print(f"  FAIL  {p}")
         else:
-            print("  OK    persona egress denied (KratosOS lint only — see note)")
+            print("  OK    persona egress denied across all policy files (KratosOS lint — see note)")
         print("  note  Qubes' own parser was not found here; this is a KratosOS lint, "
               "NOT the authority. Run 'kratos-q audit' on a live dom0 (or qubes-policy-lint).")
 

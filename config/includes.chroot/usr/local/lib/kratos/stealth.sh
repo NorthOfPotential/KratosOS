@@ -15,6 +15,11 @@ WHONIX_SIGNING_FPR="916B8D99C38EAF5E8ADC7A2A8D66066A2EEACCDA"
 VAULT_IMG="$KRATOS_STATE/stealth.vault"
 VAULT_MAPPER="kratos-stealth"
 VAULT_MNT="$KRATOS_STATE/vault"
+# Ephemeral vault key for the zero-touch / amnesic flow. It lives on tmpfs
+# ($KRATOS_RUN = /run/kratos), so it never persists across a reboot: on a live
+# boot the whole persona is amnesic by construction. Persistent installs set
+# STEALTH_VAULT_PERSIST=yes and use a passphrase instead.
+VAULT_KEYFILE="$KRATOS_RUN/vault.key"
 VAULT_XML="$VAULT_MNT/libvirt"
 STEALTH_FLAG="$KRATOS_RUN/stealth.active"
 STEALTH_ERROR="$KRATOS_RUN/stealth.error"
@@ -42,13 +47,33 @@ read_stdin_pass() {
     [[ -n "$VAULT_PASS" ]] || die "no passphrase on stdin"
 }
 
-# Run cryptsetup with the GUI passphrase if we have one, else interactively.
+# Run cryptsetup with, in order of preference: the GUI passphrase, the ephemeral
+# key file (zero-touch amnesic vault), else an interactive prompt.
 cryptsetup_pass() {
     if [[ -n "$VAULT_PASS" ]]; then
         printf '%s' "$VAULT_PASS" | cryptsetup "$@" --key-file -
+    elif [[ "${STEALTH_VAULT_PERSIST:-no}" != yes && -r "$VAULT_KEYFILE" ]]; then
+        cryptsetup "$@" --key-file "$VAULT_KEYFILE"
     else
         cryptsetup "$@"
     fi
+}
+
+# Create the ephemeral vault key (amnesic flow) if it doesn't already exist.
+# The runtime dir stays 0755 (listing it is harmless; the non-root tray reads
+# stealth.active here); the KEY file itself is 0600 root.
+stealth_make_ephemeral_key() {
+    install -d -m 755 "$KRATOS_RUN"
+    [[ -r "$VAULT_KEYFILE" ]] && return 0
+    ( umask 077; head -c 64 /dev/urandom > "$VAULT_KEYFILE" )
+    chmod 600 "$VAULT_KEYFILE"
+}
+
+# Is the vault usable right now? It exists AND we can open it (a persistent
+# passphrase vault, or an ephemeral vault whose in-RAM key is still present).
+stealth_is_provisioned() {
+    [[ -e "$VAULT_IMG" ]] || return 1
+    [[ "${STEALTH_VAULT_PERSIST:-no}" == yes || -r "$VAULT_KEYFILE" ]]
 }
 
 vault_open() {
@@ -96,9 +121,11 @@ vault_create() {
     vault_open
 }
 
-# Verify a Whonix download against the Whonix signing key.
-verify_whonix() {
+# Check a Whonix download against the pinned signing key. Returns non-zero (and
+# prints why) instead of dying, so callers can probe a cached image.
+_whonix_verify_ok() {
     local archive="$1" sig="$2" key="$3" gnupg result=ok
+    [[ -r "$archive" && -r "$sig" ]] || { echo "missing archive or signature" >&2; return 1; }
     gnupg="$(mktemp -d)"
     if ! GNUPGHOME="$gnupg" gpg -q --import "$key" 2>/dev/null; then
         result="cannot import key $key"
@@ -110,7 +137,14 @@ verify_whonix() {
         result="SIGNATURE CHECK FAILED for $archive. Do not use this download."
     fi
     rm -rf "$gnupg"
-    [[ "$result" == ok ]] || die "$result"
+    [[ "$result" == ok ]] && return 0
+    echo "$result" >&2
+    return 1
+}
+
+# Verify a Whonix download against the Whonix signing key (fatal on failure).
+verify_whonix() {
+    _whonix_verify_ok "$1" "$2" "$3" || die "Whonix verification failed — do not use this download"
     ok "Whonix signature verified"
 }
 
@@ -137,11 +171,25 @@ Download the KVM image, its .asc signature and the signing key from https://www.
     [[ -r "$key" ]] || die "signing key not found: $key (download derivative.asc from whonix.org)"
 
     verify_whonix "$archive" "$sig" "$key"
+    _stealth_provision "$archive"
+    ok "Stealth Mode is ready. Turn it on from the tray, or: sudo kratos stealth on"
+    warn "You can delete the downloaded archive now (kratos shred <file>)."
+}
 
+# Unlock/create the vault, extract an ALREADY-VERIFIED Whonix archive, harden
+# the definitions, and re-lock. Shared by manual setup and auto-provision.
+_stealth_provision() {
+    local archive="$1"
     # From the moment the vault can be unlocked, guarantee it is re-locked on
     # EVERY exit path (a failed extract, missing archive member, hardener
-    # rejection, ...), so a failed setup never leaves the vault open.
+    # rejection, ...), so a failed provision never leaves the vault open.
     trap 'vault_close' EXIT
+    if [[ "${STEALTH_VAULT_PERSIST:-no}" != yes ]]; then
+        # Amnesic vault: fresh random key in RAM, and always a fresh image so a
+        # stale vault from a previous boot can't linger.
+        stealth_make_ephemeral_key
+        [[ -e "$VAULT_IMG" ]] && rm -f "$VAULT_IMG"
+    fi
     if [[ -e "$VAULT_IMG" ]]; then
         vault_open
     else
@@ -180,8 +228,85 @@ Download the KVM image, its .asc signature and the signing key from https://www.
     rm -rf "$imp"
     vault_close
     trap - EXIT
-    ok "Stealth Mode is ready. Turn it on from the tray, or: sudo kratos stealth on"
-    warn "You can delete the downloaded archive now (kratos shred <file>)."
+}
+
+# ── Auto-provision (zero-touch first run) ───────────────────
+# Pick the newest Whonix KVM image URL from a download-directory index listing.
+# Pure function so it can be unit-tested against a saved index.
+_whonix_pick_latest() {   # <index-file> <baseurl> <flavor>
+    local idx="$1" base="$2" flavor="$3" name
+    base="${base%/}/"
+    name="$(grep -oE "Whonix-${flavor}-[0-9][0-9.]*\.Intel_AMD64\.qcow2\.libvirt\.xz" "$idx" \
+            | sort -V | tail -n1)"
+    [[ -n "$name" ]] || return 1
+    printf '%s%s\n' "$base" "$name"
+}
+
+# Download the latest Whonix KVM image + its .asc into <destdir>. Echoes the
+# archive path on stdout (progress/logs go to stderr). The signature is verified
+# by the caller against the pinned key, so a hostile mirror cannot substitute an
+# image. STEALTH_WHONIX_URL overrides discovery if a layout change breaks it.
+stealth_fetch_whonix() {   # <destdir> -> echoes archive path
+    local dest="$1"
+    local base="${STEALTH_WHONIX_BASEURL:-https://download.whonix.org/libvirt/}"
+    local url="${STEALTH_WHONIX_URL:-}" flavor="${STEALTH_WHONIX_FLAVOR:-Xfce}"
+    base="${base%/}/"
+    install -d -m 700 "$dest"
+    local curl_opts=(-fL --proto "=https" --tlsv1.2 --connect-timeout 30)
+    if [[ -z "$url" ]]; then
+        local idx="$dest/index.html"
+        curl "${curl_opts[@]}" -sS "$base" -o "$idx" >&2 || return 1
+        url="$(_whonix_pick_latest "$idx" "$base" "$flavor")" || {
+            # Some mirrors expose a 'latest/' directory; try it once.
+            if curl "${curl_opts[@]}" -sS "${base}latest/" -o "$idx" 2>/dev/null; then
+                url="$(_whonix_pick_latest "$idx" "${base}latest/" "$flavor")" || true
+            fi
+        }
+        [[ -n "$url" ]] || { warn "could not find a Whonix KVM image at $base (set STEALTH_WHONIX_URL)"; return 1; }
+        rm -f "$idx"
+    fi
+    local arc="$dest/${url##*/}"
+    info "Downloading $(basename "$arc") (one time)..." >&2
+    curl "${curl_opts[@]}" "$url"     -o "$arc"     >&2 || return 1
+    curl "${curl_opts[@]}" "$url.asc" -o "$arc.asc" >&2 || return 1
+    printf '%s\n' "$arc"
+}
+
+# First-run, zero-touch: download + verify Whonix, then provision. Runs over the
+# current network mode (normal clearnet, or the VPN if STEALTH_REQUIRE_VPN=yes),
+# since Tor isn't up yet. The persona itself only ever talks to the Gateway.
+stealth_autoprovision() {
+    [[ "${STEALTH_AUTOPROVISION:-yes}" == yes ]] \
+        || die "Stealth Mode isn't set up and STEALTH_AUTOPROVISION=no; run: sudo kratos stealth setup <Whonix archive>"
+    [[ "$(saved_mode)" == offline ]] \
+        && die "cannot auto-provision while offline; switch to a network mode first (sudo kratos mode normal|vpn)"
+    need_cmd curl gpg tar xz qemu-img cryptsetup python3
+    local key="${KRATOS_ETC}/whonix-signing-key.asc"
+    [[ -r "$key" ]] || die "the Whonix signing key is missing ($key); cannot verify a download"
+
+    # Reuse a previously downloaded+verified image if one is cached, so an
+    # installed system doesn't re-fetch ~1 GB of Whonix (and re-expose the
+    # clearnet download) on every amnesic boot. On the live ISO the cache lives
+    # on the ephemeral overlay, so a live boot still fetches fresh.
+    local cache="$KRATOS_STATE/whonix-cache" archive="" cached=""
+    [[ -d "$cache" ]] && cached="$(find "$cache" -maxdepth 1 -name '*.libvirt.xz' 2>/dev/null | head -n1)"
+    if [[ -n "$cached" ]] && _whonix_verify_ok "$cached" "$cached.asc" "$key"; then
+        info "Using the previously downloaded, signature-verified Whonix image."
+        archive="$cached"
+    else
+        info "${BOLD}First run: fetching and verifying Whonix${RESET} (one time; then just toggle)."
+        local stage
+        stage="$(mktemp -d)"
+        # shellcheck disable=SC2064
+        trap "rm -rf '$stage'" RETURN
+        archive="$(stealth_fetch_whonix "$stage")" || die "could not download Whonix (check your connection, or set STEALTH_WHONIX_URL)"
+        verify_whonix "$archive" "$archive.asc" "$key"
+        # Cache the verified image (root-only) for next boot.
+        install -d -m 700 "$cache"
+        cp -f "$archive" "$archive.asc" "$cache/" && archive="$cache/$(basename "$archive")"
+    fi
+    _stealth_provision "$archive"
+    ok "Whonix provisioned and verified."
 }
 
 # The Workstation runs from an overlay on top of a clean base image, so
@@ -344,16 +469,35 @@ host_lockdown() {
         fi
     fi
     if [[ "$STEALTH_NEW_MAC" == yes ]]; then
-        if command -v nmcli >/dev/null; then
-            local uuid
-            local ctype
+        if ! command -v nmcli >/dev/null; then
+            _protect_failed mac "NetworkManager (nmcli) not available, so MAC was not refreshed"
+        else
+            # Reconnect each active wired/wireless connection, then VERIFY the
+            # result (finding 7): a failed reconnect, or a device whose current
+            # MAC still equals its permanent hardware address, means rotation did
+            # not take effect — so we no longer just announce success.
+            local uuid ctype dev cur perm mac_ok=1
             while IFS=: read -r uuid ctype; do
                 [[ "$ctype" == *wireless* || "$ctype" == *ethernet* ]] || continue
-                nmcli -w 20 connection up "$uuid" >/dev/null 2>&1 || true
+                if ! nmcli -w 20 connection up "$uuid" >/dev/null 2>&1; then
+                    mac_ok=0; continue
+                fi
+                dev="$(nmcli -g GENERAL.DEVICES connection show "$uuid" 2>/dev/null | head -1)"
+                [[ -n "$dev" ]] || continue
+                cur="$(cat "/sys/class/net/$dev/address" 2>/dev/null)"
+                perm=""
+                if command -v ethtool >/dev/null; then
+                    perm="$(ethtool -P "$dev" 2>/dev/null | awk '{print $NF}')"
+                fi
+                if [[ -n "$perm" && "$perm" != "00:00:00:00:00:00" && "$cur" == "$perm" ]]; then
+                    mac_ok=0
+                fi
             done < <(nmcli -t -f UUID,TYPE connection show --active)
-            ok "reconnected with a fresh random MAC"
-        else
-            _protect_failed mac "NetworkManager (nmcli) not available, so MAC was not refreshed"
+            if (( mac_ok )); then
+                ok "reconnected with a verified fresh random MAC"
+            else
+                _protect_failed mac "a connection failed to come up, or a device's MAC still equals its hardware address"
+            fi
         fi
     fi
     # libvirt turns forwarding on for the Gateway's NAT. Restore the EXACT prior
@@ -466,6 +610,13 @@ stealth_on_steps() {
     ok "Workstation started"
     give_display "$GW"
     give_display "$WS"
+
+    # Correlation-resistance profile (CORR_STEALTH_PROFILE). Best-effort: a
+    # failure here must never block an otherwise-up persona.
+    if command -v corr_stealth_apply >/dev/null 2>&1; then
+        info "${BOLD}Correlation resistance${RESET}"
+        corr_stealth_apply || warn "correlation profile could not be fully applied"
+    fi
 }
 
 # Hand a VM's display socket to the dedicated stealth user ONLY.
@@ -481,20 +632,13 @@ give_display() {
     while [[ ! -S "$sock" ]] && (( t < 10 )); do sleep 1; t=$((t + 1)); done
     [[ -S "$sock" ]] || { warn "display socket for $1 not found"; return 0; }
     # TOCTOU hardening (finding 18): QEMU (libvirt-qemu) owns SPICE_DIR, so a
-    # compromised QEMU could swap this path for a symlink between our check and
-    # our chown/chmod and redirect them at an arbitrary file. Refuse a symlink,
-    # chown WITHOUT dereferencing, and re-verify it is still a real socket (not
-    # a symlink) immediately before chmod.
-    if [[ -L "$sock" ]]; then
-        die "display socket $sock is a symlink — refusing (possible TOCTOU attack)"
-    fi
-    chown -h "root:$STEALTH_USER" "$sock"
-    if [[ ! -S "$sock" || -L "$sock" ]]; then
-        die "display socket $sock changed under us before chmod — refusing (possible TOCTOU attack)"
-    fi
-    # 0660: connecting to a UNIX socket needs write, so the kstealth group gets
-    # read+write. "Other" (your normal desktop user) gets nothing.
-    chmod 0660 "$sock"
+    # compromised QEMU could swap this path between a check and a chown/chmod
+    # done by path. fix-socket-perms opens the inode with O_PATH|O_NOFOLLOW,
+    # verifies it is a socket, and chowns/chmods the PINNED inode via
+    # /proc/self/fd — race-free, immune to a later pathname swap. 0660 so the
+    # kstealth group (the persona seat) can connect and "other" cannot.
+    command python3 "$KRATOS_LIB/fix-socket-perms" "$sock" root "$STEALTH_USER" \
+        || die "could not securely hand over display socket $sock (possible TOCTOU attack)"
 }
 
 stealth_on() {
@@ -503,14 +647,17 @@ stealth_on() {
     load_config
     need_cmd virsh cryptsetup nft python3
     stealth_is_active && die "Stealth Mode is already on"
-    [[ -e "$VAULT_IMG" ]] || die "Stealth Mode isn't set up yet; run: sudo kratos stealth setup <Whonix archive>"
     if [[ "$STEALTH_REQUIRE_VPN" == yes && "$(saved_mode)" != vpn ]]; then
         die "STEALTH_REQUIRE_VPN=yes but network mode is '$(saved_mode)'; run: sudo kratos mode vpn"
     fi
+    [[ "${1:-}" == --passphrase-stdin ]] && read_stdin_pass
+    # Zero-touch: on a fresh boot the vault doesn't exist yet (or its in-RAM key
+    # is gone). Provision automatically — download + verify Whonix, build the
+    # amnesic vault — so "boot the ISO, then toggle Stealth" is all it takes.
+    stealth_is_provisioned || stealth_autoprovision
     [[ "$(saved_mode)" == offline ]] && warn "network mode is offline; the Gateway won't reach Tor"
     systemctl is-active --quiet libvirtd || systemctl start libvirtd
 
-    [[ "${1:-}" == --passphrase-stdin ]] && read_stdin_pass
     install -d -m 755 "$KRATOS_RUN"
     date -u +%s > "$STEALTH_FLAG"
 
@@ -563,6 +710,8 @@ stealth_off_steps() {
     virsh_ net-destroy kx-ext >/dev/null 2>&1 || true
     nft delete table inet kratos_stealth 2>/dev/null || true
     rm -rf "$SPICE_DIR"
+    # Remove any uplink padding the correlation profile installed.
+    if command -v corr_stealth_clear >/dev/null 2>&1; then corr_stealth_clear || true; fi
     ok "stealth networks and firewall removed"
 
     if [[ "${STEALTH_WORKSTATION:-persistent}" == disposable ]] && mountpoint -q "$VAULT_MNT"; then
@@ -606,6 +755,7 @@ stealth_kill() {
     virsh_ destroy "$WS" >/dev/null 2>&1 || true
     virsh_ destroy "$GW" >/dev/null 2>&1 || true
     pkill -KILL -f "guest=kx-" 2>/dev/null || true
+    if command -v corr_stealth_clear >/dev/null 2>&1; then corr_stealth_clear || true; fi
     rm -rf "$SPICE_DIR"
     umount -l "$VAULT_MNT" 2>/dev/null || true
     cryptsetup close "$VAULT_MAPPER" 2>/dev/null || true
