@@ -167,7 +167,12 @@ class EffectivePolicy(unittest.TestCase):
 
         # dom0 is always in system_info["domains"]; the evaluator must treat it
         # as an egress target only, never synthesize it as an inbound source.
-        system_info = {"domains": {"dom0": {}, "kratos-ws-live": {}, "personal": {}, "sys-whonix": {}}}
+        # get_system_info() also keys each domain by a 'uuid:<UUID>' alias; those
+        # must be canonicalized away, never probed as separate domains.
+        system_info = {"domains": {
+            "dom0": {}, "kratos-ws-live": {}, "personal": {}, "sys-whonix": {},
+            "uuid:0": {}, "uuid:ws-live-uuid": {},
+        }}
         return (Policy(), Request, AccessDenied, system_info)
 
     def test_real_eval_catches_egress_and_inbound_allow(self):
@@ -195,6 +200,20 @@ class EffectivePolicy(unittest.TestCase):
         self.assertTrue(ran, "evaluator did not run")
         self.assertFalse(any("inbound hole" in p for p in problems),
                          f"dom0 was wrongly probed as an inbound source: {problems}")
+
+    def test_uuid_aliases_are_not_probed(self):
+        """get_system_info() lists each domain twice (name + 'uuid:<UUID>').
+        The evaluator must canonicalize to names, so no probe is built against a
+        uuid: alias — neither as a target nor (for a persona's alias) a source
+        slipping past the name-based exclusion (finding R10-9)."""
+        eng = self._fake_engine(allow_pairs={
+            ("uuid:ws-live-uuid", "personal", "qubes.Filecopy"),  # persona-by-uuid egress
+            ("personal", "uuid:ws-live-uuid", "qubes.ClipboardPaste"),  # into persona-by-uuid
+        })
+        ran, problems = kq.evaluate_with_real_policy(_engine=eng)
+        self.assertTrue(ran)
+        self.assertFalse(any("uuid:" in p for p in problems),
+                         f"a uuid: alias was probed as its own domain: {problems}")
 
     def test_real_eval_reports_ask_as_path(self):
         eng = self._fake_engine(ask_pairs={

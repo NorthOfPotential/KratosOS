@@ -3,7 +3,8 @@
 set -e
 
 # ── Services ────────────────────────────────────────────────
-systemctl enable kratos-firewall.service kratos-mode.service kratos-stealth-shutdown.service
+systemctl enable kratos-firewall.service kratos-mode.service kratos-stealth-shutdown.service \
+    kratos-offline-links.service
 systemctl enable systemd-resolved.service apparmor.service usbguard.service \
     clamav-freshclam.service
 # libvirt is only needed for Stealth Mode, so don't keep the privileged daemon

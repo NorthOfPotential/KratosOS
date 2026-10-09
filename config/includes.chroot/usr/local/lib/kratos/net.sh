@@ -165,34 +165,90 @@ _wait_for_default_route() {
 # administratively downs every PHYSICAL interface, including ones NM does not
 # manage. It is still best-effort and hardware-dependent (some radios ignore
 # rfkill, USB modems vary), so the kill-switch ruleset remains the backstop.
-net_links() {
+# Enumerate real (physical) NICs, skipping loopback, the Stealth bridges, the
+# WireGuard tunnel and VM taps.
+_physical_ifaces() {
     local dev
+    for dev in /sys/class/net/*; do
+        dev="${dev##*/}"
+        [[ "$dev" == lo || "$dev" == kx-* || "$dev" == "$WG_IF" || "$dev" == vnet* ]] && continue
+        [[ -e "/sys/class/net/$dev/device" ]] || continue
+        printf '%s\n' "$dev"
+    done
+}
+
+# Soft-block state of an rfkill type: blocked | unblocked | absent.
+_rfkill_soft() {
+    local t="$1" out
+    command -v rfkill >/dev/null 2>&1 || { echo absent; return; }
+    out="$(rfkill list "$t" 2>/dev/null)"
+    [[ -n "$out" ]] || { echo absent; return; }
+    if grep -qi 'Soft blocked: yes' <<<"$out"; then echo blocked; else echo unblocked; fi
+}
+
+net_links() {
+    local state="$KRATOS_STATE/offline-links.state" dev kind a b
     case "$1" in
         off)
+            # SNAPSHOT what we are about to change, ONCE, so leaving offline can
+            # restore the user's prior radio/link state instead of blindly
+            # enabling everything (findings R10-4/5/6). Don't overwrite an
+            # existing snapshot (offline may be re-applied within one session).
+            if [[ ! -f "$state" ]]; then
+                install -d -m 755 "$KRATOS_STATE" 2>/dev/null || true
+                {
+                    printf 'rfkill wifi %s\n' "$(_rfkill_soft wifi)"
+                    printf 'rfkill wwan %s\n' "$(_rfkill_soft wwan)"
+                    for dev in $(_physical_ifaces); do
+                        if ip -o link show "$dev" 2>/dev/null | grep -qw UP; then
+                            printf 'link %s up\n' "$dev"
+                        else
+                            printf 'link %s down\n' "$dev"
+                        fi
+                    done
+                } > "$state" 2>/dev/null || true
+            fi
             command -v nmcli >/dev/null 2>&1 && nmcli networking off >/dev/null 2>&1
             if command -v rfkill >/dev/null 2>&1; then
                 rfkill block wifi >/dev/null 2>&1 || true
                 rfkill block wwan >/dev/null 2>&1 || true
             fi
-            # Down every real (physical) NIC, NM-managed or not. Skip loopback,
-            # the Stealth bridges, the WireGuard tunnel and VM taps.
-            for dev in /sys/class/net/*; do
-                dev="${dev##*/}"
-                [[ "$dev" == lo || "$dev" == kx-* || "$dev" == "$WG_IF" || "$dev" == vnet* ]] && continue
-                [[ -e "/sys/class/net/$dev/device" ]] || continue
+            for dev in $(_physical_ifaces); do
                 ip link set "$dev" down 2>/dev/null || true
             done
             ;;
         on)
-            # Re-enable the radios offline turned off, then let NM bring links up.
-            if command -v rfkill >/dev/null 2>&1; then
-                rfkill unblock wifi >/dev/null 2>&1 || true
-                rfkill unblock wwan >/dev/null 2>&1 || true
-            fi
             command -v nmcli >/dev/null 2>&1 && nmcli networking on >/dev/null 2>&1
+            # Restore ONLY what offline changed, from the snapshot. With NO
+            # snapshot (we were never offline) we touch no radios or links — never
+            # unconditionally unblock a radio the user had disabled (R10-4), and
+            # never leave an unmanaged NIC we downed stuck down (R10-5).
+            if [[ -f "$state" ]]; then
+                while read -r kind a b; do
+                    case "$kind" in
+                        rfkill) [[ "$b" == unblocked ]] && command -v rfkill >/dev/null 2>&1 \
+                                    && rfkill unblock "$a" >/dev/null 2>&1 || true ;;
+                        link)   [[ "$b" == up ]] && ip link set "$a" up 2>/dev/null || true ;;
+                    esac
+                done < "$state"
+                rm -f "$state"
+            fi
             ;;
     esac
     return 0
+}
+
+# Called by kratos-offline-links.service AFTER NetworkManager exists (finding
+# R10-3): the early kratos-firewall boot loads the offline IP ruleset, but it
+# runs before NetworkManager, which then brings links/radios back up — so a
+# machine booted in offline never got the layer-1 shutdown. This runs post-NM
+# and enforces it when (and only when) the saved mode is offline.
+net_offline_links() {
+    need_root offline-links
+    load_config
+    [[ "$(saved_mode)" == offline ]] || return 0
+    install -d -m 755 "$KRATOS_RUN" "$KRATOS_STATE"
+    net_links off
 }
 
 # Called by kratos-firewall.service before any network interface comes up.

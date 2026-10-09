@@ -32,19 +32,6 @@
 {% set whonix_ws = 'whonix-workstation-' ~ whonix_version %}
 {% set whonix_gw_template = 'qubes-template-whonix-gateway-' ~ whonix_version %}
 
-# ---- Record the provisioned Whonix generation for the audit (finding R9-6) ----
-# `kratos-q audit` reads this file so its expected Whonix version is the SAME
-# value provisioning built against — one source of truth, instead of a separate
-# KRATOS_WHONIX_VERSION the operator must remember to keep in sync. An explicit
-# KRATOS_WHONIX_VERSION env var still overrides it at audit time.
-/etc/kratos-q/whonix-version:
-  file.managed:
-    - contents: '{{ whonix_version }}'
-    - user: root
-    - group: qubes
-    - mode: '0644'
-    - makedirs: True
-
 # ---- Persona isolation policy into dom0 ----
 /etc/qubes/policy.d/30-kratos.policy:
   file.managed:
@@ -94,6 +81,29 @@ kratos-ws-template-must-match:
     - name: '! qvm-check --quiet kratos-ws || [ "$(qvm-prefs kratos-ws template)" = "{{ whonix_ws }}" ] || { echo "ERROR: existing kratos-ws is based on $(qvm-prefs kratos-ws template), not {{ whonix_ws }}. Remove it (qvm-remove kratos-ws) and re-apply so it is rebuilt on the correct Whonix template." >&2; exit 1; }'
     - require:
       - cmd: kratos-require-ws-template
+
+# ---- Record the provisioned Whonix generation for the audit (finding R9-6) ----
+# `kratos-q audit` reads this file so its expected Whonix version is the SAME
+# value provisioning built against — one source of truth, instead of a separate
+# KRATOS_WHONIX_VERSION the operator must remember to keep in sync. An explicit
+# KRATOS_WHONIX_VERSION env var still overrides it at audit time.
+#
+# It REQUIRES the gateway+workstation version checks (finding R10-8): the file
+# must record the version that actually CONVERGED, not one a failed provisioning
+# attempt merely requested. If the selected templates aren't present, those
+# checks fail first and this file is never (re)written — so the audit can't be
+# left expecting a version the machine was never provisioned to.
+/etc/kratos-q/whonix-version:
+  file.managed:
+    - contents: '{{ whonix_version }}'
+    - user: root
+    - group: qubes
+    - mode: '0644'
+    - makedirs: True
+    - require:
+      - cmd: kratos-require-gw-version
+      - cmd: kratos-require-ws-template
+      - cmd: kratos-ws-template-must-match
 
 # ---- Vault qube: persona secrets, no network ever ----
 kratos-vault:

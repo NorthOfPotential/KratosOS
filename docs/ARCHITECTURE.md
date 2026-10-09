@@ -78,3 +78,4 @@ rights and can't reconfigure the VMs.
 
 1. `kratos-firewall.service` (before `network-pre.target`) loads `offline`, then the saved mode. On the first boot with no saved mode it latches the validated `DEFAULT_MODE` (so it is a true first-run default, not baked into the image). VPN mode stays offline until…
 2. `kratos-mode.service` (after `network-online.target`) brings up WireGuard and loads `vpn`.
+3. `kratos-offline-links.service` (after `NetworkManager.service`, not gated on `network-online.target`) enforces layer-1 silence — `rfkill` block Wi-Fi/WWAN and down every physical NIC — **only** when the saved mode is `offline`, so a machine booted offline isn't re-enabled by NetworkManager after the early firewall unit. The prior radio/link state is snapshotted and restored when leaving offline.

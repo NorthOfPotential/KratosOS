@@ -98,8 +98,9 @@ main() {
         stealth)     stealth_main "$@" ;;
         status)      net_status "$@" ;;
         mode)        net_mode "$@" ;;
-        boot)        net_boot "$@" ;;
-        restore)     net_restore "$@" ;;
+        boot)          net_boot "$@" ;;
+        offline-links) net_offline_links "$@" ;;
+        restore)       net_restore "$@" ;;
         vpn-import)  net_vpn_import "$@" ;;
         mac)         net_mac "$@" ;;
         corr)        corr_main "$@" ;;

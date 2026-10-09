@@ -1,0 +1,18 @@
+[Unit]
+Description=KratosOS offline-mode layer-1 shutdown (rfkill + links down when booted offline)
+# Runs AFTER NetworkManager so the radio/link shutdown isn't undone by NM
+# bringing interfaces up. Does NOT wait for network-online.target (offline has
+# no network, so that target may never be reached). The IP kill-switch is
+# already loaded by kratos-firewall.service; this adds the layer-1 enforcement.
+After=NetworkManager.service kratos-firewall.service
+Wants=NetworkManager.service
+Requires=kratos-firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# No-op unless the saved mode is offline (the tool checks).
+ExecStart=/usr/local/bin/kratos offline-links
+
+[Install]
+WantedBy=multi-user.target
