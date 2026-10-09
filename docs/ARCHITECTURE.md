@@ -45,14 +45,19 @@ workstation.qcow2        overlay with the persona's changes (thrown away in disp
 libvirt/kx-*.xml         hardened, validated VM and network definitions
 ```
 
-The vault mount (`/var/lib/kratos/vault`) is `0700 root:root`, but the VMs run
-as `libvirt-qemu`, so QEMU is granted an **execute-only POSIX ACL**
-(`u:libvirt-qemu:x`) on that directory: it can traverse to the disk file libvirt
-relabels to it, but cannot list the directory or read any file. Everyone else
-is fully excluded, and each disk's access is still governed by libvirt's per-VM
-dynamic ownership + sVirt label (so the Gateway cannot open the Workstation's
-disk). This needs validating on a real libvirt host — the test suite proves the
-ACL shape, not the live QEMU open.
+The vault mount (`/var/lib/kratos/vault`) is `root:root` with `group::---` and
+`other::---`, but the VMs run as `libvirt-qemu`, so QEMU is granted an
+**execute-only POSIX ACL** (`u:libvirt-qemu:x`) on that directory: it can
+traverse to the disk file libvirt relabels to it, but cannot list the directory
+or read any file. (Because a named-user ACL exists, `ls`/`stat` shows the mode
+as `0710` — those "group" bits are the ACL **mask**, not a real `group::`
+grant, which stays `---`.) Everyone else is fully excluded, and each disk's
+access is still governed by libvirt's per-VM dynamic ownership + sVirt label.
+Important caveat: both VMs run under the SAME `libvirt-qemu` UID, and the disk
+filenames are public, so the Gateway-vs-Workstation cross-disk boundary rests on
+**sVirt/AppArmor (MAC)**, not Unix ownership — which makes a live sVirt-label
+test a real release requirement. The test suite proves the ACL shape, not the
+live QEMU open.
 
 VMs and networks are created with `virsh create` / `net-create` (transient), so
 `/etc/libvirt` never holds them. VM displays are SPICE over a UNIX socket in

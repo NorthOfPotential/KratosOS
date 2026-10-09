@@ -45,8 +45,17 @@ if grep -qE "user:$qemu_user:(r|.w|..x$)" <<<"$acl" && grep -qE "user:$qemu_user
 else
     pass "QEMU user ACL grants no read/write"
 fi
-# The base mode stays 0700: group/other still fully excluded.
-mode="$(stat -c '%a' "$VAULT_MNT")"
-if [[ "$mode" == 700 ]]; then pass "vault base mode stays 0700"; else flunk "vault base mode changed to $mode"; fi
+# group:: and other:: must stay fully excluded. NOTE: with a named-user ACL,
+# the traditional GROUP mode bits display the ACL MASK, so `stat` shows 0710+
+# even though the real group:: entry is still ---. We therefore assert the ACL
+# ENTRIES, not the stat mode (that was the earlier test bug).
+if grep -qE '^group::---' <<<"$acl"; then pass "group:: still has no access"; else flunk "group:: is not ---: $acl"; fi
+if grep -qE '^other::---' <<<"$acl"; then pass "other:: still has no access"; else flunk "other:: is not ---: $acl"; fi
+# The mask only needs to permit the one execute bit we granted — never r or w.
+if grep -qE '^mask::--x' <<<"$acl"; then
+    pass "ACL mask is execute-only (so no named entry can gain r/w)"
+else
+    flunk "ACL mask is wider than --x: $acl"
+fi
 
 exit "$fail"

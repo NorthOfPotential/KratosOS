@@ -52,6 +52,16 @@ kratos-require-whonix:
   cmd.run:
     - name: 'qvm-check --quiet sys-whonix || { echo "ERROR: sys-whonix not found; install {{ whonix_gw_template }} and create the sys-whonix gateway, then re-apply." >&2; exit 1; }'
 
+# ---- sys-whonix must be the MATCHING Whonix GATEWAY generation (finding R8) ----
+# Don't allow a stale mixed-generation system (e.g. Workstation 18 on a Gateway
+# 17). Require sys-whonix's template to be whonix-gateway-<same version> as the
+# workstation selection.
+kratos-require-gw-version:
+  cmd.run:
+    - name: '[ "$(qvm-prefs sys-whonix template)" = "whonix-gateway-{{ whonix_version }}" ] || { echo "ERROR: sys-whonix is based on $(qvm-prefs sys-whonix template), not whonix-gateway-{{ whonix_version }}. Rebuild sys-whonix on the matching Whonix generation (or set the kratos:whonix_version pillar to the version you actually run), then re-apply." >&2; exit 1; }'
+    - require:
+      - cmd: kratos-require-whonix
+
 # ---- The selected Whonix WORKSTATION template must exist (finding R6-H9) ----
 # Don't silently build the persona DispVM template against a missing/unsupported
 # Whonix version. Fail loudly and name the pillar override if the template for
@@ -105,6 +115,7 @@ kratos-ws-dvm:
     # kratos-ws is already on the correct template.
     - require:
       - cmd: kratos-require-whonix
+      - cmd: kratos-require-gw-version
       - cmd: kratos-require-ws-template
       - cmd: kratos-ws-template-must-match
 

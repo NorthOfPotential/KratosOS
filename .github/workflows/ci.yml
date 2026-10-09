@@ -40,6 +40,11 @@ jobs:
     # target is what makes the build reliable. --privileged: live-build needs
     # mount, chroot and loop devices.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    # Gate the release artifact on the security test suite: a red test job must
+    # NOT yield a built, SBOM'd, provenance-attested ISO as the normal release
+    # path (finding R8/CI). `needs: test` makes build-iso wait for and require a
+    # green test job.
+    needs: test
     runs-on: ubuntu-24.04
     # id-token + attestations let this job mint a signed, verifiable provenance
     # attestation for the ISO it builds (see the "Attest" step). contents stays
