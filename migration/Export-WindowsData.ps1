@@ -37,8 +37,29 @@ function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
 # ── Safety checks ──────────────────────────────────────────────
 $destDrive = (Resolve-Path $Destination).Drive.Name
-if ($destDrive -eq $env:SystemDrive.TrimEnd(':')) {
-    throw "Destination is on the Windows system drive ($env:SystemDrive). Use an external drive: KratosOS will erase this disk."
+$sysLetter = $env:SystemDrive.TrimEnd(':')
+
+# A different drive LETTER is not enough: C: and D: can be two partitions on the
+# SAME physical disk, and the KratosOS install erases the whole disk — which
+# would destroy both Windows AND this "backup" (finding R8-5). Compare the
+# PHYSICAL DISK NUMBER of each and refuse a same-disk destination.
+function Get-DiskNumberForLetter($letter) {
+    try { return (Get-Partition -DriveLetter $letter -ErrorAction Stop).DiskNumber }
+    catch { return $null }
+}
+$sysDisk  = Get-DiskNumberForLetter $sysLetter
+$destDisk = Get-DiskNumberForLetter $destDrive
+if ($destDrive -eq $sysLetter) {
+    throw "Destination is on the Windows system drive ($env:SystemDrive). Use a separate EXTERNAL drive: KratosOS will erase the Windows disk."
+}
+if ($null -ne $sysDisk -and $null -ne $destDisk -and $sysDisk -eq $destDisk) {
+    throw ("Destination ($destDrive`:) is on the SAME physical disk (#$destDisk) as Windows ($sysLetter`:). " +
+           "The backup MUST be on a DIFFERENT physical device — the KratosOS install erases the whole Windows disk, " +
+           "which would also erase this backup. Use an external USB drive.")
+}
+if ($null -eq $sysDisk -or $null -eq $destDisk) {
+    Say "WARNING: could not confirm the destination is on a different physical disk from Windows." Yellow
+    Say "Make absolutely sure your backup drive is a SEPARATE physical device before you erase anything." Yellow
 }
 
 $folders = 'Desktop', 'Documents', 'Downloads', 'Pictures', 'Music', 'Videos', 'Favorites'
@@ -70,6 +91,12 @@ if ($total -gt $free * 0.95) { throw "Not enough space on the destination drive.
 New-Item -ItemType Directory -Force -Path $filesDir, $invDir | Out-Null
 "KratosOS export started $(Get-Date -Format o) by $env:USERNAME" | Set-Content $logFile
 
+# Track real copy FAILURES across every robocopy run. A robocopy exit code >= 8
+# means files could not be copied — the export is INCOMPLETE and must NOT be
+# treated as a usable backup before an erase-disk install (finding R8-6).
+$copyFailed = $false
+$failedWhat = @()
+
 # ── Copy personal folders ─────────────────────────────────────
 # robocopy: /E subfolders, /XJ skip junction loops, /R /W fast retry,
 # skip junk files and OneDrive cloud-only placeholders (attribute O = offline)
@@ -79,7 +106,10 @@ foreach ($f in $folders) {
     Say "Copying $f..." Cyan
     robocopy $src (Join-Path $filesDir $f) /E /XJ /R:1 /W:1 /XA:O /NP /NFL /NDL `
         /XF desktop.ini Thumbs.db *.lnk '~$*' /LOG+:$logFile | Out-Null
-    if ($LASTEXITCODE -ge 8) { Say "  Some files in $f could not be copied, see export.log" Yellow }
+    if ($LASTEXITCODE -ge 8) {
+        $copyFailed = $true; $failedWhat += $f
+        Say "  ERROR: files in $f could not be copied (robocopy exit $LASTEXITCODE), see export.log" Red
+    }
 }
 
 # Cloud-only OneDrive files aren't on this PC; list them so nothing is forgotten
@@ -98,6 +128,10 @@ if ($cloudOnly) {
 if ($IncludeSSH -and (Test-Path "$profileDir\.ssh")) {
     Say "Copying .ssh (private keys)..." Cyan
     robocopy "$profileDir\.ssh" (Join-Path $filesDir '.ssh') /E /R:1 /W:1 /NP /NFL /NDL /LOG+:$logFile | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        $copyFailed = $true; $failedWhat += '.ssh'
+        Say "  ERROR: .ssh could not be fully copied (robocopy exit $LASTEXITCODE), see export.log" Red
+    }
 }
 
 # ── Browser bookmarks (NOT saved passwords) ───────────────────
@@ -141,7 +175,10 @@ KratosOS migration checklist (things this script can't copy for you)
     with a server IP address as the Endpoint, for `kratos vpn-import`
 [ ] BitLocker recovery key saved OFF this computer (see below)
 [ ] Open several exported files on another computer to check the backup works
-[ ] Make a SECOND copy of this export on a different drive
+[ ] This backup drive is a DIFFERENT PHYSICAL DEVICE from the Windows disk
+    (not just a different drive letter/partition) — the install erases the
+    whole Windows disk
+[ ] Make a SECOND copy of this export on another separate device
 "@
 $checklist | Set-Content (Join-Path $exportRoot 'CHECKLIST.txt') -Encoding UTF8
 
@@ -152,6 +189,35 @@ $base = (Resolve-Path $exportRoot).Path.TrimEnd('\') + '\'
 $lines = Get-ChildItem $filesDir -Recurse -File -Force | ForEach-Object {
     $rel = $_.FullName.Substring($base.Length).Replace('\', '/')
     '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLower(), $rel
+}
+
+$marker = Join-Path $exportRoot 'INCOMPLETE-DO-NOT-ERASE-WINDOWS.txt'
+if ($copyFailed) {
+    # Finding R8-6: some files could not be copied, so this export is NOT a
+    # complete backup. Do NOT write a usable manifest.sha256 (so `kratos migrate`
+    # refuses to import a partial backup as if it were whole), write a loud
+    # persistent marker, and exit non-zero. Fix the errors (see export.log) and
+    # re-run before erasing Windows.
+    [IO.File]::WriteAllText((Join-Path $exportRoot 'manifest.sha256.INCOMPLETE'), (($lines -join "`n") + "`n"), $utf8)
+    @"
+INCOMPLETE EXPORT — DO NOT ERASE WINDOWS
+========================================
+Some files could not be copied: $($failedWhat -join ', ')
+See export.log for details. This export is NOT a complete backup.
+
+There is deliberately NO manifest.sha256 here, so KratosOS will refuse to
+import it as a finished backup. Fix the copy errors and run the exporter
+again until it finishes with NO errors before you erase this computer.
+"@ | Set-Content $marker -Encoding UTF8
+    Say "`nEXPORT INCOMPLETE — some files failed to copy ($($failedWhat -join ', '))." Red
+    Say "DID NOT write manifest.sha256. DO NOT ERASE WINDOWS. See $marker and export.log, then re-run." Red
+    exit 1
+}
+# All copies succeeded: remove any stale marker from a previous failed run and
+# publish the real manifest.
+if (Test-Path $marker) { Remove-Item $marker -Force -ErrorAction SilentlyContinue }
+if (Test-Path (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE')) {
+    Remove-Item (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE') -Force -ErrorAction SilentlyContinue
 }
 [IO.File]::WriteAllText((Join-Path $exportRoot 'manifest.sha256'), (($lines -join "`n") + "`n"), $utf8)
 
