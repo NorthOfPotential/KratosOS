@@ -1,0 +1,10 @@
+#!/bin/sh
+# KratosOS read-only status helper (finding R8-18). `kratos status` inspects
+# root-only state (nftables, qemu:///system, the vault), so run unprivileged it
+# can report a control as "down" merely because it could not look. This helper
+# fixes the read-only 'status' subcommand so the GUI can inspect the real state
+# through its own polkit action without granting the user nft/libvirt powers.
+case "${1:-}" in
+    status|"") exec /usr/local/bin/kratos status ;;
+    *) echo "kratos-status: only the read-only 'status' subcommand is allowed here" >&2; exit 2 ;;
+esac

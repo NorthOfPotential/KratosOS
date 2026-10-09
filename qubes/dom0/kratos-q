@@ -320,7 +320,7 @@ _EVAL_SERVICES = (
 )
 
 
-def evaluate_with_real_policy():
+def evaluate_with_real_policy(_engine=None):
     """Ask Qubes' OWN policy engine what it would actually decide for the
     persona, using real Request objects — not our approximate matcher
     (finding R6-H10/R7). This catches earlier rules that allow the persona via
@@ -329,56 +329,84 @@ def evaluate_with_real_policy():
     ADDITIVE and FAIL-CLOSED by design: it only ever REPORTS egress it positively
     observes being allowed; if the qrexec library or system_info is unavailable,
     or its API differs, it returns ran=False and the caller keeps the lint. An
-    error is never read as "safe". Returns (ran, problems)."""
+    error is never read as "safe". Returns (ran, problems).
+
+    `_engine` is a test seam: a (policy, Request, AccessDenied, system_info)
+    tuple that bypasses the qrexec imports so the loop logic can be exercised
+    with a fake engine off a dom0."""
+    if _engine is not None:
+        policy, Request, AccessDenied, system_info = _engine
+    else:
+        try:
+            from qrexec.policy.parser import FilePolicy, Request
+            from qrexec.exc import AccessDenied
+            from qrexec.utils import get_system_info
+        except Exception:  # noqa: BLE001 - not a dom0 / unexpected API: fall back
+            try:
+                # Older layouts exported AccessDenied from the parser module.
+                from qrexec.policy.parser import FilePolicy, Request, AccessDenied  # type: ignore
+                from qrexec.utils import get_system_info
+            except Exception:  # noqa: BLE001
+                return False, []
+        try:
+            system_info = get_system_info()
+            policy = FilePolicy()    # Qubes' own default policy locations/order
+        except Exception:  # noqa: BLE001
+            return False, []
     try:
-        from qrexec.policy.parser import FilePolicy
-        from qrexec.policy.parser import AccessDenied
-        from qrexec.utils import get_system_info
-    except Exception:  # noqa: BLE001 - not a dom0 / unexpected API: fall back
-        return False, []
-    try:
-        system_info = get_system_info()
         domains = sorted(system_info["domains"].keys())
     except Exception:  # noqa: BLE001
         return False, []
 
-    # Persona sources: the live disposable (what actually runs) and the template.
-    sources = [n for n in (WS_LIVE, WS_TEMPLATE) if n in domains]
-    if not sources:
+    # Persona qubes: the live disposable (what actually runs) and the template.
+    personas = [n for n in (WS_LIVE, WS_TEMPLATE) if n in domains]
+    if not personas:
         return False, []        # nothing persona-ish exists to evaluate yet
-    # Targets: every domain, plus the special selectors a rule might resolve to.
-    targets = list(domains) + ["@adminvm", "dom0"]
+    others = list(domains) + ["@adminvm", "dom0"]
+
+    def verdict(src, tgt, svc):
+        """Return ('allow'|'ask'|'deny', None) or (None, True) on API error.
+        Uses Qubes' DEFAULT resolution types (passing None breaks Allow.evaluate,
+        which would make this disable itself on the very allow we must catch —
+        finding R8-2). An AllowResolution is only constructed on a real allow."""
+        try:
+            req = Request(svc, "+", src, tgt, system_info=system_info)
+            res = policy.evaluate(req)
+        except AccessDenied:
+            return "deny", None
+        except Exception:  # noqa: BLE001 - API mismatch: never read as safe
+            return None, True
+        name = type(res).__name__.lower()
+        if "allow" in name:
+            return "allow", None
+        if "ask" in name:
+            return "ask", None
+        return "deny", None   # unknown non-deny resolution: treat conservatively
 
     problems = []
     evaluated = 0
-    try:
-        policy = FilePolicy()        # Qubes' own default policy locations/order
-    except Exception:  # noqa: BLE001
-        return False, []
+    # BOTH directions (finding R8-3): persona -> other (egress), AND
+    # other -> persona (inbound isolation, e.g. the '* * @anyvm @tag:kratos-persona
+    # deny' rule). A hole in either direction is a finding.
+    probes = []
+    for p in personas:
+        for o in others:
+            if o == p:
+                continue
+            probes.append((p, o, "egress", f"from persona '{p}' to '{o}'"))
+            # Inbound only makes sense toward a concrete persona qube, not a selector.
+            probes.append((o, p, "inbound", f"into persona '{p}' from '{o}'"))
 
-    for src in sources:
+    for src, tgt, direction, label in probes:
         for svc in _EVAL_SERVICES:
-            for tgt in targets:
-                if tgt == src:
-                    continue
-                try:
-                    from qrexec.policy.parser import Request  # local: API-tolerant
-                    req = Request(svc, "+", src, tgt, system_info=system_info,
-                                  ask_resolution_type=None, allow_resolution_type=None)
-                    res = policy.evaluate(req)
-                    evaluated += 1
-                except AccessDenied:
-                    evaluated += 1          # denied = exactly what we want
-                    continue
-                except Exception:           # noqa: BLE001 - API mismatch: don't claim safe
-                    return False, []
-                # A resolution object was returned => NOT denied. Allow is a hole;
-                # an ask-path from an unattended persona is also a way out.
-                verdict = type(res).__name__.lower()
-                if "allow" in verdict:
-                    problems.append(f"qrexec WOULD ALLOW {svc} from persona '{src}' to '{tgt}' (egress hole)")
-                elif "ask" in verdict:
-                    problems.append(f"qrexec would PROMPT for {svc} from persona '{src}' to '{tgt}' (persona egress path)")
+            v, apierr = verdict(src, tgt, svc)
+            if apierr:
+                return False, []        # couldn't trust the engine: let the lint speak
+            evaluated += 1
+            if v == "allow":
+                problems.append(f"qrexec WOULD ALLOW {svc} {label} ({direction} hole)")
+            elif v == "ask":
+                problems.append(f"qrexec would PROMPT for {svc} {label} ({direction} path)")
     if evaluated == 0:
         return False, []        # we proved nothing; let the lint speak
     return True, problems
@@ -457,12 +485,42 @@ def cmd_audit():
     else:
         print(f"  note  {WS_LIVE} is not running; auditing the template only")
 
-    net = _prefs(WS_TEMPLATE, "netvm")
-    if net == GATEWAY:
-        print(f"  OK    {WS_TEMPLATE} routes only through {GATEWAY}")
+    # Verify the full invariant on the DispVM TEMPLATE itself (finding R8-4): an
+    # existing kratos-ws that Salt's `present` did not recreate could be based on
+    # the WRONG underlying template (e.g. a plain Debian AppVM) while still being
+    # tagged persona and pinned to sys-whonix — i.e. NOT a Whonix Workstation.
+    if domain_exists(WS_TEMPLATE):
+        t_tmpl = _prefs(WS_TEMPLATE, "template")
+        t_net = _prefs(WS_TEMPLATE, "netvm")
+        t_dvm = _prefs(WS_TEMPLATE, "template_for_dispvms")
+        t_tags = subprocess.run(["qvm-tags", WS_TEMPLATE], capture_output=True, text=True).stdout.split()
+        ws_checks = [
+            (t_tmpl.startswith("whonix-workstation-"), f"based on a Whonix Workstation template ({t_tmpl})",
+             f"{WS_TEMPLATE} is based on '{t_tmpl}', expected a whonix-workstation-* template (NOT a non-Whonix base)"),
+            (t_net == GATEWAY, f"routes only through {GATEWAY}",
+             f"{WS_TEMPLATE} netvm is '{t_net}', expected {GATEWAY}"),
+            (t_dvm.lower() in ("true", "1", "yes"), "is a DispVM template",
+             f"{WS_TEMPLATE} template_for_dispvms is '{t_dvm}', expected True"),
+            (PERSONA_TAG in t_tags, f"carries the {PERSONA_TAG} tag",
+             f"{WS_TEMPLATE} is missing the '{PERSONA_TAG}' tag"),
+        ]
+        for ok, okmsg, failmsg in ws_checks:
+            if ok:
+                print(f"  OK    {WS_TEMPLATE} {okmsg}")
+            else:
+                print(f"  FAIL  {failmsg}")
+                rc = 1
     else:
-        print(f"  FAIL  {WS_TEMPLATE} netvm is '{net}', expected {GATEWAY}")
-        rc = 1
+        print(f"  note  {WS_TEMPLATE} does not exist yet (run 'kratos-q provision')")
+
+    # The Tor gateway itself must be a Whonix gateway, not just named sys-whonix.
+    if domain_exists(GATEWAY):
+        gw_tmpl = _prefs(GATEWAY, "template")
+        if gw_tmpl.startswith("whonix-gateway-"):
+            print(f"  OK    {GATEWAY} is based on {gw_tmpl}")
+        else:
+            print(f"  FAIL  {GATEWAY} is based on '{gw_tmpl}', expected a whonix-gateway-* template")
+            rc = 1
     return rc
 
 

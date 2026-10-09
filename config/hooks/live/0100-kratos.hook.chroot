@@ -30,6 +30,13 @@ chmod 755 /usr/local/bin/kratos /usr/local/bin/kratos-tray /usr/local/bin/kratos
 chmod 644 /usr/local/lib/kratos/*.sh /usr/local/lib/kratos/*.tsv
 chmod 755 /usr/local/lib/kratos/harden-whonix.py /usr/local/lib/kratos/stealth-seat \
           /usr/local/lib/kratos/fix-socket-perms
+# Privileged polkit helpers: ownership/mode is a SECURITY INVARIANT, not an
+# assumption (finding R8-16). pkexec runs these as root, so they must be
+# root-owned and not group/other-writable.
+if [ -d /usr/local/libexec/kratos ]; then
+    chown root:root /usr/local/libexec/kratos /usr/local/libexec/kratos/*
+    chmod 755 /usr/local/libexec/kratos /usr/local/libexec/kratos/*
+fi
 install -d /usr/share/doc/kratos
 
 # ── Lock down everything the privileged tool reads or runs ──────────────────

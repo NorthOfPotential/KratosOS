@@ -17,6 +17,7 @@ KRATOS = "/usr/local/bin/kratos"
 HELPER_DIR = "/usr/local/libexec/kratos"
 H_NET = f"{HELPER_DIR}/kratos-net"
 H_STEALTH = f"{HELPER_DIR}/kratos-stealth"
+H_STATUS = f"{HELPER_DIR}/kratos-status"
 STEALTH_FLAG = "/run/kratos/stealth.active"
 MODE_FILE = "/var/lib/kratos/mode"
 CONF_FILE = "/etc/kratos/kratos.conf"
@@ -207,7 +208,10 @@ class Tray(QSystemTrayIcon):
             self._run(f"Network: {mode}", H_NET, [mode])
 
     def show_status(self):
-        out = subprocess.run([KRATOS, "status"], capture_output=True, text=True,
+        # Run the read-only status helper via pkexec (finding R8-18): `kratos
+        # status` inspects root-only state (nftables, libvirt, vault), so an
+        # unprivileged run would misreport controls it simply couldn't see.
+        out = subprocess.run(["pkexec", H_STATUS], capture_output=True, text=True,
                              env=dict(os.environ, NO_COLOR="1"))
         QMessageBox.information(None, "KratosOS status", _strip_ansi(out.stdout + out.stderr))
 

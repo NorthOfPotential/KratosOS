@@ -47,18 +47,27 @@ wg_validate() {
 _wg_write_defines() {
     [[ -r "$WG_IMPORTED" ]] || return 1
     wg_validate "$WG_IMPORTED" || return 1
-    local endpoint host port
+    local endpoint host port dns ip dnsset=""
     endpoint="$(awk -F' *= *' 'tolower($1)=="endpoint"{print $2; exit}' "$WG_IMPORTED")"
     host="${endpoint%:*}"
     port="${endpoint##*:}"
     # A hostname would need a clear-text DNS lookup outside the tunnel
     [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
     [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    # The VPN's own DNS resolver address(es), so vpn.nft can allow DNS ONLY to
+    # them, INSIDE the tunnel (finding R8-7). Only literal IPv4 addresses count;
+    # anything else is ignored (an empty set => DNS fully blocked, fail-closed).
+    dns="$(awk -F' *= *' 'tolower($1)=="dns"{print $2; exit}' "$WG_IMPORTED" | tr ',' ' ')"
+    for ip in $dns; do
+        [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+        dnsset="${dnsset:+$dnsset, }$ip"
+    done
     install -d -m 755 "$KRATOS_RUN"
     cat > "$KRATOS_RUN/vpn.nft" <<EOF
 define WG_IF = "$WG_IF"
 define WG_ENDPOINT = $host
 define WG_PORT = $port
+define WG_DNS = { ${dnsset:-127.0.0.1} }
 EOF
 }
 
@@ -103,7 +112,17 @@ net_mode() {
 
     case "$mode" in
         vpn)
+            # Transactional bring-up (finding R8-9): route through the SAME
+            # bootstrap kill-switch the cold-boot path uses (DHCP + WG endpoint
+            # only, no clearnet) BEFORE raising the tunnel, instead of sitting on
+            # the full vpn ruleset while the link is still re-acquiring DHCP.
+            # There is never a clearnet window and never a full-vpn-without-route
+            # window. Then wait for a route, raise the tunnel, install full vpn.
+            _wg_write_defines || die "VPN Endpoint must be a literal IPv4 address with a port"
+            load_ruleset vpn-bootstrap
             net_links on
+            _wait_for_default_route 20 \
+                || warn "no default route yet; raising the tunnel anyway (it connects once the link is ready)"
             wg_up
             load_ruleset vpn
             ;;
@@ -122,6 +141,17 @@ net_mode() {
     esac
     echo "$mode" > "$KRATOS_STATE/mode"
     ok "network mode: $mode"
+}
+
+# Wait up to <timeout> seconds for a default route (an acquired lease), so the
+# offline->vpn transition doesn't raise the tunnel before the link is ready.
+_wait_for_default_route() {
+    local timeout="${1:-20}" t=0
+    while (( t < timeout )); do
+        ip route show default 2>/dev/null | grep -q . && return 0
+        sleep 1; t=$((t + 1))
+    done
+    return 1
 }
 
 # Bring NetworkManager-managed links up/off. Best-effort: absence of nmcli (or

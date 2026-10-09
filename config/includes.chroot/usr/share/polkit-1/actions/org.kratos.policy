@@ -37,6 +37,36 @@
     <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/kratos/kratos-stealth</annotate>
   </action>
 
+  <action id="org.kratos.stealth-admin">
+    <description>Provision or reset the KratosOS Stealth vault</description>
+    <message>Authentication is required to set up or reset the Stealth vault</message>
+    <icon_name>security-high</icon_name>
+    <!-- setup verifies/extracts an attacker-selected archive and reprovisions
+         the vault; reset erases persona state. Destructive/provisioning, so
+         NEVER retained (finding R8-16). -->
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/kratos/kratos-stealth-admin</annotate>
+  </action>
+
+  <action id="org.kratos.status">
+    <description>Read KratosOS security status</description>
+    <message>Authentication is required to read KratosOS security status</message>
+    <icon_name>security-high</icon_name>
+    <!-- Read-only: inspects nftables/libvirt/vault state so the GUI can report
+         it accurately without the desktop user holding nft/libvirt powers
+         (finding R8-18). Retained for a smooth status view. -->
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/kratos/kratos-status</annotate>
+  </action>
+
   <action id="org.kratos.migrate">
     <description>Import Windows data into KratosOS</description>
     <message>Authentication is required to import data (this reads disks/exports as root)</message>

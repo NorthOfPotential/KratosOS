@@ -20,7 +20,7 @@ run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
 
 step "nftables syntax"
 tmp="$(mktemp -d)"
-printf 'define WG_IF = "wg0"\ndefine WG_ENDPOINT = 198.51.100.7\ndefine WG_PORT = 51820\n' > "$tmp/defs"
+printf 'define WG_IF = "wg0"\ndefine WG_ENDPOINT = 198.51.100.7\ndefine WG_PORT = 51820\ndefine WG_DNS = { 10.2.0.1 }\n' > "$tmp/defs"
 for f in "$inc"/etc/kratos/modes/*.nft "$inc"/etc/kratos/stealth.nft; do
     sed "s|/run/kratos/vpn.nft|$tmp/defs|" "$f" > "$tmp/x.nft"
     if nft -c -f "$tmp/x.nft"; then echo "ok   $f"; else echo "FAIL $f"; status=1; fi
@@ -64,6 +64,9 @@ run tests/test_undo_safe.sh
 
 step "migration"
 run tests/test_migrate.sh
+
+step "vault QEMU-traversal ACL"
+run tests/test_vault_acl.sh
 
 step "host/persona isolation (simulated attack)"
 if [[ $EUID -eq 0 ]] && id "${ATTACKER:-mallory}" >/dev/null 2>&1 && id kstealth >/dev/null 2>&1; then

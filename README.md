@@ -34,7 +34,7 @@ Turn it on from the shield icon in the system tray, or with `sudo kratos stealth
 
 **ON** (in this order):
 1. **Host lockdown:** swap off, suspend/hibernate blocked, Bluetooth and webcam off, new USB devices blocked, on-access malware scanning on, reconnect with a fresh random MAC
-2. **Unlock the stealth vault:** a separate LUKS2 container. By default it is *amnesic* — a random key kept only in RAM and destroyed when Stealth turns off, so each session is rebuilt fresh and nothing persists (no passphrase to type). Set `STEALTH_VAULT_PERSIST=yes` for a persistent vault unlocked with a passphrase you choose.
+2. **Unlock the stealth vault:** a separate LUKS2 container. By default it is *amnesic* — a random key kept only in RAM (unswappable). The key is kept for the rest of the boot, so toggling Stealth off then on reopens the SAME vault and preserves the Tor Gateway's guard state; the persona Workstation is wiped to a clean overlay each time. The key (and thus the whole vault) is destroyed only at **reboot or `kratos panic`** — no passphrase to type. Set `STEALTH_VAULT_PERSIST=yes` for a persistent vault unlocked with a passphrase you choose.
 3. **Isolation check:** refuses to start if the Workstation has any network path other than the Gateway, or has clipboard/file sharing/USB redirection
 4. **Stealth firewall:** the Workstation's network is never forwarded or reachable from the host
 5. **Start Gateway** (Tor), **then Workstation**, and open its window
@@ -48,8 +48,11 @@ Turn it on from the shield icon in the system tray, or with `sudo kratos stealth
 6. Undo the host lockdown
 
 The VMs are transient: their definitions live **inside** the vault. With
-Stealth Mode off, the system holds no record of the running persona; the vault
-is an encrypted file (and in the default amnesic mode its key is gone from RAM).
+Stealth Mode off, the vault is locked (an encrypted file) and the persona's
+browsing overlay has been wiped. In the default amnesic mode the in-RAM key is
+**kept for the rest of the boot** (so the next toggle reopens the same Gateway)
+and is destroyed only at reboot or `kratos panic` — that is when the vault
+becomes truly unrecoverable.
 Note: on an installed system with Whonix caching enabled (the default), a
 verified Whonix image is also kept under `/var/lib/kratos/whonix-cache/` — inside
 the LUKS-encrypted root, so encrypted at rest, but it is a persistent on-disk

@@ -1,0 +1,11 @@
+#!/bin/sh
+# KratosOS privileged helper for the DESTRUCTIVE / provisioning Stealth actions:
+# setup (verifies and extracts an attacker-selected Whonix archive, builds the
+# vault) and reset (erases persona state). Its polkit action
+# (org.kratos.stealth-admin) uses auth_admin and is NEVER retained, so each such
+# action re-authenticates and a cached everyday-Stealth auth can't reach it
+# (finding R8-16).
+case "${1:-}" in
+    setup|reset) exec /usr/local/bin/kratos stealth "$@" ;;
+    *) echo "kratos-stealth-admin: only setup|reset are allowed here" >&2; exit 2 ;;
+esac

@@ -61,6 +61,17 @@ kratos-require-ws-template:
   cmd.run:
     - name: 'qvm-check --quiet {{ whonix_ws }} || { echo "ERROR: template {{ whonix_ws }} is not installed. Install the Whonix workstation template for your Qubes release, or set the kratos:whonix_version pillar to the version you actually have, then re-apply." >&2; exit 1; }'
 
+# ---- If kratos-ws ALREADY exists, it MUST be based on the Whonix workstation
+#      template (finding R8-4). qvm.vm `present` does NOT recreate an existing
+#      qube, so a pre-existing kratos-ws on a non-Whonix base (e.g. debian-13)
+#      would otherwise be pinned to sys-whonix + tagged persona while NOT being
+#      a Whonix Workstation. Fail loudly instead of silently mis-provisioning.
+kratos-ws-template-must-match:
+  cmd.run:
+    - name: '! qvm-check --quiet kratos-ws || [ "$(qvm-prefs kratos-ws template)" = "{{ whonix_ws }}" ] || { echo "ERROR: existing kratos-ws is based on $(qvm-prefs kratos-ws template), not {{ whonix_ws }}. Remove it (qvm-remove kratos-ws) and re-apply so it is rebuilt on the correct Whonix template." >&2; exit 1; }'
+    - require:
+      - cmd: kratos-require-ws-template
+
 # ---- Vault qube: persona secrets, no network ever ----
 kratos-vault:
   qvm.vm:
@@ -90,10 +101,12 @@ kratos-ws-dvm:
       - default_dispvm: ""
       - autostart: False
     # Don't build the persona workstation unless its Tor gateway AND the
-    # selected Whonix workstation template are both present.
+    # selected Whonix workstation template are present, AND any existing
+    # kratos-ws is already on the correct template.
     - require:
       - cmd: kratos-require-whonix
       - cmd: kratos-require-ws-template
+      - cmd: kratos-ws-template-must-match
 
 # Tag the disposable template (and thus its disposables) as the persona, using
 # the official qvm.tags state — idempotent, and no shelling out to qvm-tags.

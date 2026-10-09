@@ -45,6 +45,15 @@ workstation.qcow2        overlay with the persona's changes (thrown away in disp
 libvirt/kx-*.xml         hardened, validated VM and network definitions
 ```
 
+The vault mount (`/var/lib/kratos/vault`) is `0700 root:root`, but the VMs run
+as `libvirt-qemu`, so QEMU is granted an **execute-only POSIX ACL**
+(`u:libvirt-qemu:x`) on that directory: it can traverse to the disk file libvirt
+relabels to it, but cannot list the directory or read any file. Everyone else
+is fully excluded, and each disk's access is still governed by libvirt's per-VM
+dynamic ownership + sVirt label (so the Gateway cannot open the Workstation's
+disk). This needs validating on a real libvirt host — the test suite proves the
+ACL shape, not the live QEMU open.
+
 VMs and networks are created with `virsh create` / `net-create` (transient), so
 `/etc/libvirt` never holds them. VM displays are SPICE over a UNIX socket in
 `/run/kratos/spice/`, which is `root:kstealth` (mode 0710) — the dedicated
