@@ -103,6 +103,28 @@ if ($total -gt $free * 0.95) { throw "Not enough space on the destination drive.
 New-Item -ItemType Directory -Force -Path $filesDir, $invDir | Out-Null
 "KratosOS export started $(Get-Date -Format o) by $env:USERNAME" | Set-Content $logFile
 
+# ── Transactional backup: begin in an explicitly INCOMPLETE state (finding R9-8) ──
+# Remove any manifest from a previous run NOW and drop a loud marker, BEFORE a
+# single file is copied. $ErrorActionPreference='Stop' means any later step
+# (bookmarks, inventory, hashing) can throw and terminate the script; a Ctrl+C
+# or power loss can do the same. If a stale manifest.sha256 were left in place,
+# a half-written export would look like a finished backup. The real manifest is
+# published ATOMICALLY only after every step succeeds (see the end of the
+# script), and only then is this marker removed — so an interrupted export
+# always leaves NO manifest + this marker present.
+$marker = Join-Path $exportRoot 'INCOMPLETE-DO-NOT-ERASE-WINDOWS.txt'
+Remove-Item (Join-Path $exportRoot 'manifest.sha256') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE') -Force -ErrorAction SilentlyContinue
+@"
+INCOMPLETE EXPORT — DO NOT ERASE WINDOWS
+========================================
+This export is still being written, or did not finish. There is deliberately
+NO manifest.sha256 yet, so KratosOS will refuse to import it as a finished
+backup. When the exporter finishes with no errors it publishes manifest.sha256
+and removes this file. If you still see this file, the export is INCOMPLETE —
+re-run the exporter until it finishes cleanly before you erase Windows.
+"@ | Set-Content $marker -Encoding UTF8
+
 # Track real copy FAILURES across every robocopy run. A robocopy exit code >= 8
 # means files could not be copied — the export is INCOMPLETE and must NOT be
 # treated as a usable backup before an erase-disk install (finding R8-6).
@@ -203,13 +225,12 @@ $lines = Get-ChildItem $filesDir -Recurse -File -Force | ForEach-Object {
     '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLower(), $rel
 }
 
-$marker = Join-Path $exportRoot 'INCOMPLETE-DO-NOT-ERASE-WINDOWS.txt'
 if ($copyFailed) {
     # Finding R8-6: some files could not be copied, so this export is NOT a
     # complete backup. Do NOT write a usable manifest.sha256 (so `kratos migrate`
-    # refuses to import a partial backup as if it were whole), write a loud
-    # persistent marker, and exit non-zero. Fix the errors (see export.log) and
-    # re-run before erasing Windows.
+    # refuses to import a partial backup as if it were whole), overwrite the
+    # marker with the specific failures, and exit non-zero. Fix the errors (see
+    # export.log) and re-run before erasing Windows.
     [IO.File]::WriteAllText((Join-Path $exportRoot 'manifest.sha256.INCOMPLETE'), (($lines -join "`n") + "`n"), $utf8)
     @"
 INCOMPLETE EXPORT — DO NOT ERASE WINDOWS
@@ -225,13 +246,16 @@ again until it finishes with NO errors before you erase this computer.
     Say "DID NOT write manifest.sha256. DO NOT ERASE WINDOWS. See $marker and export.log, then re-run." Red
     exit 1
 }
-# All copies succeeded: remove any stale marker from a previous failed run and
-# publish the real manifest.
-if (Test-Path $marker) { Remove-Item $marker -Force -ErrorAction SilentlyContinue }
-if (Test-Path (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE')) {
-    Remove-Item (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE') -Force -ErrorAction SilentlyContinue
-}
-[IO.File]::WriteAllText((Join-Path $exportRoot 'manifest.sha256'), (($lines -join "`n") + "`n"), $utf8)
+# All copies and the hashing succeeded. Publish the manifest ATOMICALLY (write a
+# temp file, then rename it into place) and only THEN clear the INCOMPLETE
+# marker — so even an interruption between those two steps leaves no manifest
+# plus the marker present, never a manifest without a clean finish (finding R9-8).
+$manifestTmp = Join-Path $exportRoot 'manifest.sha256.tmp'
+$manifestOut = Join-Path $exportRoot 'manifest.sha256'
+[IO.File]::WriteAllText($manifestTmp, (($lines -join "`n") + "`n"), $utf8)
+Move-Item -LiteralPath $manifestTmp -Destination $manifestOut -Force
+Remove-Item (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE') -Force -ErrorAction SilentlyContinue
+Remove-Item $marker -Force -ErrorAction SilentlyContinue
 
 # ── BitLocker reminder ────────────────────────────────────────
 try {

@@ -30,6 +30,21 @@
 - [x] KratosOS-on-Qubes profile (qubes/: Salt + qrexec policy + kratos-q driver) — logic tested; live dom0 run pending
 - [~] Nym mixnet components (workstation/nym/: client config + fail-closed firewall, unit-tested) — EXPERIMENTAL and NOT integrated: Stealth does not install/route Nym into the persona, and `CORR_MODE=mixnet` is refused until it does. End-to-end routing and a live Nym network run are pending.
 - [ ] Separate non-root QEMU uids + seccomp sandbox per VM
+- [ ] **Trusted update lifecycle for the disposable base images** (R9): the
+      Workstation (and, under the Tor-state design, the Gateway) run as amnesic
+      overlays on a clean base, so package/security updates made inside a session
+      are discarded. A "fresh" disposable on an *old* base is not a secure VM —
+      the bases need an explicit, signed, periodic refresh (the R4 cache-freshness
+      logic is the starting point).
+- [ ] **Tie the WireGuard endpoint firewall exception to the kernel socket**
+      (R9-11): `vpn.nft` currently allows UDP to the configured `WG_ENDPOINT:WG_PORT`
+      tuple, so malware could send arbitrary UDP to exactly that host:port outside
+      the tunnel (a very narrow channel, not a general clearnet bypass). Bind the
+      exception to WireGuard-originated traffic via an fwmark/socket match instead.
+- [ ] **Functional in-tunnel VPN DNS test** (R9-12): `tests/firewall_test.py`
+      proves provider DNS on the *physical* interface is blocked, but not that DNS
+      to the provider resolver *through* a real `wgtest` tunnel interface succeeds.
+      Add a namespace/interface test that instantiates the tunnel and resolves.
 - [ ] **Persistent Tor-guard state vs. disposable Gateway OS** (design agreed in
       `docs/TOR-STATE-ARCHITECTURE.md`): make the Gateway OS a disposable overlay
       on an updated base and persist ONLY `/var/lib/tor` on a small encrypted

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091,SC2086,SC2294
+# shellcheck disable=SC1091,SC2086,SC2294,SC2030,SC2031
 # kratos.conf is parsed as DATA, never sourced. These tests prove a tampered
 # or hostile config can set values but can NEVER execute commands as root, and
 # that a config which isn't root-owned-and-secure is ignored entirely.
@@ -47,6 +47,40 @@ if grep -q 'touch' <<<"$out"; then
 else
     pass "values containing shell metacharacters are dropped"
 fi
+
+# ── 2b. DEFAULT_MODE is a genuine FIRST-RUN default (finding R9-4) ──────────
+# The build no longer bakes /var/lib/kratos/mode; net_boot must latch the
+# validated DEFAULT_MODE on the first boot when no mode is stored yet, and must
+# NOT override a mode the user already persisted. Stub the privileged + firewall
+# bits so only the persistence logic runs (works without root).
+check_boot() {   # <workdir> <default_mode> <preset-mode|-> <expected>
+    local got
+    got="$(
+        export KRATOS_ETC="$tmp/etc-none" KRATOS_STATE="$1/state" KRATOS_RUN="$1/run"
+        mkdir -p "$KRATOS_STATE" "$KRATOS_RUN"
+        [[ "$3" != - ]] && printf '%s\n' "$3" > "$KRATOS_STATE/mode"
+        # shellcheck source=/dev/null
+        . "$lib/common.sh"; . "$lib/net.sh"
+        # These stubs ARE invoked indirectly by net_boot; DEFAULT_MODE is read by
+        # it as a global. shellcheck can't see across the sourced file.
+        # shellcheck disable=SC2329
+        need_root() { :; }       # not root in CI
+        # shellcheck disable=SC2329
+        load_ruleset() { :; }    # don't touch nft
+        # shellcheck disable=SC2034
+        DEFAULT_MODE="$2"
+        net_boot >/dev/null 2>&1
+        cat "$KRATOS_STATE/mode" 2>/dev/null
+    )"
+    if [[ "$got" == "$4" ]]; then
+        pass "first-boot mode is '$4' (DEFAULT_MODE=$2, preset='$3')"
+    else
+        flunk "first-boot mode persisted '$got', expected '$4' (DEFAULT_MODE=$2, preset='$3')"
+    fi
+}
+check_boot "$tmp/b1" vpn - vpn          # fresh install: DEFAULT_MODE=vpn latches
+check_boot "$tmp/b2" offline - offline  # fresh install: DEFAULT_MODE=offline latches
+check_boot "$tmp/b3" vpn normal normal  # already-persisted mode wins over DEFAULT_MODE
 
 # The root-owned/secure checks below only mean something when we are root and
 # can actually own a file as root and compare against a non-secure one.

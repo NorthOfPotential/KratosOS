@@ -49,10 +49,16 @@ migrate_mount() {
             r|R|recovery) dislocker -V "$dev" -u -r -- "$KRATOS_RUN/migrate/bitlocker" >&2 ;;
             *)            dislocker -V "$dev" -p -r -- "$KRATOS_RUN/migrate/bitlocker" >&2 ;;
         esac || die "could not unlock BitLocker"
-        mount -o ro,loop "$KRATOS_RUN/migrate/bitlocker/dislocker-file" "$mnt"
+        # Prefer the userspace parser for the (untrusted) decrypted NTFS image too.
+        mount -t ntfs-3g -o ro,loop "$KRATOS_RUN/migrate/bitlocker/dislocker-file" "$mnt" 2>/dev/null \
+            || mount -o ro,loop "$KRATOS_RUN/migrate/bitlocker/dislocker-file" "$mnt"
     else
-        # Read-only works even if Windows was hibernated / used Fast Startup
-        mount -t ntfs3 -o ro "$dev" "$mnt" 2>/dev/null || mount -t ntfs-3g -o ro "$dev" "$mnt"
+        # Prefer the USERSPACE/FUSE parser (ntfs-3g) for untrusted foreign media,
+        # so a malformed or deliberately hostile NTFS structure is handled by a
+        # userspace process rather than the kernel filesystem driver (finding
+        # R9-10). Fall back to the kernel ntfs3 driver only if ntfs-3g is absent.
+        # Read-only works even if Windows was hibernated / used Fast Startup.
+        mount -t ntfs-3g -o ro "$dev" "$mnt" 2>/dev/null || mount -t ntfs3 -o ro "$dev" "$mnt"
     fi || die "could not mount $dev"
     echo "$mnt"
 }
@@ -91,6 +97,18 @@ _migrate_real_dir() {   # <path> <trusted-real-root>
     case "$real/" in "$root"/*|"$root"/) printf '%s\n' "$real"; return 0 ;; esac
     return 1
 }
+# Like _migrate_real_dir but for a FILE: require a real regular file (never a
+# symlink) whose fully-resolved path stays UNDER the trusted root. realpath -e
+# resolves EVERY component, so a reparse point on an INTERMEDIATE directory
+# (e.g. AppData/.../Default) that escapes the mounted Windows root is refused,
+# not followed as root (finding R9-9). Prints the resolved path on success.
+_migrate_real_file() {   # <path> <trusted-real-root>
+    local p="$1" root="$2" real
+    [[ -f "$p" && ! -L "$p" ]] || return 1
+    real="$(realpath -e -- "$p" 2>/dev/null)" || return 1
+    case "$real" in "$root"/*) printf '%s\n' "$real"; return 0 ;; esac
+    return 1
+}
 # NOTE on rsync: `rsync -rt` (no -l/-a) copies only regular files and real
 # directories — it SKIPS symlinks and other non-regular objects found while
 # recursing. The only symlink it would follow is a command-line SOURCE that is
@@ -121,27 +139,28 @@ migrate_copy_from_disk() {
         rsync -rt --info=progress2 --no-perms --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= "${excl[@]}" \
             "$realf/" "$stage/OneDrive/"
     fi
-    migrate_bookmarks "$profile" "$stage/Browser bookmarks"
+    migrate_bookmarks "$profile" "$stage/Browser bookmarks" "$root"
 }
 
 # Bookmarks only. Saved passwords are deliberately NOT migrated:
 # export them from your password manager instead.
 migrate_bookmarks() {
-    local profile="$1" out="$2" src
+    local profile="$1" out="$2" root="$3" src bm realbm
     install -d "$out"
-    # Only ever copy ORDINARY regular files (finding 62): a symlink/reparse
-    # point on the untrusted NTFS image could otherwise redirect the copy at an
-    # arbitrary file. `-f && ! -L` rejects symlinks; cp -- guards leading dashes.
-    local bm
+    # Only ever copy ORDINARY regular files whose RESOLVED path stays under the
+    # mounted Windows root (findings 62, R9-9): a symlink/reparse point on the
+    # untrusted NTFS image — on the final object OR any intermediate directory —
+    # could otherwise redirect the privileged copy at an arbitrary host file.
+    # _migrate_real_file enforces both; cp -- guards leading dashes.
     for src in "Google/Chrome" "Microsoft/Edge" "BraveSoftware/Brave-Browser"; do
         bm="$profile/AppData/Local/$src/User Data/Default/Bookmarks"
-        if [[ -f "$bm" && ! -L "$bm" ]]; then
-            cp -- "$bm" "$out/${src//\//-}.json"
+        if realbm="$(_migrate_real_file "$bm" "$root")"; then
+            cp -- "$realbm" "$out/${src//\//-}.json"
         fi
     done
     for src in "$profile"/AppData/Roaming/Mozilla/Firefox/Profiles/*/places.sqlite; do
-        [[ -f "$src" && ! -L "$src" ]] || continue
-        cp -- "$src" "$out/Firefox-$(basename "$(dirname "$src")")-places.sqlite"
+        realbm="$(_migrate_real_file "$src" "$root")" || continue
+        cp -- "$realbm" "$out/Firefox-$(basename "$(dirname "$src")")-places.sqlite"
     done
     rmdir "$out" 2>/dev/null && return 0
     info "Bookmarks saved to '$out'. Import them from Firefox: Bookmarks > Manage > Import."
@@ -223,8 +242,19 @@ migrate_copy_from_export() {
         [[ -n "$rel" ]] || continue
         top="${rel%%/*}"
         case "$top" in
-            .ssh) : ;;   # explicitly exported with -IncludeSSH
-            .*) die "refusing to import '$rel': KratosOS does not import home-root dotfiles/dotdirs from a backup (they could auto-run code in your new home). Only .ssh is allowed." ;;
+            .ssh)
+                # .ssh is the one allowed dotdir (-IncludeSSH), but the backup is
+                # NOT authenticated (finding R9-7): a tampered export could slip in
+                # an ~/.ssh/config with a ProxyCommand (runs on your next ssh), or
+                # an authorized_keys/rc/environment that grants or triggers remote
+                # access. Import only PASSIVE key material; refuse ACTIVE SSH
+                # configuration — review and place that by hand after import.
+                case "${rel##*/}" in
+                    config|authorized_keys|authorized_keys2|rc|environment)
+                        die "refusing to import '$rel': an unauthenticated backup must not place an active SSH config/authorized-keys file into ~/.ssh (it could redirect your SSH or grant remote access). Review it and import it by hand instead." ;;
+                esac
+                ;;
+            .*) die "refusing to import '$rel': KratosOS does not import home-root dotfiles/dotdirs from a backup (they could auto-run code in your new home). Only .ssh key material is allowed." ;;
         esac
     done <<< "$staged_set"
 

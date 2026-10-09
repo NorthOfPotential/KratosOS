@@ -154,16 +154,45 @@ _wait_for_default_route() {
     return 1
 }
 
-# Bring NetworkManager-managed links up/off. Best-effort: absence of nmcli (or
-# a non-NM setup) must not break mode switching — the firewall is the real
-# boundary. We do NOT globally block ARP in nftables (that would break normal
-# and vpn neighbour resolution); instead offline simply has no up links.
+# Bring links up/off for a mode switch. Best-effort: a missing tool (or a non-NM
+# setup) must not break switching — the firewall is the real boundary. We do NOT
+# globally block ARP in nftables (that would break normal/vpn neighbour
+# resolution); instead offline simply has no up links.
+#
+# offline aims at genuine LAYER-1 silence, not just "no IP" (finding R9-13):
+# beyond telling NetworkManager to stop, it rfkill-blocks the Wi-Fi and WWAN
+# RADIOS (so no probe/association frames leave even on NM-unmanaged radios) and
+# administratively downs every PHYSICAL interface, including ones NM does not
+# manage. It is still best-effort and hardware-dependent (some radios ignore
+# rfkill, USB modems vary), so the kill-switch ruleset remains the backstop.
 net_links() {
-    command -v nmcli >/dev/null 2>&1 || return 0
+    local dev
     case "$1" in
-        off) nmcli networking off >/dev/null 2>&1 || true ;;
-        on)  nmcli networking on  >/dev/null 2>&1 || true ;;
+        off)
+            command -v nmcli >/dev/null 2>&1 && nmcli networking off >/dev/null 2>&1
+            if command -v rfkill >/dev/null 2>&1; then
+                rfkill block wifi >/dev/null 2>&1 || true
+                rfkill block wwan >/dev/null 2>&1 || true
+            fi
+            # Down every real (physical) NIC, NM-managed or not. Skip loopback,
+            # the Stealth bridges, the WireGuard tunnel and VM taps.
+            for dev in /sys/class/net/*; do
+                dev="${dev##*/}"
+                [[ "$dev" == lo || "$dev" == kx-* || "$dev" == "$WG_IF" || "$dev" == vnet* ]] && continue
+                [[ -e "/sys/class/net/$dev/device" ]] || continue
+                ip link set "$dev" down 2>/dev/null || true
+            done
+            ;;
+        on)
+            # Re-enable the radios offline turned off, then let NM bring links up.
+            if command -v rfkill >/dev/null 2>&1; then
+                rfkill unblock wifi >/dev/null 2>&1 || true
+                rfkill unblock wwan >/dev/null 2>&1 || true
+            fi
+            command -v nmcli >/dev/null 2>&1 && nmcli networking on >/dev/null 2>&1
+            ;;
     esac
+    return 0
 }
 
 # Called by kratos-firewall.service before any network interface comes up.
@@ -174,6 +203,17 @@ net_boot() {
     # yet (first boot) saved_mode() falls back to DEFAULT_MODE, so DEFAULT_MODE=vpn
     # actually boots into the VPN kill-switch instead of clearnet (finding R8).
     load_config
+    # Make DEFAULT_MODE a genuine FIRST-RUN default (finding R9-4): the build no
+    # longer bakes /var/lib/kratos/mode, so on a fresh install (or the live ISO's
+    # ephemeral overlay) there is no persisted mode yet. Latch the validated
+    # DEFAULT_MODE now, so an installed user who sets DEFAULT_MODE=vpn truly boots
+    # into the VPN kill-switch — and so the value persists exactly as a mode the
+    # user later sets with `kratos mode` does (that is what sticks thereafter).
+    if ! is_valid_mode "$(cat "$KRATOS_STATE/mode" 2>/dev/null)"; then
+        local _dm="${DEFAULT_MODE:-normal}"
+        is_valid_mode "$_dm" || _dm=normal
+        printf '%s\n' "$_dm" > "$KRATOS_STATE/mode"
+    fi
     load_ruleset offline
     case "$(saved_mode)" in
         normal) load_ruleset normal ;;
