@@ -108,6 +108,28 @@ $free = (Get-PSDrive $destDrive).Free
 Say ("Data: {0:N1} GB   Free on {1}: {2:N1} GB" -f ($total / 1GB), $destDrive, ($free / 1GB))
 if ($total -gt $free * 0.95) { throw "Not enough space on the destination drive." }
 
+# ── Surface leftover transactional directories (finding R11-4) ──────────────
+# A crash/power-loss between the final swap steps, or a failed cleanup, can leave
+# KratosExport.old-* (the PREVIOUS backup — possibly the only good one, and it may
+# hold exactly the sensitive files the user is trying to drop from a new backup)
+# or KratosExport.new-* (an interrupted run). We do NOT delete these — after a
+# crash an .old-* may be the only complete backup — but we must never leave them
+# silently: name them and say what they are so the user can review/clean up.
+$leftovers = @(Get-ChildItem -LiteralPath $Destination -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'KratosExport.old-*' -or $_.Name -like 'KratosExport.new-*' })
+if ($leftovers) {
+    Say "`nNOTE: leftover KratosOS export directories are present on $destDrive`:" Yellow
+    foreach ($d in $leftovers) {
+        $kind = if ($d.Name -like '*.old-*') {
+            'a PREVIOUS backup (may be the only complete one, and may contain files you removed from a newer export)'
+        } else {
+            'an INTERRUPTED/partial export'
+        }
+        Say "  $($d.FullName)  — $kind" Yellow
+    }
+    Say "Review them; delete the ones you don't need (an .old-* may hold stale sensitive data)." Yellow
+}
+
 # Build into the FRESH staging tree (empty by construction — GetRandomFileName
 # can't collide with an existing dir), so no file from a previous export can
 # survive into this one.
@@ -282,7 +304,19 @@ try {
     if ($backup) { Move-Item -LiteralPath $backup -Destination $exportRoot -Force }
     throw
 }
-if ($backup) { Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue }
+if ($backup) {
+    # Delete the previous backup now that the new one is committed — but NEVER
+    # silently (finding R11-4): if it can't be removed (open handle, I/O error,
+    # power loss right after this), it holds stale data the user may have been
+    # trying to drop, so name it loudly instead of swallowing the error.
+    Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $backup) {
+        Say "`nWARNING: could not remove the previous backup at:" Yellow
+        Say "  $backup" Yellow
+        Say "It may contain stale/sensitive files (e.g. ones you removed from this export, or old SSH keys)." Yellow
+        Say "Delete it yourself once you've confirmed the new KratosExport is good." Yellow
+    }
+}
 
 # ── BitLocker reminder ────────────────────────────────────────
 try {

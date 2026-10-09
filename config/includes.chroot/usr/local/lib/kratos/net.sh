@@ -177,13 +177,18 @@ _physical_ifaces() {
     done
 }
 
-# Soft-block state of an rfkill type: blocked | unblocked | absent.
-_rfkill_soft() {
-    local t="$1" out
-    command -v rfkill >/dev/null 2>&1 || { echo absent; return; }
-    out="$(rfkill list "$t" 2>/dev/null)"
-    [[ -n "$out" ]] || { echo absent; return; }
-    if grep -qi 'Soft blocked: yes' <<<"$out"; then echo blocked; else echo unblocked; fi
+# Snapshot every INDIVIDUAL Wi-Fi/WWAN rfkill device (finding R10/R11-3): a
+# per-TYPE state would collapse e.g. a blocked internal Wi-Fi and an unblocked
+# USB Wi-Fi into one value and then fail to re-enable the USB one on restore.
+# Emits lines: "rfkill <id> <blocked|unblocked>" for each wlan/wwan device.
+_rfkill_snapshot() {
+    command -v rfkill >/dev/null 2>&1 || return 0
+    local t
+    for t in wifi wwan; do
+        rfkill list "$t" 2>/dev/null | awk '
+            /^[0-9]+:/      { id=$1; sub(":","",id) }
+            /Soft blocked:/ { print "rfkill", id, ($3=="yes" ? "blocked" : "unblocked") }'
+    done
 }
 
 net_links() {
@@ -192,13 +197,13 @@ net_links() {
         off)
             # SNAPSHOT what we are about to change, ONCE, so leaving offline can
             # restore the user's prior radio/link state instead of blindly
-            # enabling everything (findings R10-4/5/6). Don't overwrite an
-            # existing snapshot (offline may be re-applied within one session).
+            # enabling everything (findings R10-4/5, R11-3). Don't overwrite an
+            # existing snapshot (offline may be re-applied within one session, and
+            # the pre-NetworkManager boot pass writes it first).
             if [[ ! -f "$state" ]]; then
                 install -d -m 755 "$KRATOS_STATE" 2>/dev/null || true
                 {
-                    printf 'rfkill wifi %s\n' "$(_rfkill_soft wifi)"
-                    printf 'rfkill wwan %s\n' "$(_rfkill_soft wwan)"
+                    _rfkill_snapshot
                     for dev in $(_physical_ifaces); do
                         if ip -o link show "$dev" 2>/dev/null | grep -qw UP; then
                             printf 'link %s up\n' "$dev"
@@ -208,7 +213,7 @@ net_links() {
                     done
                 } > "$state" 2>/dev/null || true
             fi
-            command -v nmcli >/dev/null 2>&1 && nmcli networking off >/dev/null 2>&1
+            if command -v nmcli >/dev/null 2>&1; then nmcli networking off >/dev/null 2>&1 || true; fi
             if command -v rfkill >/dev/null 2>&1; then
                 rfkill block wifi >/dev/null 2>&1 || true
                 rfkill block wwan >/dev/null 2>&1 || true
@@ -225,11 +230,15 @@ net_links() {
             # never leave an unmanaged NIC we downed stuck down (R10-5).
             if [[ -f "$state" ]]; then
                 while read -r kind a b; do
-                    case "$kind" in
-                        rfkill) [[ "$b" == unblocked ]] && command -v rfkill >/dev/null 2>&1 \
-                                    && rfkill unblock "$a" >/dev/null 2>&1 || true ;;
-                        link)   [[ "$b" == up ]] && ip link set "$a" up 2>/dev/null || true ;;
-                    esac
+                    # Restore only entries that were ON before offline; leave the
+                    # rest as offline set them. Proper if-blocks, not A && B || C
+                    # (that tripped ShellCheck SC2015, finding R11-CI).
+                    if [[ "$kind" == rfkill && "$b" == unblocked ]] \
+                       && command -v rfkill >/dev/null 2>&1; then
+                        rfkill unblock "$a" >/dev/null 2>&1 || true
+                    elif [[ "$kind" == link && "$b" == up ]]; then
+                        ip link set "$a" up 2>/dev/null || true
+                    fi
                 done < "$state"
                 rm -f "$state"
             fi
@@ -245,7 +254,15 @@ net_links() {
 # and enforces it when (and only when) the saved mode is offline.
 net_offline_links() {
     need_root offline-links
+    # Take the SAME operation lock as net_mode (finding R11-12): otherwise this
+    # late boot pass could race a concurrent `kratos mode normal` and down the
+    # NICs/radios the user is in the middle of enabling. serialize() fails fast
+    # on contention; if we can't get the lock, the mode switch that holds it is
+    # already setting the correct state, so just stand down.
+    serialize
     load_config
+    # Re-read the mode UNDER the lock, so we never enforce offline links against a
+    # mode that changed while we were starting.
     [[ "$(saved_mode)" == offline ]] || return 0
     install -d -m 755 "$KRATOS_RUN" "$KRATOS_STATE"
     net_links off
@@ -288,8 +305,15 @@ net_boot() {
                 warn "saved mode is vpn but no valid VPN config found; staying offline until one is imported"
             fi
             ;;
-        # offline stays on the default-drop ruleset already loaded above.
-        offline) ;;
+        # offline: the default-drop IP ruleset is already loaded above. Also apply
+        # the layer-1 shutdown EARLY, here in the pre-network-pre.target firewall
+        # unit, so radios are rfkill-blocked BEFORE NetworkManager can power a
+        # transmitter, scan or associate (finding R11-2). This snapshots the prior
+        # state too, so the post-NetworkManager kratos-offline-links.service only
+        # re-applies (it finds the snapshot already present) and a later switch to
+        # normal still restores correctly. Best-effort; radios that ignore rfkill
+        # or come up only under NM are caught again by the late service.
+        offline) net_links off ;;
     esac
 }
 
