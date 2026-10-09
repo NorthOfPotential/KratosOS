@@ -177,46 +177,75 @@ _physical_ifaces() {
     done
 }
 
-# Snapshot every INDIVIDUAL Wi-Fi/WWAN rfkill device by DEVICE NAME, not the
-# numeric index (findings R11-3, R12-3): the index is a registration-order
-# counter that reorders across reboot / USB re-enumeration, so unblocking by
-# index on restore could re-enable the WRONG transmitter. The device name (phy0,
-# etc.) is far more stable; restore resolves it back to the current index. We
-# prefer structured `--output` over the deprecated `rfkill list` text format
-# (finding R12-4), and fall back to parsing `list` only if --output is absent.
-# Emits: "rfkill <device> <type> <blocked|unblocked>".
+# rfkill handling works directly through sysfs (/sys/class/rfkill), not the
+# rfkill(8) binary, so it needs no extra tool and runs in the minimal early-boot
+# environment. KRATOS_RFKILL_SYS lets the tests point it at a fake tree.
+_RFKILL_SYS="${KRATOS_RFKILL_SYS:-/sys/class/rfkill}"
+# Transmitter-capable radio classes offline must silence — INCLUDING Bluetooth
+# (finding R13-5): BT is its own rfkill class, so blocking only wifi/wwan left it
+# advertising/scanning despite the "layer-1 silence" claim.
+_rfkill_is_radio() { case "$1" in wlan|wifi|wwan|bluetooth) return 0 ;; *) return 1 ;; esac; }
+
+# A STABLE hardware identity for an rfkill sysfs dir (finding R13-4): the resolved
+# device path encodes bus topology (PCI slot / USB port) and survives reboot and
+# re-enumeration, unlike the phyN/rfkillN index which is a registration-order
+# counter that can reorder and re-enable the WRONG transmitter on restore. Falls
+# back to the device name. Spaces collapsed so it stays one token.
+_rfkill_identity() {   # <rfkill sysfs dir>
+    local hw=""
+    # Only trust the device link when it actually resolves — `readlink -f`
+    # canonicalizes even a non-existent path, so guard with -e.
+    if [[ -e "$1/device" ]]; then hw="$(readlink -f "$1/device" 2>/dev/null)"; fi
+    if [[ -n "$hw" ]]; then hw="hw:${hw#/sys}"; else hw="name:$(cat "$1/name" 2>/dev/null)"; fi
+    printf '%s\n' "${hw// /_}"
+}
+
+# Emit "rfkill <identity> <type> <blocked|unblocked>" for every radio-class device.
 _rfkill_snapshot() {
-    command -v rfkill >/dev/null 2>&1 || return 0
-    local out
-    if out="$(rfkill --output TYPE,DEVICE,SOFT --noheadings 2>/dev/null)" && [[ -n "$out" ]]; then
-        awk '($1=="wlan" || $1=="wifi" || $1=="wwan") && NF>=3 {
-                 print "rfkill", $2, $1, ($3=="blocked" ? "blocked" : "unblocked") }' <<<"$out"
-        return 0
-    fi
-    local t
-    for t in wifi wwan; do
-        rfkill list "$t" 2>/dev/null | awk -v ty="$t" '
-            /^[0-9]+:/      { dev=$2; sub(":$","",dev) }
-            /Soft blocked:/ { print "rfkill", dev, ty, ($3=="yes" ? "blocked" : "unblocked") }'
+    local d type soft state
+    for d in "$_RFKILL_SYS"/rfkill*; do
+        [[ -r "$d/type" ]] || continue
+        type="$(cat "$d/type" 2>/dev/null)"
+        _rfkill_is_radio "$type" || continue
+        soft="$(cat "$d/soft" 2>/dev/null)"
+        if [[ "$soft" == 1 ]]; then state=blocked; else state=unblocked; fi
+        printf 'rfkill %s %s %s\n' "$(_rfkill_identity "$d")" "$type" "$state"
     done
 }
 
-# Current rfkill index for a stable DEVICE NAME. Prints the id; non-zero if the
-# device isn't present now (e.g. a USB radio was unplugged while offline).
-_rfkill_id_for_device() {
-    command -v rfkill >/dev/null 2>&1 || return 1
-    rfkill --output ID,DEVICE --noheadings 2>/dev/null \
-        | awk -v d="$1" '$2==d { print $1; found=1 } END { exit !found }'
+# Soft-block every radio-class device via sysfs (wins regardless of the rfkill
+# binary; the type-wide identity doesn't matter for blocking).
+_rfkill_block_all() {
+    local d type
+    for d in "$_RFKILL_SYS"/rfkill*; do
+        [[ -r "$d/type" && -w "$d/soft" ]] || continue
+        type="$(cat "$d/type" 2>/dev/null)"
+        _rfkill_is_radio "$type" || continue
+        echo 1 > "$d/soft" 2>/dev/null || true
+    done
+}
+
+# Unblock the single device whose current stable identity matches the saved one.
+_rfkill_unblock_identity() {   # <identity>
+    local d
+    for d in "$_RFKILL_SYS"/rfkill*; do
+        [[ -w "$d/soft" ]] || continue
+        if [[ "$(_rfkill_identity "$d")" == "$1" ]]; then
+            echo 0 > "$d/soft" 2>/dev/null || true
+            return 0
+        fi
+    done
+    return 1
 }
 
 net_links() {
-    local state="$KRATOS_STATE/offline-links.state" dev kind a b c id
+    local state="$KRATOS_STATE/offline-links.state" dev kind a b c
     case "$1" in
         off)
             # SNAPSHOT what we are about to change, ONCE, so leaving offline can
             # restore the user's prior radio/link state instead of blindly
-            # enabling everything (findings R10-4/5, R11-3). Don't overwrite an
-            # existing snapshot (offline may be re-applied within one session, and
+            # enabling everything (findings R10-4/5, R11-3, R13-4). Don't overwrite
+            # an existing snapshot (offline may be re-applied within a session, and
             # the pre-NetworkManager boot pass writes it first).
             if [[ ! -f "$state" ]]; then
                 install -d -m 755 "$KRATOS_STATE" 2>/dev/null || true
@@ -232,10 +261,7 @@ net_links() {
                 } > "$state" 2>/dev/null || true
             fi
             if command -v nmcli >/dev/null 2>&1; then nmcli networking off >/dev/null 2>&1 || true; fi
-            if command -v rfkill >/dev/null 2>&1; then
-                rfkill block wifi >/dev/null 2>&1 || true
-                rfkill block wwan >/dev/null 2>&1 || true
-            fi
+            _rfkill_block_all
             for dev in $(_physical_ifaces); do
                 ip link set "$dev" down 2>/dev/null || true
             done
@@ -247,16 +273,13 @@ net_links() {
             # unconditionally unblock a radio the user had disabled (R10-4), and
             # never leave an unmanaged NIC we downed stuck down (R10-5).
             if [[ -f "$state" ]]; then
-                # Fields: "rfkill <device> <type> <soft>" or "link <dev> <up|down>".
+                # Fields: "rfkill <identity> <type> <soft>" or "link <dev> <up|down>".
                 while read -r kind a b c; do
                     # Restore only entries that were ON before offline; leave the
                     # rest as offline set them. Proper if-blocks, not A && B || C
                     # (that tripped ShellCheck SC2015, finding R11-CI).
-                    if [[ "$kind" == rfkill && "$c" == unblocked ]] \
-                       && command -v rfkill >/dev/null 2>&1; then
-                        # Resolve the stable device name to its CURRENT index.
-                        id="$(_rfkill_id_for_device "$a")" || continue
-                        rfkill unblock "$id" >/dev/null 2>&1 || true
+                    if [[ "$kind" == rfkill && "$c" == unblocked ]]; then
+                        _rfkill_unblock_identity "$a" || true
                     elif [[ "$kind" == link && "$b" == up ]]; then
                         ip link set "$a" up 2>/dev/null || true
                     fi

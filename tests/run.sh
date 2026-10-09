@@ -70,6 +70,9 @@ run tests/test_migrate.sh
 step "vault QEMU-traversal ACL"
 run tests/test_vault_acl.sh
 
+step "offline rfkill (sysfs: Bluetooth, stable identity, restore)"
+run tests/test_rfkill.sh
+
 step "host/persona isolation (simulated attack)"
 if [[ $EUID -eq 0 ]] && id "${ATTACKER:-mallory}" >/dev/null 2>&1 && id kstealth >/dev/null 2>&1; then
     run tests/attack_isolation.sh
