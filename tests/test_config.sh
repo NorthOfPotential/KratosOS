@@ -85,5 +85,26 @@ else
 fi
 chmod 644 "$conf"
 
+# ── 5. An invalid enum value aborts (finding R8-10) ────────────────────────
+chmod 755 "$tmp/etc"
+printf 'STEALTH_DISABLE_SWAP=ye\n' > "$conf"; chmod 644 "$conf"
+if load_and_dump STEALTH_DISABLE_SWAP >/dev/null 2>&1; then
+    flunk "a typo'd enum (STEALTH_DISABLE_SWAP=ye) was accepted (would silently disable swap-off)"
+else
+    pass "an invalid enum value aborts load_config (fail-closed)"
+fi
+printf 'CORR_MODE=mixnett\n' > "$conf"; chmod 644 "$conf"
+if load_and_dump CORR_MODE >/dev/null 2>&1; then
+    flunk "CORR_MODE=mixnett was accepted (would bypass the mixnet fail-closed check)"
+else
+    pass "a typo'd CORR_MODE aborts (can't slip past the mixnet refusal)"
+fi
+printf 'STEALTH_DISABLE_SWAP=yes\nCORR_MODE=tor\nCORR_STEALTH_PROFILE=off\n' > "$conf"; chmod 644 "$conf"
+if load_and_dump CORR_MODE >/dev/null 2>&1; then
+    pass "valid enum values load fine"
+else
+    flunk "valid enum values were wrongly rejected"
+fi
+
 echo
 if (( fail )); then echo "CONFIG PARSER TESTS FAILED"; exit 1; else echo "config parser safe"; exit 0; fi

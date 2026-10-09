@@ -102,7 +102,47 @@ load_config() {
         [[ "$val" =~ ^[A-Za-z0-9_.:/,%+@~-]*$ ]] || { warn "ignoring unsafe value for $key in $conf"; continue; }
         printf -v "$key" '%s' "$val"
     done < "$conf"
+    _validate_config "$conf"
     return 0
+}
+
+# Semantic validation of enum-typed settings (finding R8-10). The parser above
+# is injection-safe, but a TYPO still parses: STEALTH_DISABLE_SWAP=ye would
+# silently read as "not yes" => protection OFF, and CORR_MODE=mixnett would
+# slip past the fail-closed mixnet refusal. So every enum key is checked against
+# its allowed values (whether set from the config file OR the environment) and
+# an invalid one ABORTS the operation instead of degrading a protection.
+_validate_config() {
+    local conf="$1" k cur allowed
+    local -A _enum=(
+        [DEFAULT_MODE]="normal vpn offline"
+        [CORR_MODE]="tor mixnet"
+        [CORR_STEALTH_PROFILE]="off balanced max"
+        [CORR_BRIDGES]="off obfs4 snowflake"
+        [CORR_LINK_SHAPING]="on off"
+        [CORR_DECOY]="on off"
+        [STEALTH_WORKSTATION]="persistent disposable"
+        [STEALTH_VAULT_PERSIST]="yes no"
+        [STEALTH_REQUIRE_VPN]="yes no"
+        [STEALTH_AUTOPROVISION]="yes no"
+        [STEALTH_WHONIX_CACHE]="yes no"
+        [STEALTH_GATEWAY_CONSOLE]="yes no"
+        [STEALTH_DISABLE_SWAP]="yes no"
+        [STEALTH_BLOCK_SLEEP]="yes no"
+        [STEALTH_BLOCK_BLUETOOTH]="yes no"
+        [STEALTH_BLOCK_CAMERA]="yes no"
+        [STEALTH_BLOCK_MIC]="yes no"
+        [STEALTH_BLOCK_NEW_USB]="yes no"
+        [STEALTH_ONACCESS_SCAN]="yes no"
+        [STEALTH_NEW_MAC]="yes no"
+    )
+    for k in "${!_enum[@]}"; do
+        cur="${!k:-}"
+        [[ -n "$cur" ]] || continue   # unset => a safe built-in default applies
+        allowed=" ${_enum[$k]} "
+        [[ "$allowed" == *" $cur "* ]] \
+            || die "invalid $k='$cur' (allowed: ${_enum[$k]}) — refusing to run with a misconfigured security setting"
+    done
 }
 
 # True if $1 is owned by root and not writable by group or other.
