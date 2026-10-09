@@ -135,9 +135,13 @@ class EffectivePolicy(unittest.TestCase):
         self.assertFalse(ran)
         self.assertEqual(problems, [])
 
-    def _fake_engine(self, allow_pairs=(), ask_pairs=(), raise_on_none_resolution=False):
+    def _fake_engine(self, allow_pairs=(), ask_pairs=(), raise_on_none_resolution=False,
+                     allow_arg_pairs=()):
         """Build a (policy, Request, AccessDenied, system_info) seam that mimics
-        qrexec: deny (raise AccessDenied) unless (src,tgt,svc) is in allow/ask."""
+        qrexec: deny (raise AccessDenied) unless the request matches. allow_pairs
+        and ask_pairs match on (src,tgt,svc) ignoring the argument;
+        allow_arg_pairs match on the full (src,tgt,svc,arg) so argument-specific
+        exceptions can be exercised (finding R11-1)."""
         class AccessDenied(Exception):
             pass
 
@@ -156,9 +160,12 @@ class EffectivePolicy(unittest.TestCase):
                 if raise_on_none_resolution and allow_resolution_type is None:
                     raise TypeError("None is not callable")
                 self.key = (source, target, service)
+                self.key_arg = (source, target, service, argument)
 
         class Policy:
             def evaluate(self, req):
+                if req.key_arg in allow_arg_pairs:
+                    return AllowResolution()
                 if req.key in allow_pairs:
                     return AllowResolution()
                 if req.key in ask_pairs:
@@ -214,6 +221,33 @@ class EffectivePolicy(unittest.TestCase):
         self.assertTrue(ran)
         self.assertFalse(any("uuid:" in p for p in problems),
                          f"a uuid: alias was probed as its own domain: {problems}")
+
+    def test_real_eval_probes_policy_declared_services_and_arguments(self):
+        """A concrete service, or a specific +argument, that appears in the
+        effective policy must be probed — not just the fixed critical list
+        (finding R11-1). Feed the derived token set explicitly and prove both an
+        unusual service and an argument-specific exception are caught."""
+        eng = self._fake_engine(allow_arg_pairs={
+            ("kratos-ws-live", "personal", "some.CustomService", "+"),
+            ("kratos-ws-live", "personal", "some.ArgService", "+special"),
+        })
+        services = {("some.CustomService", "+"), ("some.ArgService", "+special")}
+        ran, problems = kq.evaluate_with_real_policy(_engine=eng, _services=services)
+        self.assertTrue(ran)
+        self.assertTrue(any("some.CustomService" in p for p in problems),
+                        f"a policy-declared concrete service was not probed: {problems}")
+        self.assertTrue(any("some.ArgService+special" in p for p in problems),
+                        f"an argument-specific exception was not probed: {problems}")
+
+    def test_build_probe_tokens_expands_wildcard_argument(self):
+        """A '*'-argument rule must be probed with both the empty and a concrete
+        argument; a '*'-service rule routes through the synthetic unknown."""
+        toks = kq._build_probe_tokens({("some.Svc", "*"), ("*", "+zz")})
+        self.assertIn(("some.Svc", "+"), toks)
+        self.assertIn(("some.Svc", kq._ARG_PROBE), toks)
+        self.assertIn((kq._UNKNOWN_SERVICE, "+zz"), toks)
+        # Critical services are always present regardless of the policy.
+        self.assertIn(("qubes.VMShell", "+"), toks)
 
     def test_real_eval_reports_ask_as_path(self):
         eng = self._fake_engine(ask_pairs={

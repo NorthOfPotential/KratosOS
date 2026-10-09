@@ -340,15 +340,60 @@ def effective_policy_text(policy_path):
     return "\n".join(parts)
 
 
-# Services a persona qube must never be ALLOWED to call OUT (to anything but
-# dom0's own refusal). Probed in BOTH directions against the real policy engine.
+# Security-critical services a persona qube must never be ALLOWED to call OUT.
+# ALWAYS probed (even if they don't appear in any rule), plus a synthetic unknown
+# service that exercises a '*' catch-all. The rest of the probe set is derived
+# from the EFFECTIVE policy at audit time (see _build_probe_tokens).
+_UNKNOWN_SERVICE = "qubes.NoSuchServiceKratosProbe"
 _EVAL_SERVICES = (
     "qubes.Filecopy", "qubes.ClipboardPaste", "qubes.OpenURL", "qubes.OpenInVM",
-    "qubes.VMShell", "qubes.VMRootShell", "qubes.NoSuchServiceKratosProbe",
+    "qubes.VMShell", "qubes.VMRootShell", _UNKNOWN_SERVICE,
 )
+# A stand-in non-empty argument used to probe wildcard-argument ('*') rules, so
+# an exception that only applies to a specific +arg is still exercised.
+_ARG_PROBE = "+kratosargprobe"
 
 
-def evaluate_with_real_policy(_engine=None):
+def _policy_service_args(policy_text):
+    """Every (service, argument) token that appears in the effective policy.
+    Used so the real-engine audit probes the CONCRETE services/arguments the
+    policy actually mentions — not just a fixed list (finding R11-1): an earlier
+    file could `allow` some.CustomService (or some.Service +special) out of the
+    persona, which a fixed-service probe would never test."""
+    pairs = set()
+    for raw in (policy_text or "").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        pairs.add((parts[0], parts[1]))   # (service, argument)
+    return pairs
+
+
+def _build_probe_tokens(svc_args):
+    """Turn the policy's (service, argument) tokens into the concrete
+    (service, argument) requests to evaluate. Always includes the critical
+    services (empty arg) and the synthetic unknown service; expands each policy
+    token; and for wildcard-argument rules also probes a representative +arg."""
+    tokens = set((svc, "+") for svc in _EVAL_SERVICES)
+    for svc, arg in svc_args:
+        if svc == "*":
+            # A '*' service rule matches ANY service: exercise it through the
+            # synthetic unknown service, with both the empty and a concrete arg.
+            tokens.add((_UNKNOWN_SERVICE, "+"))
+            tokens.add((_UNKNOWN_SERVICE, arg if arg != "*" else _ARG_PROBE))
+            continue
+        if arg == "*":
+            tokens.add((svc, "+"))
+            tokens.add((svc, _ARG_PROBE))
+        else:
+            tokens.add((svc, arg))
+    return tokens
+
+
+def evaluate_with_real_policy(_engine=None, _services=None):
     """Ask Qubes' OWN policy engine what it would actually decide for the
     persona, using real Request objects — not our approximate matcher
     (finding R6-H10/R7). This catches earlier rules that allow the persona via
@@ -361,7 +406,8 @@ def evaluate_with_real_policy(_engine=None):
 
     `_engine` is a test seam: a (policy, Request, AccessDenied, system_info)
     tuple that bypasses the qrexec imports so the loop logic can be exercised
-    with a fake engine off a dom0."""
+    with a fake engine off a dom0. `_services` is a test seam for the derived
+    (service, argument) token set (normally read from the effective policy)."""
     if _engine is not None:
         policy, Request, AccessDenied, system_info = _engine
     else:
@@ -407,13 +453,13 @@ def evaluate_with_real_policy(_engine=None):
     egress_targets = list(domains) + ["@adminvm", "dom0"]
     inbound_sources = [d for d in domains if d not in personas and d not in _ADMIN]
 
-    def verdict(src, tgt, svc):
+    def verdict(src, tgt, svc, arg):
         """Return one of 'allow'|'ask'|'deny'|'unknown', or None on API error.
         Uses Qubes' DEFAULT resolution types (passing None breaks Allow.evaluate,
         which would make this disable itself on the very allow we must catch —
         finding R8-2)."""
         try:
-            req = Request(svc, "+", src, tgt, system_info=system_info)
+            req = Request(svc, arg, src, tgt, system_info=system_info)
             res = policy.evaluate(req)
         except AccessDenied:
             return "deny"
@@ -428,6 +474,21 @@ def evaluate_with_real_policy(_engine=None):
         # have changed. Treat it as evaluation-unavailable, not deny (finding R8).
         return "unknown"
 
+    # Which (service, argument) requests to probe: the critical set + a synthetic
+    # unknown + every token the EFFECTIVE policy actually mentions (finding R11-1).
+    # Off a real dom0 we read the effective policy file set; with a test engine we
+    # take an explicit _services set (effective_policy_text would read nothing).
+    if _services is not None:
+        svc_args = set(_services)
+    elif _engine is None:
+        svc_args = _policy_service_args(effective_policy_text(POLICY_PATH))
+    else:
+        svc_args = set()
+    probe_tokens = sorted(_build_probe_tokens(svc_args))
+
+    def _svc_label(svc, arg):
+        return svc if arg in ("+", "") else f"{svc}{arg}"
+
     problems = []
     evaluated = 0
     probes = []
@@ -440,15 +501,15 @@ def evaluate_with_real_policy(_engine=None):
             probes.append((s, p, "inbound", f"into persona '{p}' from '{s}'"))
 
     for src, tgt, direction, label in probes:
-        for svc in _EVAL_SERVICES:
-            v = verdict(src, tgt, svc)
+        for svc, arg in probe_tokens:
+            v = verdict(src, tgt, svc, arg)
             if v is None or v == "unknown":
                 return False, []        # couldn't trust the engine: let the lint speak + warn
             evaluated += 1
             if v == "allow":
-                problems.append(f"qrexec WOULD ALLOW {svc} {label} ({direction} hole)")
+                problems.append(f"qrexec WOULD ALLOW {_svc_label(svc, arg)} {label} ({direction} hole)")
             elif v == "ask":
-                problems.append(f"qrexec would PROMPT for {svc} {label} ({direction} path)")
+                problems.append(f"qrexec would PROMPT for {_svc_label(svc, arg)} {label} ({direction} path)")
     if evaluated == 0:
         return False, []        # we proved nothing; let the lint speak
     return True, problems

@@ -66,6 +66,7 @@ check_boot() {   # <workdir> <default_mode> <preset-mode|-> <expected>
         # file-level disable list covers SC2317/SC2329/SC2034 for this).
         need_root() { :; }       # not root in CI
         load_ruleset() { :; }    # don't touch nft
+        net_links() { :; }       # don't touch real radios/links in CI
         DEFAULT_MODE="$2"
         net_boot >/dev/null 2>&1
         cat "$KRATOS_STATE/mode" 2>/dev/null
