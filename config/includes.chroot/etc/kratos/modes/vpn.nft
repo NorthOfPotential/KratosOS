@@ -39,9 +39,20 @@ table inet kratos {
         meta nfproto ipv6 drop
 
         udp sport 68 udp dport 67 accept
+        # The WireGuard handshake/keepalive to the VPN server. Honest limit
+        # (finding R8-8): this matches by endpoint tuple, not a WireGuard-socket
+        # identity, so a local process could in principle send arbitrary UDP to
+        # exactly this IP:port outside the tunnel — a tiny direct-host covert
+        # channel, not a broad Internet escape. A kernel-socket/mark match is
+        # tracked as a follow-up.
         ip daddr $WG_ENDPOINT udp dport $WG_PORT accept
-        # Block direct clear-text DNS even inside the tunnel: apps must use the
-        # local resolver (which does DoT upstream through the tunnel).
+        # DNS to the VPN's OWN resolver, only INSIDE the tunnel, is allowed so
+        # name resolution works in VPN mode (finding R8-7); it rides the
+        # encrypted tunnel to the trusted resolver, never the clear NIC.
+        oifname $WG_IF ip daddr $WG_DNS udp dport 53 accept
+        oifname $WG_IF ip daddr $WG_DNS tcp dport 53 accept
+        # Block all OTHER DNS (to any other address / off the tunnel): apps
+        # can't exfiltrate via DNS to arbitrary servers.
         udp dport 53 oifname != "lo" drop
         tcp dport 53 oifname != "lo" drop
         oifname $WG_IF accept

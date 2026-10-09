@@ -21,6 +21,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", 
                     "etc", "kratos")
 VPN_ENDPOINT = "10.99.0.50"
 VPN_PORT = 51820
+VPN_DNS = "10.99.0.53"   # the VPN's own resolver (allowed only inside the tunnel)
 FAILURES = []
 
 
@@ -35,7 +36,7 @@ def load(mode):
     tmp = tempfile.mkdtemp()
     defs = os.path.join(tmp, "vpn.inc")
     with open(defs, "w") as f:
-        f.write(f'define WG_IF = "wgtest"\ndefine WG_ENDPOINT = {VPN_ENDPOINT}\ndefine WG_PORT = {VPN_PORT}\n')
+        f.write(f'define WG_IF = "wgtest"\ndefine WG_ENDPOINT = {VPN_ENDPOINT}\ndefine WG_PORT = {VPN_PORT}\ndefine WG_DNS = {{ {VPN_DNS} }}\n')
     text = text.replace("/run/kratos/vpn.nft", defs)
     rules = os.path.join(tmp, f"{mode}.nft")
     with open(rules, "w") as f:
@@ -142,6 +143,10 @@ def main():
     expect("WireGuard to VPN endpoint allowed", udp(VPN_ENDPOINT, VPN_PORT), True)
     expect("WireGuard to another server blocked", udp("10.99.0.51", VPN_PORT), False)
     expect("clear-text DNS blocked", udp("9.9.9.9", 53), False)
+    # The VPN resolver is allowed ONLY inside the tunnel (oifname wg); off the
+    # tunnel (here, no wg iface so it would use the clear NIC) it stays blocked,
+    # so R8-7 did not open a clearnet DNS hole to that address.
+    expect("DNS to the VPN resolver off-tunnel blocked", udp(VPN_DNS, 53), False)
     expect("HTTPS outside the tunnel blocked", tcp("93.184.216.34", 443), False)
     expect("UDP outside the tunnel blocked", udp("93.184.216.34", 443), False)
     expect("DHCP allowed", udp("10.99.0.1", 67, sport=68), True)
