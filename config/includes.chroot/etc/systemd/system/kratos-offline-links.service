@@ -4,7 +4,7 @@ Description=KratosOS offline-mode layer-1 shutdown (rfkill + links down when boo
 # bringing interfaces up. Does NOT wait for network-online.target (offline has
 # no network, so that target may never be reached). The IP kill-switch is
 # already loaded by kratos-firewall.service; this adds the layer-1 enforcement.
-After=NetworkManager.service kratos-firewall.service
+After=NetworkManager.service kratos-firewall.service systemd-rfkill.service
 Wants=NetworkManager.service
 Requires=kratos-firewall.service
 

@@ -1,0 +1,8 @@
+# Re-enforce KratosOS offline-mode radio silence when an rfkill device appears
+# (finding R12-2). The two one-shot boot passes (kratos-firewall early, then
+# kratos-offline-links after NetworkManager) can't cover a radio hotplugged
+# LATER while the machine is still offline, which would otherwise come up
+# unblocked. `kratos offline-links` is a no-op unless the saved mode is offline,
+# and it takes the Kratos operation lock, so firing it on every rfkill add is
+# safe. rfkill block is fast, so it won't be killed as a long-running udev RUN.
+ACTION=="add", SUBSYSTEM=="rfkill", RUN+="/usr/local/bin/kratos offline-links"

@@ -177,22 +177,40 @@ _physical_ifaces() {
     done
 }
 
-# Snapshot every INDIVIDUAL Wi-Fi/WWAN rfkill device (finding R10/R11-3): a
-# per-TYPE state would collapse e.g. a blocked internal Wi-Fi and an unblocked
-# USB Wi-Fi into one value and then fail to re-enable the USB one on restore.
-# Emits lines: "rfkill <id> <blocked|unblocked>" for each wlan/wwan device.
+# Snapshot every INDIVIDUAL Wi-Fi/WWAN rfkill device by DEVICE NAME, not the
+# numeric index (findings R11-3, R12-3): the index is a registration-order
+# counter that reorders across reboot / USB re-enumeration, so unblocking by
+# index on restore could re-enable the WRONG transmitter. The device name (phy0,
+# etc.) is far more stable; restore resolves it back to the current index. We
+# prefer structured `--output` over the deprecated `rfkill list` text format
+# (finding R12-4), and fall back to parsing `list` only if --output is absent.
+# Emits: "rfkill <device> <type> <blocked|unblocked>".
 _rfkill_snapshot() {
     command -v rfkill >/dev/null 2>&1 || return 0
+    local out
+    if out="$(rfkill --output TYPE,DEVICE,SOFT --noheadings 2>/dev/null)" && [[ -n "$out" ]]; then
+        awk '($1=="wlan" || $1=="wifi" || $1=="wwan") && NF>=3 {
+                 print "rfkill", $2, $1, ($3=="blocked" ? "blocked" : "unblocked") }' <<<"$out"
+        return 0
+    fi
     local t
     for t in wifi wwan; do
-        rfkill list "$t" 2>/dev/null | awk '
-            /^[0-9]+:/      { id=$1; sub(":","",id) }
-            /Soft blocked:/ { print "rfkill", id, ($3=="yes" ? "blocked" : "unblocked") }'
+        rfkill list "$t" 2>/dev/null | awk -v ty="$t" '
+            /^[0-9]+:/      { dev=$2; sub(":$","",dev) }
+            /Soft blocked:/ { print "rfkill", dev, ty, ($3=="yes" ? "blocked" : "unblocked") }'
     done
 }
 
+# Current rfkill index for a stable DEVICE NAME. Prints the id; non-zero if the
+# device isn't present now (e.g. a USB radio was unplugged while offline).
+_rfkill_id_for_device() {
+    command -v rfkill >/dev/null 2>&1 || return 1
+    rfkill --output ID,DEVICE --noheadings 2>/dev/null \
+        | awk -v d="$1" '$2==d { print $1; found=1 } END { exit !found }'
+}
+
 net_links() {
-    local state="$KRATOS_STATE/offline-links.state" dev kind a b
+    local state="$KRATOS_STATE/offline-links.state" dev kind a b c id
     case "$1" in
         off)
             # SNAPSHOT what we are about to change, ONCE, so leaving offline can
@@ -223,19 +241,22 @@ net_links() {
             done
             ;;
         on)
-            command -v nmcli >/dev/null 2>&1 && nmcli networking on >/dev/null 2>&1
+            if command -v nmcli >/dev/null 2>&1; then nmcli networking on >/dev/null 2>&1 || true; fi
             # Restore ONLY what offline changed, from the snapshot. With NO
             # snapshot (we were never offline) we touch no radios or links — never
             # unconditionally unblock a radio the user had disabled (R10-4), and
             # never leave an unmanaged NIC we downed stuck down (R10-5).
             if [[ -f "$state" ]]; then
-                while read -r kind a b; do
+                # Fields: "rfkill <device> <type> <soft>" or "link <dev> <up|down>".
+                while read -r kind a b c; do
                     # Restore only entries that were ON before offline; leave the
                     # rest as offline set them. Proper if-blocks, not A && B || C
                     # (that tripped ShellCheck SC2015, finding R11-CI).
-                    if [[ "$kind" == rfkill && "$b" == unblocked ]] \
+                    if [[ "$kind" == rfkill && "$c" == unblocked ]] \
                        && command -v rfkill >/dev/null 2>&1; then
-                        rfkill unblock "$a" >/dev/null 2>&1 || true
+                        # Resolve the stable device name to its CURRENT index.
+                        id="$(_rfkill_id_for_device "$a")" || continue
+                        rfkill unblock "$id" >/dev/null 2>&1 || true
                     elif [[ "$kind" == link && "$b" == up ]]; then
                         ip link set "$a" up 2>/dev/null || true
                     fi
@@ -254,17 +275,26 @@ net_links() {
 # and enforces it when (and only when) the saved mode is offline.
 net_offline_links() {
     need_root offline-links
-    # Take the SAME operation lock as net_mode (finding R11-12): otherwise this
-    # late boot pass could race a concurrent `kratos mode normal` and down the
-    # NICs/radios the user is in the middle of enabling. serialize() fails fast
-    # on contention; if we can't get the lock, the mode switch that holds it is
-    # already setting the correct state, so just stand down.
-    serialize
+    install -d -m 755 "$KRATOS_RUN" "$KRATOS_STATE"
+    # Take the SAME operation lock as net_mode (finding R11-12) so this late boot
+    # pass can't race a concurrent `kratos mode normal` and down the NICs/radios
+    # the user is enabling. But this is a boot ENFORCEMENT service, not a user
+    # command, so GRACEFULLY stand down on contention instead of failing the unit
+    # (finding R12-5): whoever holds the lock is a mode switch already setting the
+    # correct state. A non-fatal try-lock, not serialize()'s die-on-contention.
+    local _fd
+    if ! exec {_fd}>"$KRATOS_RUN/lock"; then
+        return 0
+    fi
+    if ! flock -n "$_fd"; then
+        info "another kratos operation holds the lock; offline-links standing down" >&2
+        return 0
+    fi
+    _KRATOS_LOCKED=1   # tell any nested serialize() the lock is already held
     load_config
     # Re-read the mode UNDER the lock, so we never enforce offline links against a
     # mode that changed while we were starting.
     [[ "$(saved_mode)" == offline ]] || return 0
-    install -d -m 755 "$KRATOS_RUN" "$KRATOS_STATE"
     net_links off
 }
 

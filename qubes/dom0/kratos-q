@@ -372,6 +372,52 @@ def _policy_service_args(policy_text):
     return pairs
 
 
+# The ONE legitimate persona egress, declared in the shipped policy: Qubes'
+# UpdatesProxy, which Whonix resolves to sys-whonix. Probing @default now means
+# the real engine returns an Allow for this — it must be recognized as intended,
+# not reported as a hole. Everything else that resolves allow/ask for the persona
+# is a finding. (service, target-selector, resolved-target or None=any.)
+_INTENDED_PERSONA_ALLOWS = (
+    ("qubes.UpdatesProxy", "@default", "sys-whonix"),
+)
+# Special target selectors a rule may resolve against. @default/@dispvm are NOT
+# concrete domains, so they were never probed before (finding R12-1): an
+# `allow ... @default target=...` exception would be missed. Always probe these.
+_SPECIAL_TARGETS = ("@adminvm", "dom0", "@default", "@dispvm")
+
+
+def _is_intended_allow(svc, target, resolved):
+    for a_svc, a_tgt, a_res in _INTENDED_PERSONA_ALLOWS:
+        if svc == a_svc and target == a_tgt and (a_res is None or str(resolved) == a_res):
+            return True
+    return False
+
+
+def _rules_service_args_targets(policy):
+    """Derive the (service, argument) tokens AND target selectors from Qubes'
+    OWN parsed policy rules (finding R12-1). FilePolicy().rules is already fully
+    expanded — !include / !include-service / !include-dir and compat handling are
+    resolved by the parser — whereas scanning raw .policy text misses all of
+    those. Returns (svc_args, targets) or (None, None) if the rules API differs
+    (the caller then falls back to the raw-text scan)."""
+    try:
+        rules = list(policy.rules)
+    except Exception:  # noqa: BLE001 - unexpected API: let the caller fall back
+        return None, None
+    svc_args, targets = set(), set()
+    for r in rules:
+        try:
+            svc = str(getattr(r, "service", "") or "*")
+            arg = str(getattr(r, "argument", "") or "*")
+            tgt = str(getattr(r, "target", "") or "")
+        except Exception:  # noqa: BLE001
+            continue
+        svc_args.add((svc, arg or "*"))
+        if tgt:
+            targets.add(tgt)
+    return svc_args, targets
+
+
 def _build_probe_tokens(svc_args):
     """Turn the policy's (service, argument) tokens into the concrete
     (service, argument) requests to evaluate. Always includes the critical
@@ -442,49 +488,57 @@ def evaluate_with_real_policy(_engine=None, _services=None):
     personas = [n for n in (WS_LIVE, WS_TEMPLATE) if n in domains]
     if not personas:
         return False, []        # nothing persona-ish exists to evaluate yet
-    # EGRESS targets: every domain plus the special selectors a rule may resolve
-    # to. INBOUND sources: only CONCRETE non-dom0 qubes — qrexec handles
-    # AdminVM/dom0-originated calls specially, so synthesizing 'dom0 -> persona'
-    # (or '@adminvm -> persona') would be a FALSE request that could only produce
-    # a false positive (findings R8, R9-5). dom0/@adminvm are probed only as
-    # egress TARGETS. system_info["domains"] includes dom0, so exclude it (and
-    # its uuid: form) explicitly.
+
+    # Which (service, argument) requests to probe, and which target selectors.
+    # Prefer Qubes' OWN parsed rules (includes/compat expanded, finding R12-1);
+    # fall back to the raw-text scan only if the rules API differs. A test engine
+    # supplies them explicitly via _services (effective_policy_text reads nothing
+    # off a dom0).
+    rule_targets = set()
+    if _services is not None:
+        svc_args = set(_services)
+    elif _engine is None:
+        svc_args, rule_targets = _rules_service_args_targets(policy)
+        if svc_args is None:                       # rules API unavailable
+            svc_args = _policy_service_args(effective_policy_text(POLICY_PATH))
+            rule_targets = set()
+    else:
+        svc_args = set()
+    probe_tokens = sorted(_build_probe_tokens(svc_args))
+
+    # EGRESS targets: every concrete domain PLUS the special selectors (dom0,
+    # @adminvm, @default, @dispvm, and any @-selector a rule names — e.g.
+    # @dispvm:<tmpl>), so an `allow ... @default target=...` exception is actually
+    # exercised (finding R12-1). INBOUND sources: only CONCRETE non-dom0 qubes —
+    # qrexec handles AdminVM/dom0-originated calls specially, so 'dom0 -> persona'
+    # would be a FALSE request (findings R8, R9-5). uuid: aliases already filtered.
     _ADMIN = ("dom0", "uuid:0", "@adminvm")
-    egress_targets = list(domains) + ["@adminvm", "dom0"]
+    specials = set(_SPECIAL_TARGETS) | {t for t in rule_targets if t.startswith("@")}
+    egress_targets = list(domains) + sorted(specials)
     inbound_sources = [d for d in domains if d not in personas and d not in _ADMIN]
 
     def verdict(src, tgt, svc, arg):
-        """Return one of 'allow'|'ask'|'deny'|'unknown', or None on API error.
+        """Return (state, resolved_target). state is allow|ask|deny|unknown|error.
         Uses Qubes' DEFAULT resolution types (passing None breaks Allow.evaluate,
         which would make this disable itself on the very allow we must catch —
-        finding R8-2)."""
+        finding R8-2). resolved_target is the Allow/Ask rule's resolved target
+        (e.g. an `allow target=sys-whonix`), used to recognize intended egress."""
         try:
             req = Request(svc, arg, src, tgt, system_info=system_info)
             res = policy.evaluate(req)
         except AccessDenied:
-            return "deny"
+            return ("deny", None)
         except Exception:  # noqa: BLE001 - API mismatch: never read as safe
-            return None
+            return ("error", None)
         name = type(res).__name__.lower()
+        rtarget = getattr(res, "target", None)
         if "allow" in name:
-            return "allow"
+            return ("allow", rtarget)
         if "ask" in name:
-            return "ask"
+            return ("ask", rtarget)
         # A non-deny resolution we don't recognize is NOT "safe" — the API may
         # have changed. Treat it as evaluation-unavailable, not deny (finding R8).
-        return "unknown"
-
-    # Which (service, argument) requests to probe: the critical set + a synthetic
-    # unknown + every token the EFFECTIVE policy actually mentions (finding R11-1).
-    # Off a real dom0 we read the effective policy file set; with a test engine we
-    # take an explicit _services set (effective_policy_text would read nothing).
-    if _services is not None:
-        svc_args = set(_services)
-    elif _engine is None:
-        svc_args = _policy_service_args(effective_policy_text(POLICY_PATH))
-    else:
-        svc_args = set()
-    probe_tokens = sorted(_build_probe_tokens(svc_args))
+        return ("unknown", None)
 
     def _svc_label(svc, arg):
         return svc if arg in ("+", "") else f"{svc}{arg}"
@@ -502,13 +556,18 @@ def evaluate_with_real_policy(_engine=None, _services=None):
 
     for src, tgt, direction, label in probes:
         for svc, arg in probe_tokens:
-            v = verdict(src, tgt, svc, arg)
-            if v is None or v == "unknown":
+            state, rtarget = verdict(src, tgt, svc, arg)
+            if state in ("error", "unknown"):
                 return False, []        # couldn't trust the engine: let the lint speak + warn
             evaluated += 1
-            if v == "allow":
+            if state == "allow":
+                # Recognize the ONE intended persona egress (UpdatesProxy, which
+                # Whonix resolves to sys-whonix); everything else that resolves
+                # allow is a real hole (finding R12-1).
+                if direction == "egress" and _is_intended_allow(svc, tgt, rtarget):
+                    continue
                 problems.append(f"qrexec WOULD ALLOW {_svc_label(svc, arg)} {label} ({direction} hole)")
-            elif v == "ask":
+            elif state == "ask":
                 problems.append(f"qrexec would PROMPT for {_svc_label(svc, arg)} {label} ({direction} path)")
     if evaluated == 0:
         return False, []        # we proved nothing; let the lint speak
