@@ -32,9 +32,13 @@ and keeps the default posture "look exactly like a normal Tor/Whonix user."
 ### 1. Blend with the Tor crowd (default, `CORR_MODE=tor`)
 Use Tor exactly as Tor Browser + Whonix do: connection padding, standard
 circuits, default window sizes. Your protection is the **anonymity set** — you
-look like every other Tor user. Add bridges (`CORR_BRIDGES=obfs4|snowflake`) so
-your ISP can't even tell you use Tor. This is the right default for almost
-everyone.
+look like every other Tor user. This is the right default for almost everyone.
+
+> **`CORR_BRIDGES` is NOT implemented yet.** KratosOS does not provision Tor
+> bridges into the Gateway, so setting `CORR_BRIDGES=obfs4|snowflake` makes
+> Stealth Mode **refuse to start** (fail-closed) rather than imply your ISP
+> can't see Tor. To use bridges today, set the bridge lines directly in the
+> Whonix Gateway's `torrc` and leave `CORR_BRIDGES=off`.
 
 ### 2. Local-link shaping (opt-in, `CORR_LINK_SHAPING=on`, needs `vpn` mode)
 `kratos corr shape on` installs, on your **you→VPN uplink only**:
@@ -50,24 +54,24 @@ unusual, so it is off by default and `kratos fingerprint` flags it when on. Use
 it only when a *local* observer is the specific worry (e.g. an untrusted
 network) and you accept standing out to them.
 
-### 3. Mixnet mode (opt-in, `CORR_MODE=mixnet`, experimental)
-The only option here with a real answer to a global adversary. A **Loopix-style
-mixnet** ([Nym](https://nym.com/docs/network/mixnet-mode/loopix)) sends
-*constant* cover traffic and delays each message by an independent random amount
-across multiple mix nodes, so an observer sees a steady, uninformative stream
-whether or not you're doing anything — **unobservability**, not just
-unlinkability. The cost is high latency (seconds), so it suits messaging, not
-browsing. In KratosOS this routes the persona through Nym instead of (or in
-front of) Tor.
+### 3. Mixnet mode (`CORR_MODE=mixnet`) — the intended global-adversary answer, NOT YET WIRED IN
+A **Loopix-style mixnet** ([Nym](https://nym.com/docs/network/mixnet-mode/loopix))
+sends *constant* cover traffic and delays each message by an independent random
+amount across multiple mix nodes, so an observer sees a steady, uninformative
+stream whether or not you're doing anything — **unobservability**, not just
+unlinkability, at seconds of latency. This is the design answer to a global
+adversary.
 
-> **Status: integration shipped, live path untested here.** `workstation/nym/`
-> provides `kratos-nym` (writes a nym-socks5-client config with Loopix cover
-> traffic forced ON) and `nym.nft`, a fail-closed workstation firewall that
-> lets ONLY the `kratos-nym` user reach the network — so apps either go through
-> the mixnet or nowhere (tested in `tests/nym_test.sh`). It still needs the
-> real `nym-socks5-client` binary and a reachable Nym gateway, which this
-> project has not run end-to-end. Install it inside the persona workstation
-> (see that folder's header and docs/QUBES.md).
+> **NOT IMPLEMENTED: Stealth refuses to start with `CORR_MODE=mixnet`.**
+> KratosOS does **not** install or route the persona through Nym, so rather than
+> give a false sense of mixnet protection, Stealth Mode fails closed when
+> `CORR_MODE=mixnet` is set. What exists today is experimental *components*, not
+> an integrated path: `workstation/nym/` provides `kratos-nym` (writes a
+> nym-socks5-client config with Loopix cover traffic forced ON) and `nym.nft`, a
+> fail-closed workstation firewall that lets ONLY the `kratos-nym` user reach the
+> network (unit-tested in `tests/nym_test.sh`). Turning this into a real,
+> Stealth-provisioned path — installing `nym-socks5-client` into the persona,
+> supervising it, health-checking it and pointing apps at it — is still to do.
 
 ### 4. Layering (you → VPN → Tor, and beyond)
 KratosOS already supports **you → VPN (host, `mode vpn`) → Tor (Gateway)**: your
@@ -90,9 +94,10 @@ Padding can't hide a pattern you keep making:
 ## Bottom line
 - Default: blend with Tor. Best anonymity-set, no fingerprint. Right for most.
 - Local worry: add link shaping, knowing it's local-only and makes you stand out.
-- Global adversary: only a mixnet (Nym) genuinely helps, at a latency cost, and
-  it's still experimental here. If your life depends on beating a global
-  adversary, assume low-latency anonymity is not enough.
+- Global adversary: only a mixnet (Nym) genuinely helps, at a latency cost — and
+  it is **not yet integrated** (Stealth refuses `CORR_MODE=mixnet`, see §3). If
+  your life depends on beating a global adversary, assume low-latency anonymity
+  is not enough and do not treat KratosOS as providing the mixnet today.
 
 ## Sources
 - [Traffic Analysis Attacks on Tor: A Survey (MIT)](https://css.csail.mit.edu/6.858/2023/readings/tor-traffic-analysis.pdf)
@@ -172,12 +177,17 @@ hop** by shuffling/splitting N real connections onto M virtual connections
 between the exit relay and the destination. It must be deployed at the **exit
 side** — a client (all KratosOS controls) cannot deploy it unilaterally, so
 there is nothing to "implement" here. Its goal — defeating end-to-end flow
-correlation — is precisely what a **mixnet** provides end-to-end, which is our
-`CORR_STEALTH_PROFILE=max` (Nym) path. For a client, the mixnet is the
-deployable route to that property; MUFFLER is not deployable at all.
+correlation — is precisely what a **mixnet** provides end-to-end, which is the
+`CORR_MODE=mixnet` (Nym) path. Note that `CORR_STEALTH_PROFILE=max` is NOT that
+path — it is only host rate-limiting/jitter and explicitly does not route
+through Nym. And `CORR_MODE=mixnet` itself is not wired in yet (Stealth refuses
+it), so the mixnet property is the *intended* answer, not a shipped one. For a
+client, a mixnet is the deployable route to that property; MUFFLER is not
+deployable at all.
 
 **So:** we already have the vanguards baseline (lite), offer the full add-on as
-an opt-in, and for the flow-correlation property MUFFLER targets we rely on the
-Nym mixnet rather than an exit-side scheme a client can't run. None of this
-changes the honest top-line: only the mixnet gives a real story against a
-global passive adversary on anything resembling low latency.
+an opt-in, and the flow-correlation property MUFFLER targets would come from the
+Nym mixnet rather than an exit-side scheme a client can't run — once Nym is
+actually integrated. None of this changes the honest top-line: only a mixnet
+gives a real story against a global passive adversary on anything resembling low
+latency, and KratosOS does not provide that mixnet path today.
