@@ -170,6 +170,10 @@ net_links() {
 net_boot() {
     need_root boot
     install -d -m 755 "$KRATOS_RUN" "$KRATOS_STATE"
+    # Load config so DEFAULT_MODE is in scope: when no mode has been persisted
+    # yet (first boot) saved_mode() falls back to DEFAULT_MODE, so DEFAULT_MODE=vpn
+    # actually boots into the VPN kill-switch instead of clearnet (finding R8).
+    load_config
     load_ruleset offline
     case "$(saved_mode)" in
         normal) load_ruleset normal ;;

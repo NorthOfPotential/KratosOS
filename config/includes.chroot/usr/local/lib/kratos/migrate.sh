@@ -212,6 +212,22 @@ migrate_copy_from_export() {
     fi
     ok "every imported file is accounted for in the manifest (no unlisted extras)"
 
+    # The manifest is NOT authenticated (it sits next to the files), so a
+    # tampered backup could list arbitrary paths and the checks above would
+    # still pass. Constrain imports to the official exporter's layout so a
+    # tampered backup cannot drop a home-root dotfile/dotdir that AUTO-RUNS code
+    # in the new home (e.g. ~/.bashrc, ~/.config/autostart/*.desktop, ~/.profile)
+    # — finding R8-9. Only the one intentional dotdir, .ssh, is allowed.
+    local rel top
+    while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        top="${rel%%/*}"
+        case "$top" in
+            .ssh) : ;;   # explicitly exported with -IncludeSSH
+            .*) die "refusing to import '$rel': KratosOS does not import home-root dotfiles/dotdirs from a backup (they could auto-run code in your new home). Only .ssh is allowed." ;;
+        esac
+    done <<< "$staged_set"
+
     local invdir
     if invdir="$(_migrate_real_dir "$src/inventory" "$srcreal")"; then
         install -d "$stage/Windows inventory"

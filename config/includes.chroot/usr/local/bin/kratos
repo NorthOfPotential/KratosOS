@@ -26,7 +26,14 @@ unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
 # attacker-controlled code by an environment variable, with no in-binary
 # "disable enforcement" switch to trip.
 _self="$(readlink -f -- "$0" 2>/dev/null || echo "$0")"
-if [[ "$_self" == /usr/local/bin/kratos || "${KRATOS_TEST:-}" != 1 ]]; then
+if [[ "$_self" == /usr/local/bin/kratos ]]; then
+    # The INSTALLED binary strips EVERY KRATOS_* test override, INCLUDING
+    # KRATOS_TEST itself (finding R8): production must not contain a
+    # "skip security-relevant behavior" switch reachable via the environment.
+    unset KRATOS_LIB KRATOS_ETC KRATOS_STATE KRATOS_RUN KRATOS_TEST
+elif [[ "${KRATOS_TEST:-}" != 1 ]]; then
+    # Not the installed binary, but test mode not explicitly requested: still
+    # ignore stray overrides.
     unset KRATOS_LIB KRATOS_ETC KRATOS_STATE KRATOS_RUN
 fi
 unset _self

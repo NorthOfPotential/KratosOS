@@ -25,7 +25,14 @@ rm -f /etc/libvirt/qemu/networks/autostart/default.xml
 
 # ── KratosOS state ──────────────────────────────────────────
 install -d -m 755 /var/lib/kratos
-echo normal > /var/lib/kratos/mode
+# Seed the persisted network mode from DEFAULT_MODE in kratos.conf (finding R8):
+# DEFAULT_MODE is the first-run default, and the mode then persists across
+# shutdowns as the user changes it with `kratos mode`. Hardcoding `normal` here
+# used to override DEFAULT_MODE=vpn and boot onto clearnet. Fall back to normal
+# only if DEFAULT_MODE is unset/invalid.
+dm="$(sed -n 's/^[[:space:]]*DEFAULT_MODE[[:space:]]*=[[:space:]]*\([a-z]*\).*/\1/p' /etc/kratos/kratos.conf 2>/dev/null | head -1)"
+case "$dm" in normal|vpn|offline) : ;; *) dm=normal ;; esac
+echo "$dm" > /var/lib/kratos/mode
 chmod 755 /usr/local/bin/kratos /usr/local/bin/kratos-tray /usr/local/bin/kratos-panic
 chmod 644 /usr/local/lib/kratos/*.sh /usr/local/lib/kratos/*.tsv
 chmod 755 /usr/local/lib/kratos/harden-whonix.py /usr/local/lib/kratos/stealth-seat \

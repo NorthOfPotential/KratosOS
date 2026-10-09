@@ -23,7 +23,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Destination,
-    [switch]$IncludeSSH
+    [switch]$IncludeSSH,
+    # Advanced override: proceed even when we CANNOT confirm the destination is
+    # on a different physical disk from Windows (e.g. exotic/virtual storage
+    # whose DiskNumber can't be resolved). Off by default — we fail closed,
+    # because the next step erases the Windows disk (finding R8-5).
+    [switch]$AllowUnverifiedDisk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,8 +63,15 @@ if ($null -ne $sysDisk -and $null -ne $destDisk -and $sysDisk -eq $destDisk) {
            "which would also erase this backup. Use an external USB drive.")
 }
 if ($null -eq $sysDisk -or $null -eq $destDisk) {
-    Say "WARNING: could not confirm the destination is on a different physical disk from Windows." Yellow
-    Say "Make absolutely sure your backup drive is a SEPARATE physical device before you erase anything." Yellow
+    if (-not $AllowUnverifiedDisk) {
+        throw ("Could not confirm the destination is on a DIFFERENT physical disk from Windows " +
+               "(could not resolve a disk number for $sysLetter`: or $destDrive`:). Refusing to " +
+               "continue, because the KratosOS install erases the Windows disk. Use a plain external " +
+               "USB drive, or — only if you are certain it is a separate physical device — re-run with " +
+               "-AllowUnverifiedDisk.")
+    }
+    Say "WARNING: could not confirm a separate physical disk; proceeding because -AllowUnverifiedDisk was given." Yellow
+    Say "You are asserting the backup drive is a SEPARATE physical device. Double-check before erasing." Yellow
 }
 
 $folders = 'Desktop', 'Documents', 'Downloads', 'Pictures', 'Music', 'Videos', 'Favorites'

@@ -84,6 +84,20 @@ else
     flunk "unmanifested extra was accepted (rc=$rc)"; echo "$out"
 fi
 
+echo "migration: a home-root dotfile in the backup is refused (R8-9 autostart injection)"
+make_export
+mkdir -p "$export_dir/Files/.config/autostart"
+echo "[Desktop Entry]" > "$export_dir/Files/.config/autostart/evil.desktop"
+# Rebuild the manifest so the tampered file is LISTED (simulating a manifest an
+# attacker regenerated) — set-equality alone would then pass.
+( cd "$export_dir" && find Files -type f -print0 | xargs -0 sha256sum ) > "$export_dir/manifest.sha256"
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )) && grep -qiE "dotfile|dotdir|\.config" <<<"$out" && [[ ! -e "$home_dir/.config/autostart/evil.desktop" ]]; then
+    pass "a home-root dotdir (autostart) in the backup is refused even when manifested"
+else
+    flunk "home-root dotfile import was accepted (rc=$rc)"; echo "$out"
+fi
+
 echo "migration: elevated --to outside the invoker's home is refused"
 mhome="$(getent passwd mallory 2>/dev/null | cut -d: -f6)"
 if [[ $EUID -eq 0 && -n "$mhome" ]]; then
