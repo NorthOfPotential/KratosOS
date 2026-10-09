@@ -30,6 +30,13 @@
 - [x] KratosOS-on-Qubes profile (qubes/: Salt + qrexec policy + kratos-q driver) — logic tested; live dom0 run pending
 - [~] Nym mixnet components (workstation/nym/: client config + fail-closed firewall, unit-tested) — EXPERIMENTAL and NOT integrated: Stealth does not install/route Nym into the persona, and `CORR_MODE=mixnet` is refused until it does. End-to-end routing and a live Nym network run are pending.
 - [ ] Separate non-root QEMU uids + seccomp sandbox per VM
+- [ ] **Persistent Tor-guard state vs. disposable Gateway OS** (design agreed in
+      `docs/TOR-STATE-ARCHITECTURE.md`): make the Gateway OS a disposable overlay
+      on an updated base and persist ONLY `/var/lib/tor` on a small encrypted
+      volume, so guards survive toggles without a Gateway compromise or stale OS
+      surviving with them. Implementation needs a live Whonix guest to validate
+      the guest-side mount + fail-closed behavior, so it is deliberately not
+      shipped blind.
 
 ## Release-assurance gates still open (honest status)
 - [ ] **ISO-build-and-boot as a release gate.** The `build-iso` CI job builds
