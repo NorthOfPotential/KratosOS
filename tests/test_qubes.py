@@ -136,20 +136,25 @@ class EffectivePolicy(unittest.TestCase):
         self.assertEqual(problems, [])
 
     def _fake_engine(self, allow_pairs=(), ask_pairs=(), raise_on_none_resolution=False,
-                     allow_arg_pairs=()):
+                     allow_arg_pairs=(), allow_target_pairs=None):
         """Build a (policy, Request, AccessDenied, system_info) seam that mimics
         qrexec: deny (raise AccessDenied) unless the request matches. allow_pairs
         and ask_pairs match on (src,tgt,svc) ignoring the argument;
-        allow_arg_pairs match on the full (src,tgt,svc,arg) so argument-specific
-        exceptions can be exercised (finding R11-1)."""
+        allow_arg_pairs match on the full (src,tgt,svc,arg) (finding R11-1);
+        allow_target_pairs maps (src,tgt,svc) -> resolved target, so an
+        `allow target=...` resolution can be modelled (finding R12-1)."""
+        allow_target_pairs = allow_target_pairs or {}
+
         class AccessDenied(Exception):
             pass
 
         class AllowResolution:  # names matter: verdict() checks the class name
-            pass
+            def __init__(self, target=None):
+                self.target = target
 
         class AskResolution:
-            pass
+            def __init__(self, target=None):
+                self.target = target
 
         class Request:
             def __init__(self, service, argument, source, target, *,
@@ -164,6 +169,8 @@ class EffectivePolicy(unittest.TestCase):
 
         class Policy:
             def evaluate(self, req):
+                if req.key in allow_target_pairs:
+                    return AllowResolution(target=allow_target_pairs[req.key])
                 if req.key_arg in allow_arg_pairs:
                     return AllowResolution()
                 if req.key in allow_pairs:
@@ -248,6 +255,52 @@ class EffectivePolicy(unittest.TestCase):
         self.assertIn((kq._UNKNOWN_SERVICE, "+zz"), toks)
         # Critical services are always present regardless of the policy.
         self.assertIn(("qubes.VMShell", "+"), toks)
+
+    def test_real_eval_probes_special_targets(self):
+        """A persona allow to a SPECIAL selector like @default (not a concrete
+        domain) must be exercised and reported (finding R12-1): the audit now
+        probes @default/@dispvm, not just concrete domains."""
+        eng = self._fake_engine(allow_target_pairs={
+            ("kratos-ws-live", "@default", "evil.Service"): "personal"})
+        services = {("evil.Service", "*")}
+        ran, problems = kq.evaluate_with_real_policy(_engine=eng, _services=services)
+        self.assertTrue(ran)
+        self.assertTrue(any("evil.Service" in p and "@default" in p for p in problems),
+                        f"an @default egress exception was not caught: {problems}")
+
+    def test_real_eval_allows_intended_updatesproxy(self):
+        """The ONE legitimate persona egress — qubes.UpdatesProxy resolving to
+        sys-whonix via @default — must NOT be reported as a hole (finding R12-1),
+        while the same service resolving ELSEWHERE still is."""
+        eng = self._fake_engine(allow_target_pairs={
+            ("kratos-ws-live", "@default", "qubes.UpdatesProxy"): "sys-whonix"})
+        ran, problems = kq.evaluate_with_real_policy(
+            _engine=eng, _services={("qubes.UpdatesProxy", "*")})
+        self.assertTrue(ran)
+        self.assertFalse(any("UpdatesProxy" in p for p in problems),
+                         f"intended UpdatesProxy egress wrongly flagged: {problems}")
+        # But the same service resolving to a non-sys-whonix target is a hole.
+        eng2 = self._fake_engine(allow_target_pairs={
+            ("kratos-ws-live", "@default", "qubes.UpdatesProxy"): "personal"})
+        ran2, problems2 = kq.evaluate_with_real_policy(
+            _engine=eng2, _services={("qubes.UpdatesProxy", "*")})
+        self.assertTrue(ran2)
+        self.assertTrue(any("UpdatesProxy" in p for p in problems2),
+                        f"UpdatesProxy to the wrong target was not flagged: {problems2}")
+
+    def test_rules_service_args_targets_reads_parsed_rules(self):
+        """The audit derives its matrix from Qubes' OWN parsed rules, so
+        includes/compat are already expanded (finding R12-1). A minimal fake
+        policy object exposing .rules must yield its service/argument/target."""
+        class R:
+            def __init__(self, s, a, t):
+                self.service, self.argument, self.target = s, a, t
+
+        class P:
+            rules = [R("custom.Svc", "+x", "personal"), R("qubes.UpdatesProxy", "*", "@default")]
+        svc_args, targets = kq._rules_service_args_targets(P())
+        self.assertIn(("custom.Svc", "+x"), svc_args)
+        self.assertIn("@default", targets)
 
     def test_real_eval_reports_ask_as_path(self):
         eng = self._fake_engine(ask_pairs={

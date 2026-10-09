@@ -4,6 +4,10 @@ DefaultDependencies=no
 Before=network-pre.target libvirtd.service
 Wants=network-pre.target
 After=local-fs.target
+# Order AFTER systemd-rfkill's state restore (finding R12-2), so when this unit
+# applies the early offline radio block (saved mode = offline) systemd-rfkill
+# can't then re-unblock from its saved state. Ordering only; we don't pull it in.
+After=systemd-rfkill.service
 
 [Service]
 Type=oneshot
