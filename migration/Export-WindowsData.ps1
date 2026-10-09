@@ -33,10 +33,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $profileDir = $env:USERPROFILE
+# FINAL location of a completed backup. We never build or mutate it in place
+# (finding R10-1/7): a rerun must not retain files the user deleted since the
+# last export (e.g. a secret they removed, or SSH keys from a previous
+# -IncludeSSH run), and a failed rerun must not destroy the previously good
+# backup. So every run builds a FRESH staging tree and only swaps it into place
+# atomically once everything has succeeded; a prior KratosExport is left
+# untouched until that final swap.
 $exportRoot = Join-Path $Destination 'KratosExport'
-$filesDir   = Join-Path $exportRoot 'Files'
-$invDir     = Join-Path $exportRoot 'inventory'
-$logFile    = Join-Path $exportRoot 'export.log'
+$staging    = Join-Path $Destination ('KratosExport.new-' + [IO.Path]::GetRandomFileName())
+$filesDir   = Join-Path $staging 'Files'
+$invDir     = Join-Path $staging 'inventory'
+$logFile    = Join-Path $staging 'export.log'
 
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
@@ -100,29 +108,28 @@ $free = (Get-PSDrive $destDrive).Free
 Say ("Data: {0:N1} GB   Free on {1}: {2:N1} GB" -f ($total / 1GB), $destDrive, ($free / 1GB))
 if ($total -gt $free * 0.95) { throw "Not enough space on the destination drive." }
 
+# Build into the FRESH staging tree (empty by construction — GetRandomFileName
+# can't collide with an existing dir), so no file from a previous export can
+# survive into this one.
 New-Item -ItemType Directory -Force -Path $filesDir, $invDir | Out-Null
 "KratosOS export started $(Get-Date -Format o) by $env:USERNAME" | Set-Content $logFile
 
-# ── Transactional backup: begin in an explicitly INCOMPLETE state (finding R9-8) ──
-# Remove any manifest from a previous run NOW and drop a loud marker, BEFORE a
-# single file is copied. $ErrorActionPreference='Stop' means any later step
-# (bookmarks, inventory, hashing) can throw and terminate the script; a Ctrl+C
-# or power loss can do the same. If a stale manifest.sha256 were left in place,
-# a half-written export would look like a finished backup. The real manifest is
-# published ATOMICALLY only after every step succeeds (see the end of the
-# script), and only then is this marker removed — so an interrupted export
-# always leaves NO manifest + this marker present.
-$marker = Join-Path $exportRoot 'INCOMPLETE-DO-NOT-ERASE-WINDOWS.txt'
-Remove-Item (Join-Path $exportRoot 'manifest.sha256') -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE') -Force -ErrorAction SilentlyContinue
+# ── Transactional backup: staging begins in an explicitly INCOMPLETE state ──
+# (findings R9-8, R10-7). $ErrorActionPreference='Stop' means any later step
+# (bookmarks, inventory, hashing) can throw and terminate the script; Ctrl+C or
+# power loss can do the same. The manifest is published into staging ATOMICALLY
+# only after every step succeeds, and staging is swapped into KratosExport only
+# then — so an interrupted run leaves this marker + no manifest in a *.new-*
+# directory, and the previous KratosExport (if any) is untouched.
+$marker = Join-Path $staging 'INCOMPLETE-DO-NOT-ERASE-WINDOWS.txt'
 @"
 INCOMPLETE EXPORT — DO NOT ERASE WINDOWS
 ========================================
-This export is still being written, or did not finish. There is deliberately
-NO manifest.sha256 yet, so KratosOS will refuse to import it as a finished
-backup. When the exporter finishes with no errors it publishes manifest.sha256
-and removes this file. If you still see this file, the export is INCOMPLETE —
-re-run the exporter until it finishes cleanly before you erase Windows.
+This directory is a partial/in-progress KratosOS export. There is deliberately
+NO manifest.sha256 here, so KratosOS will refuse to import it as a finished
+backup, and it has NOT replaced any previous KratosExport folder. Re-run the
+exporter until it finishes cleanly (it will produce a fresh KratosExport) before
+you erase Windows. You can delete this *.new-* directory.
 "@ | Set-Content $marker -Encoding UTF8
 
 # Track real copy FAILURES across every robocopy run. A robocopy exit code >= 8
@@ -214,12 +221,12 @@ KratosOS migration checklist (things this script can't copy for you)
     whole Windows disk
 [ ] Make a SECOND copy of this export on another separate device
 "@
-$checklist | Set-Content (Join-Path $exportRoot 'CHECKLIST.txt') -Encoding UTF8
+$checklist | Set-Content (Join-Path $staging 'CHECKLIST.txt') -Encoding UTF8
 
 # ── Manifest (verified by `kratos migrate`) ───────────────────
 Say "Computing SHA-256 of every file (this can take a while)..." Cyan
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$base = (Resolve-Path $exportRoot).Path.TrimEnd('\') + '\'
+$base = (Resolve-Path $staging).Path.TrimEnd('\') + '\'
 $lines = Get-ChildItem $filesDir -Recurse -File -Force | ForEach-Object {
     $rel = $_.FullName.Substring($base.Length).Replace('\', '/')
     '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLower(), $rel
@@ -231,31 +238,51 @@ if ($copyFailed) {
     # refuses to import a partial backup as if it were whole), overwrite the
     # marker with the specific failures, and exit non-zero. Fix the errors (see
     # export.log) and re-run before erasing Windows.
-    [IO.File]::WriteAllText((Join-Path $exportRoot 'manifest.sha256.INCOMPLETE'), (($lines -join "`n") + "`n"), $utf8)
+    [IO.File]::WriteAllText((Join-Path $staging 'manifest.sha256.INCOMPLETE'), (($lines -join "`n") + "`n"), $utf8)
     @"
 INCOMPLETE EXPORT — DO NOT ERASE WINDOWS
 ========================================
 Some files could not be copied: $($failedWhat -join ', ')
 See export.log for details. This export is NOT a complete backup.
 
-There is deliberately NO manifest.sha256 here, so KratosOS will refuse to
-import it as a finished backup. Fix the copy errors and run the exporter
-again until it finishes with NO errors before you erase this computer.
+There is deliberately NO manifest.sha256 here, and this partial export has NOT
+replaced any previous KratosExport folder. Fix the copy errors and run the
+exporter again until it finishes with NO errors before you erase this computer.
+You can delete this *.new-* directory.
 "@ | Set-Content $marker -Encoding UTF8
     Say "`nEXPORT INCOMPLETE — some files failed to copy ($($failedWhat -join ', '))." Red
-    Say "DID NOT write manifest.sha256. DO NOT ERASE WINDOWS. See $marker and export.log, then re-run." Red
+    Say "DID NOT write manifest.sha256, and left any previous backup intact." Red
+    Say "DO NOT ERASE WINDOWS. See $marker and export.log, then re-run." Red
     exit 1
 }
-# All copies and the hashing succeeded. Publish the manifest ATOMICALLY (write a
-# temp file, then rename it into place) and only THEN clear the INCOMPLETE
-# marker — so even an interruption between those two steps leaves no manifest
-# plus the marker present, never a manifest without a clean finish (finding R9-8).
-$manifestTmp = Join-Path $exportRoot 'manifest.sha256.tmp'
-$manifestOut = Join-Path $exportRoot 'manifest.sha256'
+# All copies and the hashing succeeded. Finalize inside STAGING first: publish the
+# manifest atomically (write temp, then rename) and clear the INCOMPLETE marker,
+# so staging is now a complete, self-consistent export (finding R9-8).
+$manifestTmp = Join-Path $staging 'manifest.sha256.tmp'
+$manifestOut = Join-Path $staging 'manifest.sha256'
 [IO.File]::WriteAllText($manifestTmp, (($lines -join "`n") + "`n"), $utf8)
 Move-Item -LiteralPath $manifestTmp -Destination $manifestOut -Force
-Remove-Item (Join-Path $exportRoot 'manifest.sha256.INCOMPLETE') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $staging 'manifest.sha256.INCOMPLETE') -Force -ErrorAction SilentlyContinue
 Remove-Item $marker -Force -ErrorAction SilentlyContinue
+
+# Now SWAP the finished staging tree into the final KratosExport location
+# (finding R10-1/7). Move any previous export ASIDE first so it survives until
+# the new one is fully in place; restore it if the final move fails, and only
+# delete it once the new export is committed. The previous known-good backup is
+# therefore never lost to a rerun, and no stale/deleted file can survive into
+# the new one (staging was built empty).
+$backup = $null
+if (Test-Path $exportRoot) {
+    $backup = Join-Path $Destination ('KratosExport.old-' + [IO.Path]::GetRandomFileName())
+    Move-Item -LiteralPath $exportRoot -Destination $backup -Force
+}
+try {
+    Move-Item -LiteralPath $staging -Destination $exportRoot -Force
+} catch {
+    if ($backup) { Move-Item -LiteralPath $backup -Destination $exportRoot -Force }
+    throw
+}
+if ($backup) { Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue }
 
 # ── BitLocker reminder ────────────────────────────────────────
 try {

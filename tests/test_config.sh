@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091,SC2086,SC2294,SC2030,SC2031
+# shellcheck disable=SC1091,SC2086,SC2294,SC2030,SC2031,SC2317,SC2329,SC2034
 # kratos.conf is parsed as DATA, never sourced. These tests prove a tampered
 # or hostile config can set values but can NEVER execute commands as root, and
 # that a config which isn't root-owned-and-secure is ignored entirely.
@@ -62,12 +62,10 @@ check_boot() {   # <workdir> <default_mode> <preset-mode|-> <expected>
         # shellcheck source=/dev/null
         . "$lib/common.sh"; . "$lib/net.sh"
         # These stubs ARE invoked indirectly by net_boot; DEFAULT_MODE is read by
-        # it as a global. shellcheck can't see across the sourced file.
-        # shellcheck disable=SC2329
+        # it as a global. shellcheck can't see across the sourced file (the
+        # file-level disable list covers SC2317/SC2329/SC2034 for this).
         need_root() { :; }       # not root in CI
-        # shellcheck disable=SC2329
         load_ruleset() { :; }    # don't touch nft
-        # shellcheck disable=SC2034
         DEFAULT_MODE="$2"
         net_boot >/dev/null 2>&1
         cat "$KRATOS_STATE/mode" 2>/dev/null

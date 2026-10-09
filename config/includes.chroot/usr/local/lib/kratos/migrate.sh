@@ -30,6 +30,25 @@ migrate_list_partitions() {
     lsblk -rpno NAME,FSTYPE,SIZE,LABEL | awk '$2=="ntfs" || $2=="BitLocker" {print "  "$0}'
 }
 
+# Mount an untrusted NTFS source read-only, preferring the USERSPACE/FUSE parser
+# (finding R9-10/R10-2). The trust choice branches on parser AVAILABILITY, not on
+# the parser's RESULT: if ntfs-3g is present we use it and a FAILURE is FATAL —
+# we do NOT hand a filesystem the userspace parser rejected (corrupt, or a
+# crafted image) to the in-kernel ntfs3 driver, which would defeat the point of
+# preferring FUSE. The kernel driver is used only when ntfs-3g is not installed.
+#   $1 source device/image, $2 mountpoint, $3 human label, $4 "loop" (optional)
+_mount_ntfs_ro() {
+    local src="$1" mnt="$2" label="$3" loop="${4:-}" opts="ro"
+    [[ "$loop" == loop ]] && opts="ro,loop"
+    if command -v ntfs-3g >/dev/null 2>&1 || command -v mount.ntfs-3g >/dev/null 2>&1; then
+        mount -t ntfs-3g -o "$opts" "$src" "$mnt" \
+            || die "the userspace NTFS parser (ntfs-3g) refused $label — refusing to hand a corrupt or hostile filesystem to the in-kernel driver. Check the disk on another machine (ntfsfix) or re-image it."
+    else
+        warn "ntfs-3g (userspace NTFS) is not installed; falling back to the in-kernel ntfs3 driver for $label"
+        mount -t ntfs3 -o "$opts" "$src" "$mnt" || die "could not mount $label"
+    fi
+}
+
 # Mount a Windows partition read-only; prints the mountpoint.
 migrate_mount() {
     local dev="$1" fstype mnt="$KRATOS_RUN/migrate/win"
@@ -49,17 +68,10 @@ migrate_mount() {
             r|R|recovery) dislocker -V "$dev" -u -r -- "$KRATOS_RUN/migrate/bitlocker" >&2 ;;
             *)            dislocker -V "$dev" -p -r -- "$KRATOS_RUN/migrate/bitlocker" >&2 ;;
         esac || die "could not unlock BitLocker"
-        # Prefer the userspace parser for the (untrusted) decrypted NTFS image too.
-        mount -t ntfs-3g -o ro,loop "$KRATOS_RUN/migrate/bitlocker/dislocker-file" "$mnt" 2>/dev/null \
-            || mount -o ro,loop "$KRATOS_RUN/migrate/bitlocker/dislocker-file" "$mnt"
+        _mount_ntfs_ro "$KRATOS_RUN/migrate/bitlocker/dislocker-file" "$mnt" "the decrypted BitLocker image" loop
     else
-        # Prefer the USERSPACE/FUSE parser (ntfs-3g) for untrusted foreign media,
-        # so a malformed or deliberately hostile NTFS structure is handled by a
-        # userspace process rather than the kernel filesystem driver (finding
-        # R9-10). Fall back to the kernel ntfs3 driver only if ntfs-3g is absent.
-        # Read-only works even if Windows was hibernated / used Fast Startup.
-        mount -t ntfs-3g -o ro "$dev" "$mnt" 2>/dev/null || mount -t ntfs3 -o ro "$dev" "$mnt"
-    fi || die "could not mount $dev"
+        _mount_ntfs_ro "$dev" "$mnt" "$dev"
+    fi
     echo "$mnt"
 }
 
@@ -236,27 +248,30 @@ migrate_copy_from_export() {
     # still pass. Constrain imports to the official exporter's layout so a
     # tampered backup cannot drop a home-root dotfile/dotdir that AUTO-RUNS code
     # in the new home (e.g. ~/.bashrc, ~/.config/autostart/*.desktop, ~/.profile)
-    # — finding R8-9. Only the one intentional dotdir, .ssh, is allowed.
+    # — finding R8-9. Only the one intentional dotdir, .ssh, may appear, and it
+    # is QUARANTINED below rather than written into the live ~/.ssh.
     local rel top
     while IFS= read -r rel; do
         [[ -n "$rel" ]] || continue
         top="${rel%%/*}"
         case "$top" in
-            .ssh)
-                # .ssh is the one allowed dotdir (-IncludeSSH), but the backup is
-                # NOT authenticated (finding R9-7): a tampered export could slip in
-                # an ~/.ssh/config with a ProxyCommand (runs on your next ssh), or
-                # an authorized_keys/rc/environment that grants or triggers remote
-                # access. Import only PASSIVE key material; refuse ACTIVE SSH
-                # configuration — review and place that by hand after import.
-                case "${rel##*/}" in
-                    config|authorized_keys|authorized_keys2|rc|environment)
-                        die "refusing to import '$rel': an unauthenticated backup must not place an active SSH config/authorized-keys file into ~/.ssh (it could redirect your SSH or grant remote access). Review it and import it by hand instead." ;;
-                esac
-                ;;
-            .*) die "refusing to import '$rel': KratosOS does not import home-root dotfiles/dotdirs from a backup (they could auto-run code in your new home). Only .ssh key material is allowed." ;;
+            .ssh) : ;;   # allowed in the backup; relocated out of ~/.ssh below
+            .*) die "refusing to import '$rel': KratosOS does not import home-root dotfiles/dotdirs from a backup (they could auto-run code in your new home). Only .ssh is allowed, and it is quarantined for manual review." ;;
         esac
     done <<< "$staged_set"
+
+    # Quarantine ALL SSH material (finding R10-6): the backup has NO authenticity
+    # (the manifest only detects corruption), so we never write keys, config OR
+    # known_hosts straight into the LIVE ~/.ssh. A tampered config could carry a
+    # ProxyCommand, an authorized_keys could grant access, and even known_hosts
+    # is a trust database that could suppress a host-key-change warning. Move the
+    # whole .ssh tree into Imported-from-Windows/SSH/ for the user to inspect and
+    # place by hand; nothing SSH-related lands in ~/.ssh automatically.
+    if [[ -d "$stage/.ssh" ]]; then
+        install -d "$stage/Imported-from-Windows"
+        mv "$stage/.ssh" "$stage/Imported-from-Windows/SSH"
+        info "SSH material was quarantined to 'Imported-from-Windows/SSH/'. Review it and copy what you trust into ~/.ssh yourself."
+    fi
 
     local invdir
     if invdir="$(_migrate_real_dir "$src/inventory" "$srcreal")"; then

@@ -6,7 +6,9 @@ cd "$(dirname "$0")/.." || exit 1
 inc=config/includes.chroot
 status=0
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-run() { "$@" || status=1; }
+# Return the command's own failure so `run cmd && echo ok` can't print "ok"
+# after a failed step (and still record the overall failure in $status).
+run() { "$@" || { status=1; return 1; }; }
 
 step "shellcheck"
 run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \

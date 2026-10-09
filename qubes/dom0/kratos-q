@@ -382,7 +382,13 @@ def evaluate_with_real_policy(_engine=None):
         except Exception:  # noqa: BLE001
             return False, []
     try:
-        domains = sorted(system_info["domains"].keys())
+        # get_system_info() keys each domain by NAME and also by a 'uuid:<UUID>'
+        # alias for the same domain. Probing both would double the matrix and
+        # synthesize redundant requests (finding R10-9), and the uuid: alias of a
+        # persona would also slip past the name-based persona/dom0 exclusions
+        # below. Canonicalize to real domain names only.
+        domains = sorted(d for d in system_info["domains"].keys()
+                         if not str(d).startswith("uuid:"))
     except Exception:  # noqa: BLE001
         return False, []
 
