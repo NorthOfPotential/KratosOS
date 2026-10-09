@@ -383,7 +383,34 @@ _INTENDED_PERSONA_ALLOWS = (
 # Special target selectors a rule may resolve against. @default/@dispvm are NOT
 # concrete domains, so they were never probed before (finding R12-1): an
 # `allow ... @default target=...` exception would be missed. Always probe these.
+# These are all VALID requested targets (unlike the matchers below).
 _SPECIAL_TARGETS = ("@adminvm", "dom0", "@default", "@dispvm")
+
+
+def _valid_intended_target(t):
+    """Is `t` a valid REQUESTED target (an IntendedTarget), as opposed to a
+    policy-only MATCHER? Qubes rejects @anyvm / @tag:* / @type:* as request
+    targets (constructing Request(target="@anyvm") raises), so probing them
+    would make the whole authoritative audit error out and fail closed on a
+    real dom0 — the R12 regression this guards against (finding R13-1). The
+    concrete domains a matcher covers are already probed directly; only genuine
+    intended-target selectors are added here."""
+    if t in ("@adminvm", "@default", "@dispvm"):
+        return True
+    if t.startswith("@dispvm:"):        # a concrete DispVM template is valid
+        return True
+    return False                        # @anyvm, @tag:*, @type:*, bare @ -> no
+
+
+def _egress_specials(rule_targets):
+    """The special (non-concrete-domain) selectors to probe as egress targets:
+    the always-on set plus any VALID intended-target selector a rule names
+    (e.g. @dispvm:<template>). Policy matchers are filtered out (finding R13-1)."""
+    specials = set(_SPECIAL_TARGETS)
+    for t in rule_targets:
+        if _valid_intended_target(t):
+            specials.add(t)
+    return specials
 
 
 def _is_intended_allow(svc, target, resolved):
@@ -499,22 +526,27 @@ def evaluate_with_real_policy(_engine=None, _services=None):
         svc_args = set(_services)
     elif _engine is None:
         svc_args, rule_targets = _rules_service_args_targets(policy)
-        if svc_args is None:                       # rules API unavailable
-            svc_args = _policy_service_args(effective_policy_text(POLICY_PATH))
-            rule_targets = set()
+        if svc_args is None:
+            # On a real dom0 the PARSED rules are the source of truth; if we
+            # cannot read them, FAIL the authoritative audit (return ran=False,
+            # which cmd_audit turns into a loud failure under have_qubes) rather
+            # than silently probing a weaker raw-text matrix (finding R13-1).
+            return False, []
     else:
         svc_args = set()
     probe_tokens = sorted(_build_probe_tokens(svc_args))
 
-    # EGRESS targets: every concrete domain PLUS the special selectors (dom0,
-    # @adminvm, @default, @dispvm, and any @-selector a rule names — e.g.
-    # @dispvm:<tmpl>), so an `allow ... @default target=...` exception is actually
-    # exercised (finding R12-1). INBOUND sources: only CONCRETE non-dom0 qubes —
+    # EGRESS targets: every concrete domain PLUS the VALID special selectors
+    # (dom0, @adminvm, @default, @dispvm, and any @dispvm:<tmpl> a rule names), so
+    # an `allow ... @default target=...` exception is exercised (finding R12-1).
+    # Policy-only MATCHERS (@anyvm/@tag:/@type:) are NOT valid request targets and
+    # are excluded by _egress_specials — probing them raises on real Qubes and
+    # would fail the whole audit (finding R13-1); the concrete domains they match
+    # are already probed directly. INBOUND sources: only CONCRETE non-dom0 qubes —
     # qrexec handles AdminVM/dom0-originated calls specially, so 'dom0 -> persona'
     # would be a FALSE request (findings R8, R9-5). uuid: aliases already filtered.
     _ADMIN = ("dom0", "uuid:0", "@adminvm")
-    specials = set(_SPECIAL_TARGETS) | {t for t in rule_targets if t.startswith("@")}
-    egress_targets = list(domains) + sorted(specials)
+    egress_targets = list(domains) + sorted(_egress_specials(rule_targets))
     inbound_sources = [d for d in domains if d not in personas and d not in _ADMIN]
 
     def verdict(src, tgt, svc, arg):

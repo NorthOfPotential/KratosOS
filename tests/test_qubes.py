@@ -268,6 +268,43 @@ class EffectivePolicy(unittest.TestCase):
         self.assertTrue(any("evil.Service" in p and "@default" in p for p in problems),
                         f"an @default egress exception was not caught: {problems}")
 
+    def test_egress_specials_excludes_policy_matchers(self):
+        """Policy-only MATCHERS must never be probed as request targets
+        (finding R13-1): @anyvm / @tag:* / @type: raise on real Qubes and would
+        fail the whole authoritative audit. Valid intended-target selectors
+        (@default, @adminvm, @dispvm, @dispvm:<tmpl>) are kept."""
+        s = kq._egress_specials({
+            "@anyvm", "@tag:kratos-persona", "@type:AppVM",
+            "@dispvm:whonix-ws-18", "@default", "personal"})
+        self.assertNotIn("@anyvm", s)
+        self.assertFalse(any(x.startswith("@tag:") or x.startswith("@type:") for x in s),
+                         f"a policy matcher leaked into the probe targets: {s}")
+        self.assertNotIn("personal", s)   # concrete domains are added separately
+        self.assertIn("@dispvm:whonix-ws-18", s)
+        self.assertIn("@default", s)
+        self.assertIn("@adminvm", s)
+
+    def test_real_eval_never_requests_a_policy_matcher_target(self):
+        """End-to-end: even if a rule names @anyvm/@tag:/@type:, the evaluator
+        must not construct a Request against it. A fake whose Request raises on
+        those selectors must still run cleanly (ran=True)."""
+        base = self._fake_engine()
+        policy, Request, AccessDenied, system_info = base
+
+        class StrictRequest(Request):
+            def __init__(self, service, argument, source, target, **kw):
+                if target == "@anyvm" or target.startswith("@tag:") or target.startswith("@type:"):
+                    raise ValueError(f"{target} is not a valid intended target")
+                super().__init__(service, argument, source, target, **kw)
+
+        eng = (policy, StrictRequest, AccessDenied, system_info)
+        # Services derived "from the policy" that also carried matcher targets;
+        # the matchers must be filtered before any Request is built.
+        ran, problems = kq.evaluate_with_real_policy(
+            _engine=eng, _services={("some.Svc", "*")})
+        self.assertTrue(ran, "evaluator errored — a matcher target was probed")
+        self.assertEqual(problems, [])
+
     def test_real_eval_allows_intended_updatesproxy(self):
         """The ONE legitimate persona egress — qubes.UpdatesProxy resolving to
         sys-whonix via @default — must NOT be reported as a hole (finding R12-1),
