@@ -32,6 +32,19 @@
 {% set whonix_ws = 'whonix-workstation-' ~ whonix_version %}
 {% set whonix_gw_template = 'qubes-template-whonix-gateway-' ~ whonix_version %}
 
+# ---- Record the provisioned Whonix generation for the audit (finding R9-6) ----
+# `kratos-q audit` reads this file so its expected Whonix version is the SAME
+# value provisioning built against — one source of truth, instead of a separate
+# KRATOS_WHONIX_VERSION the operator must remember to keep in sync. An explicit
+# KRATOS_WHONIX_VERSION env var still overrides it at audit time.
+/etc/kratos-q/whonix-version:
+  file.managed:
+    - contents: '{{ whonix_version }}'
+    - user: root
+    - group: qubes
+    - mode: '0644'
+    - makedirs: True
+
 # ---- Persona isolation policy into dom0 ----
 /etc/qubes/policy.d/30-kratos.policy:
   file.managed:

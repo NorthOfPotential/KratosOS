@@ -30,9 +30,31 @@ WS_TEMPLATE = "kratos-ws"          # disposable template (tagged kratos-persona)
 WS_LIVE = "kratos-ws-live"         # the running disposable's name
 GATEWAY = "sys-whonix"
 # Expected Whonix generation (finding R8): audit requires matching gateway AND
-# workstation templates, not just any whonix-*. Override to match an older
-# install with KRATOS_WHONIX_VERSION.
-WHONIX_VERSION = os.environ.get("KRATOS_WHONIX_VERSION", "18")
+# workstation templates, not just any whonix-*.
+#
+# ONE source of truth with provisioning (finding R9-6): Salt writes the version
+# it built against to WHONIX_VERSION_FILE, and the audit reads the SAME value, so
+# you cannot provision version X and then silently audit against a different
+# default. Resolution order: explicit env override > provisioned file > built-in
+# default ("18", current stable Qubes 4.3 / Whonix 18).
+WHONIX_VERSION_FILE = "/etc/kratos-q/whonix-version"
+
+
+def _detect_whonix_version():
+    env = os.environ.get("KRATOS_WHONIX_VERSION")
+    if env and env.strip():
+        return env.strip()
+    try:
+        with open(WHONIX_VERSION_FILE, encoding="utf-8") as fh:
+            fv = fh.read().strip()
+        if re.fullmatch(r"[0-9]+", fv):
+            return fv
+    except OSError:
+        pass
+    return "18"
+
+
+WHONIX_VERSION = _detect_whonix_version()
 WS_TEMPLATE_EXPECT = "whonix-workstation-" + WHONIX_VERSION
 GW_TEMPLATE_EXPECT = "whonix-gateway-" + WHONIX_VERSION
 PERSONA_TAG = "kratos-persona"
@@ -370,11 +392,14 @@ def evaluate_with_real_policy(_engine=None):
         return False, []        # nothing persona-ish exists to evaluate yet
     # EGRESS targets: every domain plus the special selectors a rule may resolve
     # to. INBOUND sources: only CONCRETE non-dom0 qubes — qrexec handles
-    # AdminVM/dom0-originated calls specially, so synthesizing '@adminvm ->
-    # persona' would be a false request (finding R8); dom0/@adminvm are probed
-    # only as egress TARGETS.
+    # AdminVM/dom0-originated calls specially, so synthesizing 'dom0 -> persona'
+    # (or '@adminvm -> persona') would be a FALSE request that could only produce
+    # a false positive (findings R8, R9-5). dom0/@adminvm are probed only as
+    # egress TARGETS. system_info["domains"] includes dom0, so exclude it (and
+    # its uuid: form) explicitly.
+    _ADMIN = ("dom0", "uuid:0", "@adminvm")
     egress_targets = list(domains) + ["@adminvm", "dom0"]
-    inbound_sources = [d for d in domains if d not in personas]
+    inbound_sources = [d for d in domains if d not in personas and d not in _ADMIN]
 
     def verdict(src, tgt, svc):
         """Return one of 'allow'|'ask'|'deny'|'unknown', or None on API error.

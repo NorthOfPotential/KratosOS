@@ -165,7 +165,9 @@ class EffectivePolicy(unittest.TestCase):
                     return AskResolution()
                 raise AccessDenied()
 
-        system_info = {"domains": {"kratos-ws-live": {}, "personal": {}, "sys-whonix": {}}}
+        # dom0 is always in system_info["domains"]; the evaluator must treat it
+        # as an egress target only, never synthesize it as an inbound source.
+        system_info = {"domains": {"dom0": {}, "kratos-ws-live": {}, "personal": {}, "sys-whonix": {}}}
         return (Policy(), Request, AccessDenied, system_info)
 
     def test_real_eval_catches_egress_and_inbound_allow(self):
@@ -181,6 +183,18 @@ class EffectivePolicy(unittest.TestCase):
                         f"egress allow not reported: {problems}")
         self.assertTrue(any("inbound hole" in p and "ClipboardPaste" in p for p in problems),
                         f"inbound allow not reported: {problems}")
+
+    def test_dom0_is_not_probed_as_an_inbound_source(self):
+        """dom0/AdminVM originate qrexec calls specially, so a synthesized
+        'dom0 -> persona' request would be a FALSE positive (finding R9-5). Even
+        if the (faked) engine would 'allow' such a request, the evaluator must
+        never construct it, so nothing is reported as an inbound hole."""
+        eng = self._fake_engine(allow_pairs={
+            ("dom0", "kratos-ws-live", "qubes.Filecopy")})
+        ran, problems = kq.evaluate_with_real_policy(_engine=eng)
+        self.assertTrue(ran, "evaluator did not run")
+        self.assertFalse(any("inbound hole" in p for p in problems),
+                         f"dom0 was wrongly probed as an inbound source: {problems}")
 
     def test_real_eval_reports_ask_as_path(self):
         eng = self._fake_engine(ask_pairs={
