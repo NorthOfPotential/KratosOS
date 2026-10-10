@@ -18,7 +18,7 @@ run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
     $inc/usr/local/libexec/kratos/* \
     workstation/gateway/kratos-gw-harden \
-    build.sh config/hooks/live/*.chroot tests/*.sh && echo ok
+    build.sh tools/kratos-validate.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
 step "nftables syntax"
 tmp="$(mktemp -d)"
