@@ -254,7 +254,9 @@ phase_probe() {
 phase_report() {
     mkout
     local tb="$WORK/kratos-validate-report.tar.gz"
-    [[ -f "$PWD/kratos-probe-report.txt" ]] && cp -f "$PWD/kratos-probe-report.txt" "$OUT/" 2>/dev/null || true
+    if [[ -f "$PWD/kratos-probe-report.txt" ]]; then
+        cp -f "$PWD/kratos-probe-report.txt" "$OUT/" 2>/dev/null || true
+    fi
     tar -czf "$tb" -C "$OUT" . 2>/dev/null || die "nothing to bundle yet"
     b "bundled: $tb"
     say "send me that file (or paste the .log/.txt/.ppm contents inside)."
