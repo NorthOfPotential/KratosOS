@@ -33,6 +33,16 @@ keepassxc
 # ── Installer (full-disk encryption) ─────────────────────────────
 calamares
 calamares-settings-debian
+# GRUB must ship INSIDE the image so Calamares installs the bootloader OFFLINE.
+# Without it the installer runs `apt-get install grub-pc grub-pc-bin grub2-common`
+# at install time and fails on a machine with no network (live test:
+# "Temporary failure resolving deb.debian.org" -> update-grub not found ->
+# bootloader-config exit 127). grub-pc covers BIOS; grub-efi-amd64-bin adds the
+# UEFI platform modules (it does NOT conflict with grub-pc, unlike the
+# grub-efi-amd64 metapackage); grub2-common provides update-grub/grub-install.
+grub-pc
+grub-efi-amd64-bin
+grub2-common
 
 # ── Boot splash (KratosOS Plymouth theme) ───────────────────────
 plymouth
