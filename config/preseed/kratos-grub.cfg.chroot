@@ -1,0 +1,9 @@
+# KratosOS: grub-pc ships in the image so Calamares can install the bootloader
+# OFFLINE. During the live-build chroot stage there is no target disk, so tell
+# grub-pc NOT to attempt installing to any device at package-configure time
+# (prevents an interactive prompt or a failed grub-install during the build).
+# Calamares runs grub-install against the real target disk at install time.
+grub-pc grub-pc/install_devices multiselect
+grub-pc grub-pc/install_devices_empty boolean true
+grub-pc grub2/linux_cmdline string
+grub-pc grub2/linux_cmdline_default string
