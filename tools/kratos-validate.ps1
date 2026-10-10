@@ -38,7 +38,10 @@ param(
     [switch]$Wait               # getiso: keep polling until the CI build publishes the ISO
 )
 
-$ErrorActionPreference = 'Stop'
+# NOTE: 'Continue', not 'Stop'. Native tools (gh, VBoxManage) write progress and
+# notices to stderr; under 'Stop' PowerShell turns that stderr into a fatal
+# error and aborts. We check $LASTEXITCODE explicitly instead.
+$ErrorActionPreference = 'Continue'
 $Owner = 'NorthOfPotential'; $Repo = 'KratosOS'
 $RawBase = "https://raw.githubusercontent.com/$Owner/$Repo/main"
 $ActionsUrl = "https://github.com/$Owner/$Repo/actions"
@@ -82,10 +85,13 @@ function Phase-Deps {
 function Ensure-Work { New-Item -ItemType Directory -Force -Path $Work | Out-Null }
 
 function Get-LatestIsoRunId {
-    # Newest successful CI run that should carry the kratosos-iso artifact.
-    $id = gh run list --repo "$Owner/$Repo" --workflow ci.yml --status success `
-            --json databaseId,createdAt -q 'sort_by(.createdAt)|reverse|.[0].databaseId' 2>$null
-    return ($id | Select-Object -First 1)
+    # The build-iso job ONLY runs on workflow_dispatch (or tags), so only those
+    # runs carry the kratosos-iso artifact. A plain push/PR run succeeds its test
+    # job but has no ISO - don't pick those. Newest successful dispatch run wins.
+    $id = gh run list --repo "$Owner/$Repo" --workflow ci.yml --event workflow_dispatch --status success `
+            --json databaseId,createdAt -q 'sort_by(.createdAt)|reverse|.[0].databaseId' 2>&1 |
+          Where-Object { $_ -match '^\d+$' } | Select-Object -First 1
+    return $id
 }
 
 function Phase-GetIso {
@@ -93,7 +99,7 @@ function Phase-GetIso {
     Ensure-Work
     if (-not (Have gh)) { Die "GitHub CLI 'gh' not found. Run '.\kratos-validate.ps1 deps' first (then reopen PowerShell)." }
     # Sign in once (device/web flow) so we can read the build artifact.
-    gh auth status 2>$null | Out-Null
+    gh auth status 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Say "You need to sign in to GitHub once (a browser window will open)..."
         gh auth login --hostname github.com --web --git-protocol https
@@ -104,8 +110,10 @@ function Phase-GetIso {
         $rid = Get-LatestIsoRunId
         if ($rid) {
             Say "trying run $rid ..."
-            $null = gh run download $rid --repo "$Owner/$Repo" -n kratosos-iso -D $Work 2>$null
-            if ($LASTEXITCODE -eq 0) { break } else { Warn "run $rid had no ISO artifact (build may have failed/skipped)." }
+            gh run download $rid --repo "$Owner/$Repo" -n kratosos-iso -D $Work 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { break } else { Warn "run $rid has no ISO artifact yet (still uploading, or that run didn't build one)." }
+        } else {
+            Say "no completed workflow_dispatch build yet..."
         }
         if (-not $Wait) {
             Die @"
@@ -136,8 +144,8 @@ The cloud build may still be running, or it may have failed.
         }
     }
     # Optional: verify the build-provenance attestation (proves CI built it).
-    try { gh attestation verify $iso.FullName -R "$Owner/$Repo" 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) { Say "build provenance attestation VERIFIED" } } catch {}
+    gh attestation verify $iso.FullName -R "$Owner/$Repo" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Say "build provenance attestation VERIFIED" }
     Set-Content -Path (Join-Path $Work '.iso-path') -Value $iso.FullName
     Say "Saved ISO path for the 'vm' step."
 }
@@ -171,9 +179,10 @@ function Phase-VM {
         & $vbox modifyvm $VMName --memory $MemMB --cpus $CPUs --pae on --ioapic on `
             --vram 128 --graphicscontroller vmsvga --rtcuseutc on `
             --nic1 nat --firmware bios --boot1 dvd --boot2 disk --boot3 none --boot4 none | Out-Null
-        try { & $vbox modifyvm $VMName --nested-hw-virt on | Out-Null; Say "nested virtualization: ON" }
-        catch { Warn "could not enable nested virtualization on this CPU - the offline/firewall checks still work; the Stealth/sVirt test needs it." }
-        try { & $vbox modifyvm $VMName --audio none | Out-Null } catch {}
+        & $vbox modifyvm $VMName --nested-hw-virt on 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Say "nested virtualization: ON" }
+        else { Warn "could not enable nested virtualization on this CPU - the offline/firewall checks still work; the Stealth/sVirt test needs it." }
+        & $vbox modifyvm $VMName --audio none 2>&1 | Out-Null   # best-effort; option name varies by VBox version
 
         $vdi = Join-Path (Join-Path $vmdir $VMName) "$VMName.vdi"
         Say "creating a $DiskGB GB virtual disk (the VM's own disk - not your PC's) ..."
