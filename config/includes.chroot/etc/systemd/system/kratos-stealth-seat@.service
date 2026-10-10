@@ -12,8 +12,13 @@ StandardInput=tty
 StandardOutput=journal
 TTYReset=yes
 TTYVHangup=yes
-# Own runtime dir for the Wayland session
+# Own runtime dir for the Wayland session. Mode 0700 (NOT the 0755 default):
+# the XDG runtime dir holds the persona's Wayland socket, and the whole point of
+# the separate kstealth seat is that the normal desktop user cannot reach it —
+# a world-traversable 0755 dir would weaken that isolation (and 0700 is what the
+# XDG base-dir spec requires anyway, matching what logind creates via PAM).
 RuntimeDirectory=user/%U
+RuntimeDirectoryMode=0700
 ExecStart=/usr/local/lib/kratos/stealth-seat %i
 Restart=no
 # This session must never reach the normal user's files

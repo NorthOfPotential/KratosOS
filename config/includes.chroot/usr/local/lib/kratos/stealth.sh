@@ -977,7 +977,7 @@ stealth_view() {
     # kratos-stealth-seat@.service runs a cage (kiosk Wayland) session for kstealth on its own VT;
     # launch the viewer into that session's bus, locked to this one socket.
     if ! loginctl --no-legend list-sessions 2>/dev/null | grep -qw "$STEALTH_USER"; then
-        info "Starting the isolated stealth session (switch VTs with Ctrl+Alt+F2)..."
+        info "Starting the isolated stealth session (switch to it with Ctrl+Alt+F7, back with Ctrl+Alt+F1)..."
         systemctl start "kratos-stealth-seat@${name}.service" \
             || die "could not start the isolated stealth session"
         return 0
