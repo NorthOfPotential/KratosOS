@@ -52,6 +52,31 @@ done
 d="$root/usr/share/applications/kratos-ai.desktop"
 if [[ -f "$d" ]] && grep -q '^Exec=.*kratos-ai' "$d"; then pass "Kratos AI launcher present"; else flunk "launcher missing"; fi
 
+echo "— supply-chain: the Ollama runtime download is verified before it is unpacked as root —"
+cli="$root/usr/local/bin/kratos-ai"
+if grep -q 'sha256sum ' "$cli" && grep -q 'FAILED checksum' "$cli" \
+   && grep -q 'cannot verify the Ollama download' "$cli"; then
+    pass "Ollama tarball SHA256 is verified, failing closed when no checksum"
+else flunk "Ollama download is not checksum-verified (root-RCE risk)"; fi
+if grep -q 'refusing to extract' "$cli" && grep -q 'tar -tzf' "$cli"; then
+    pass "archive members are screened for path traversal before extraction"
+else flunk "no path-traversal screen before tar extraction"; fi
+if grep -qF -- '-C /usr/local' "$cli" && ! grep -qE -- 'tar -xzf [^ ]+ -C /usr[[:space:]]' "$cli"; then
+    pass "extracts into /usr/local (matches OLLAMA_BIN), not bare /usr"
+else flunk "extraction target mismatch with OLLAMA_BIN"; fi
+if grep -qE 'runuser -u kratos-ai -- .*pip.? install open-webui' "$cli"; then
+    pass "Open WebUI pip install runs as the unprivileged kratos-ai user, not root"
+else flunk "pip install still runs as root (hostile-dependency root-RCE)"; fi
+
+echo "— AI services are sandboxed (NoNewPrivileges + ProtectSystem=strict) —"
+for u in ollama.service kratos-openwebui.service; do
+    f="$root/etc/systemd/system/$u"
+    if grep -q '^NoNewPrivileges=yes' "$f" && grep -q '^ProtectSystem=strict' "$f" \
+       && grep -q '^RestrictAddressFamilies=' "$f"; then
+        pass "$u hardened (no-new-privs, strict system, restricted address families)"
+    else flunk "$u missing baseline sandboxing"; fi
+done
+
 echo "— AI services ship DISABLED (provisioned by 'kratos-ai setup', not at build) —"
 if ! grep -rq 'ollama\.service\|kratos-openwebui\.service' "$here/../config/hooks/live/" 2>/dev/null; then
     pass "AI services are not auto-enabled during the build"
