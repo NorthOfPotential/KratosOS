@@ -108,12 +108,47 @@ function Phase-GetIso {
     $rid = $null
     for ($try = 0; ; $try++) {
         $rid = Get-LatestIsoRunId
-        if ($rid) {
-            Say "trying run $rid ..."
-            gh run download $rid --repo "$Owner/$Repo" -n kratosos-iso -D $Work 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) { break } else { Warn "run $rid has no ISO artifact yet (still uploading, or that run didn't build one)." }
-        } else {
+        if (-not $rid) {
             Say "no completed workflow_dispatch build yet..."
+        } else {
+            Say "trying run $rid ..."
+            # Does the artifact actually EXIST on this run? Ask the API directly,
+            # separately from downloading it, so a flaky/interrupted transfer of a
+            # multi-GB file is never misreported as "no artifact built".
+            $present = $false
+            $meta = gh api "repos/$Owner/$Repo/actions/runs/$rid/artifacts" `
+                        -q '.artifacts[] | select(.name=="kratosos-iso") | "\(.size_in_bytes) \(.expired)"' 2>&1
+            if ($LASTEXITCODE -eq 0 -and $meta -match '^\s*\d+\s+false') {
+                $present = $true
+                $szGB = [math]::Round(([int64](($meta -split '\s+')[0]))/1GB, 2)
+                Say "  artifact present on run $rid ($szGB GB). downloading (no resume - large file, be patient)..."
+            } elseif ($LASTEXITCODE -eq 0 -and $meta -match 'true\s*$') {
+                Warn "run $rid built an ISO but its artifact has EXPIRED. I'll trigger a fresh build."
+            }
+
+            if ($present) {
+                # gh run download won't overwrite existing files; clear any partial
+                # extraction from a previous interrupted attempt first.
+                Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Work 'kratosos-*.iso'), (Join-Path $Work 'SHA256SUMS')
+                $ok = $false
+                for ($d = 1; $d -le 4; $d++) {
+                    $log = gh run download $rid --repo "$Owner/$Repo" -n kratosos-iso -D $Work 2>&1
+                    if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+                    Warn "download attempt $d/4 failed:"
+                    $log | ForEach-Object { Write-Host "      $_" }
+                    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Work 'kratosos-*.iso'), (Join-Path $Work 'SHA256SUMS')
+                    if ($d -lt 4) { $w = [math]::Pow(2,$d)*3; Say "  retrying in ${w}s..."; Start-Sleep -Seconds $w }
+                }
+                if ($ok) { break }
+                Die @"
+The ISO artifact EXISTS on run $rid but the download kept failing (see errors above).
+This is a transfer problem on this PC, not a missing build. Try:
+  * a more stable network, then re-run:  .\kratos-validate.ps1 getiso -Wait
+  * or download it by hand from:         $ActionsUrl  (open run $rid -> Artifacts -> kratosos-iso)
+    then unzip it into:                  $Work
+    and re-run:                          .\kratos-validate.ps1 vm
+"@
+            }
         }
         if (-not $Wait) {
             Die @"

@@ -410,6 +410,32 @@ net_mac() {
     done
 }
 
+# Report the EFFECTIVE DNS path, not merely that DoT is toggled on somewhere.
+# systemd-resolved prefers a per-link DNS server (e.g. one NetworkManager took
+# from the network's DHCP) over the global Quad9 config, so a bare "+DNSOverTLS
+# is present" can hide the fact that lookups are really going to the network's
+# own resolver — often a bare IP with no DoT certificate name to verify. Treat
+# DNS as protected only when DoT is on AND every active upstream is one we
+# configured (Quad9). Catches a DHCP resolver silently overriding Quad9.
+dns_status() {
+    local st conf allow srv foreign=""
+    st="$(resolvectl status 2>/dev/null)" || { warn "DNS over TLS not active (resolver unavailable)"; return; }
+    if ! grep -q '+DNSOverTLS' <<<"$st"; then warn "DNS over TLS not active"; return; fi
+    conf=/etc/systemd/resolved.conf.d/kratos-privacy.conf
+    # Configured upstreams (strip any #hostname); fall back to Quad9 if unreadable.
+    allow="$(sed -n 's/^DNS=//p' "$conf" 2>/dev/null | tr ' ' '\n' | sed 's/#.*//' | grep . | tr '\n' ' ')"
+    [[ -n "$allow" ]] || allow="9.9.9.9 149.112.112.112"
+    while read -r srv; do
+        [[ -n "$srv" ]] || continue
+        case " $allow " in *" $srv "*) : ;; *) foreign="$foreign $srv" ;; esac
+    done < <(grep 'Current DNS Server:' <<<"$st" | sed 's/.*Current DNS Server:[[:space:]]*//; s/#.*//')
+    if [[ -n "$foreign" ]]; then
+        warn "DNS is using a network-provided resolver:${foreign} (overriding Quad9 DoT)"
+    else
+        ok "DNS over TLS -> Quad9 (system resolver; plain port-53 blocked)"
+    fi
+}
+
 net_status() {
     load_config
     info "${BOLD}Network mode:${RESET} $(saved_mode)"
@@ -432,10 +458,8 @@ net_status() {
     # inside the WireGuard tunnel (NOT DoT) in vpn mode (finding R6-61).
     if [[ "$(saved_mode)" == vpn ]]; then
         info "  DNS: via the VPN's resolver, inside the WireGuard tunnel (not DoT)"
-    elif resolvectl status 2>/dev/null | grep -q '+DNSOverTLS'; then
-        ok "DNS over TLS (system resolver; plain port-53 blocked)"
     else
-        warn "DNS over TLS not active"
+        dns_status
     fi
     net_mac
     echo
