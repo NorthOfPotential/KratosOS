@@ -64,6 +64,23 @@ else
     flunk "firewall unit does not preload the default-drop layer"
 fi
 
+echo "— defenses survive a USB-less / freshly-installed machine (live-probe findings) —"
+# usbguard crash-looped on a VM with no USB controller (/sys/bus/usb absent).
+ugdrop="$root/etc/systemd/system/usbguard.service.d/10-kratos-usb-present.conf"
+if [[ -f "$ugdrop" ]] && grep -qE '^ConditionPathExists=/sys/bus/usb/devices' "$ugdrop"; then
+    pass "usbguard only starts when a USB bus exists (no crash-loop on USB-less hosts)"
+else
+    flunk "no usbguard drop-in gating on /sys/bus/usb/devices"
+fi
+# firecfg writes an allow-list at BUILD time (no human user yet) that locks the
+# installed user out of Firejail; the hook must drop it so the sandbox is usable.
+hook="$here/../config/hooks/live/0100-kratos.hook.chroot"
+if grep -qE '^firecfg' "$hook" && grep -qE '^rm -f /etc/firejail/firejail\.users' "$hook"; then
+    pass "build removes the firejail allow-list so the installed user can sandbox"
+else
+    flunk "firejail allow-list not cleared after firecfg (installed user locked out)"
+fi
+
 echo "— libvirt authorization (finding 26) —"
 if [[ -f "$lvrule" ]] && grep -qE 'org\.libvirt\.' "$lvrule" && grep -qE 'polkit\.Result\.NO' "$lvrule"; then
     pass "an explicit polkit rule denies non-root libvirt management"

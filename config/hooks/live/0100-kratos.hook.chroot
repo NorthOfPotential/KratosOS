@@ -110,7 +110,15 @@ OnAccessExtraScanning yes
 CONF
 
 # ── Sandbox common apps with Firejail ───────────────────────
+# firecfg installs the /usr/local/bin symlinks that route common apps through
+# firejail. It also writes /etc/firejail/firejail.users as an allow-list of who
+# may run the SUID binary — but at BUILD time no human account exists yet (the
+# install user is created later by Calamares), so that list ends up without them
+# and every real login hits "user is not allowed to use Firejail", disabling the
+# sandbox for the only person who uses the machine. Remove the allow-list so
+# firejail is available to all (human) accounts; the app symlinks still sandbox.
 firecfg >/dev/null 2>&1 || true
+rm -f /etc/firejail/firejail.users
 
 # ── Branding: make the installer and look say KratosOS, not Debian ──────────
 chmod 755 /usr/local/bin/kratos-apply-look 2>/dev/null || true
