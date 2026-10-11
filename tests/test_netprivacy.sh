@@ -21,6 +21,18 @@ chk "$nm" '^ipv4\.dhcp-fqdn=$'                   "no DHCP FQDN sent"
 chk "$nm" '^connection\.mdns=0'                  "mDNS off"
 chk "$nm" '^connection\.llmnr=0'                 "LLMNR off"
 
+echo "— DNS goes to the configured resolver, not the network's (live-probe finding) —"
+# NetworkManager must ignore the DHCP/RA-advertised resolver, or systemd-resolved
+# installs it as PER-LINK DNS and prefers it over the global Quad9 + authenticated
+# DoT config — silently sending every lookup to the network's own resolver.
+chk "$nm" '^ipv4\.ignore-auto-dns=(true|yes|1)'  "ignore DHCP-provided IPv4 DNS (use Quad9 DoT)"
+chk "$nm" '^ipv6\.ignore-auto-dns=(true|yes|1)'  "ignore RA/DHCPv6-provided IPv6 DNS (use Quad9 DoT)"
+# The system resolver itself must be configured for Quad9 over authenticated DoT
+# (a #hostname on each server so the TLS certificate name is verified).
+rc="$root/etc/systemd/resolved.conf.d/kratos-privacy.conf"
+chk "$rc" '^DNSOverTLS=yes'                       "system resolver: DNS over TLS required"
+chk "$rc" '^DNS=9\.9\.9\.9#dns\.quad9\.net'       "system resolver: Quad9 with authenticated DoT (#hostname)"
+
 echo "— optional Gateway hardening helper (vanguards + padding) —"
 gwh="$here/../workstation/gateway/kratos-gw-harden"
 if [[ -f "$gwh" ]]; then
