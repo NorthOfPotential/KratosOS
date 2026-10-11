@@ -1,0 +1,30 @@
+# KratosOS: local Ollama model server. Shipped DISABLED; 'kratos-ai setup'
+# installs the runtime and enables this. Bound to loopback — never listens on
+# the network.
+[Unit]
+Description=Ollama local model server (KratosOS AI)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/ollama
+
+[Service]
+Type=exec
+User=ollama
+Group=ollama
+# GPU access when a driver is present (harmless on CPU-only machines).
+SupplementaryGroups=render video
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=HOME=/var/lib/kratos/ai
+Environment=OLLAMA_MODELS=/var/lib/kratos/ai/models
+ExecStart=/usr/local/bin/ollama serve
+Restart=on-failure
+RestartSec=3
+# Hardening: read-only system, writes confined to the model store, no new privs.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/kratos/ai
+
+[Install]
+WantedBy=multi-user.target

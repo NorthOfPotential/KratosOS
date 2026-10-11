@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kratos AI
+GenericName=Local AI Coder
+Comment=Fully-local AI assistant (code generation + web search) — no data leaves your machine
+# Open the UI; on first run (not yet provisioned) drop into a terminal to set up.
+Exec=sh -c 'kratos-ai ui 2>/dev/null || exec konsole -e sudo kratos-ai setup'
+Icon=applications-science
+Terminal=false
+Categories=Development;Utility;Qt;
+Keywords=AI;LLM;chat;code;assistant;ollama;coder;

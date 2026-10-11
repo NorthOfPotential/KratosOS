@@ -95,6 +95,14 @@ xz-utils
 python3
 python3-pyqt6
 
+# ── Local AI coder (kratos-ai: Ollama + Open WebUI) ─────────────
+# Runtime deps only; Ollama + Open WebUI + the model are fetched on first run
+# by `kratos-ai setup` (multi-GB, hardware-sized — cannot be baked into the ISO).
+# pciutils: GPU/NPU detection (lspci). python3-venv/pip: the Open WebUI venv.
+python3-venv
+python3-pip
+pciutils
+
 # ── OpSec tools ──────────────────────────────────────────────────
 mat2
 secure-delete

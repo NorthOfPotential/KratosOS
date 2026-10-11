@@ -1,0 +1,35 @@
+# KratosOS: Open WebUI front-end for the local AI coder. Shipped DISABLED;
+# 'kratos-ai setup' installs it (into /opt/kratos-ai/venv) and enables this.
+# Bound to loopback only — the UI is never exposed on the network.
+[Unit]
+Description=Open WebUI (KratosOS AI front-end)
+After=ollama.service
+Wants=ollama.service
+ConditionPathExists=/opt/kratos-ai/venv/bin/open-webui
+
+[Service]
+Type=exec
+User=kratos-ai
+Group=kratos-ai
+Environment=HOME=/opt/kratos-ai
+Environment=DATA_DIR=/opt/kratos-ai/data
+Environment=OLLAMA_BASE_URL=http://127.0.0.1:11434
+Environment=HOST=127.0.0.1
+Environment=PORT=8080
+Environment=WEBUI_AUTH=true
+# Privacy-respecting web search with no API key. Toggle per-chat in the UI.
+Environment=ENABLE_RAG_WEB_SEARCH=true
+Environment=RAG_WEB_SEARCH_ENGINE=duckduckgo
+Environment=ENABLE_WEB_SEARCH=true
+Environment=WEB_SEARCH_ENGINE=duckduckgo
+ExecStart=/opt/kratos-ai/venv/bin/open-webui serve --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/kratos-ai
+
+[Install]
+WantedBy=multi-user.target
