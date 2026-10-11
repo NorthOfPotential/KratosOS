@@ -18,8 +18,17 @@
 : "${WEBUI_HOST:=127.0.0.1}"
 : "${WEBUI_PORT:=8080}"
 
-# Pinned download sources (override for air-gapped mirrors / testing).
-: "${KRATOS_AI_OLLAMA_URL:=https://ollama.com/download/ollama-linux-amd64.tgz}"
+# Pinned download sources. We fetch a SPECIFIC version from the GitHub release
+# (not a moving "latest") and verify its SHA256 before extracting as root — an
+# unverified archive unpacked into a system path is a root-RCE waiting to happen.
+: "${KRATOS_AI_OLLAMA_VERSION:=v0.30.10}"
+: "${KRATOS_AI_OLLAMA_BASEURL:=https://github.com/ollama/ollama/releases/download}"
+: "${KRATOS_AI_OLLAMA_URL:=${KRATOS_AI_OLLAMA_BASEURL}/${KRATOS_AI_OLLAMA_VERSION}/ollama-linux-amd64.tgz}"
+# Strongest pin: a baked, trusted SHA256. When empty we verify against the
+# release's own sha256sum.txt (same pinned HTTPS origin) and fail closed if that
+# is unavailable. Set this (sudo KRATOS_AI_OLLAMA_SHA256=<hex> kratos-ai setup)
+# to pin the artifact independently of the origin.
+: "${KRATOS_AI_OLLAMA_SHA256:=}"
 
 # ── Hardware detection ────────────────────────────────────────────────────────
 # Each reader honors a KRATOS_AI_* override so the selection logic is unit
