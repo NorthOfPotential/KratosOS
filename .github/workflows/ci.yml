@@ -71,20 +71,27 @@ jobs:
         run: ./build.sh          # already root in the container; no sudo
       - name: Checksums
         run: sha256sum kratosos-*.iso | tee SHA256SUMS
-      - name: Privileged-binary inventory (SUID/SGID + capabilities)
-        # Finding 46: inventory every setuid/setgid binary and capability holder
-        # in the built image and compare to tests/suid-allowlist.txt. Report-only
-        # for now (the allowlist is a starter baseline); the inventory is always
-        # published so maintainers can tighten the list and later gate on it.
-        continue-on-error: true
+      - name: Record build info
+        # A verifiable record of WHAT produced this ISO: source revision, the
+        # pinned base-image digest, kernel version, and the package-manifest
+        # hash. Lets a downloader tie the ISO to a known source commit + inputs.
         run: |
-          apt-get install -y --no-install-recommends libcap2-bin >/dev/null 2>&1 || true
-          tests/suid-audit.sh ./chroot | tee kratosos-suid-inventory.txt
+          {
+            echo "source_repo:     ${{ github.repository }}"
+            echo "source_revision: ${{ github.sha }}"
+            echo "workflow_run:    ${{ github.run_id }} (attempt ${{ github.run_attempt }})"
+            echo "base_image:      debian:trixie@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5"
+            echo "built_at_utc:    $(date -u +%FT%TZ)"
+            echo "kernel:          $(basename "$(ls ./chroot/boot/vmlinuz-* 2>/dev/null | head -1)" 2>/dev/null | sed 's/vmlinuz-//')"
+            echo "live_build:      $(dpkg-query -W -f='${Version}' live-build 2>/dev/null)"
+            [ -f kratosos-amd64.packages ] && echo "packages_sha256: $(sha256sum kratosos-amd64.packages | cut -d' ' -f1)"
+          } | tee kratosos-build-info.txt
       - name: Generate SBOM
         # Software Bill of Materials for the built image. syft reads the live
         # root filesystem live-build leaves in ./chroot (a real dpkg database),
         # so the SBOM lists every package + version that actually shipped.
-        # Best-effort: never fail the build over the SBOM itself.
+        # Best-effort: never fail the build over the SBOM itself. Runs BEFORE the
+        # SUID gate so the metadata artifact still carries it if the gate fails.
         continue-on-error: true
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
@@ -92,6 +99,19 @@ jobs:
           format: spdx-json
           output-file: kratosos.spdx.json
           upload-artifact: false
+      - name: Privileged-binary inventory (SUID/SGID + capabilities) — RELEASE GATE
+        # Finding 46 / P2: inventory every setuid/setgid binary and capability
+        # holder in the built image and compare to tests/suid-allowlist.txt. This
+        # is now a HARD GATE: an unexpected privileged binary (not on the
+        # reviewed allowlist) FAILS the build, so an unreviewed root-capable
+        # binary never ships in a release. The inventory file is written even on
+        # failure (suid-audit prints it before exiting), and the release-metadata
+        # artifact is uploaded with if: always(), so a block is fully diagnosable
+        # without downloading the ISO: read the UNEXPECTED paths, then either drop
+        # the package or add the path to tests/suid-allowlist.txt.
+        run: |
+          apt-get install -y --no-install-recommends libcap2-bin >/dev/null 2>&1 || true
+          tests/suid-audit.sh ./chroot | tee kratosos-suid-inventory.txt
       - name: Attest build provenance
         # A signed, cryptographically verifiable record of WHERE and HOW the ISO
         # was built (this repo, this workflow, this commit). Downloaders verify
@@ -102,12 +122,32 @@ jobs:
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: kratosos-*.iso
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Upload release metadata
+        # Small, always-published so the SUID gate (and the build inputs) can be
+        # reviewed without pulling the multi-GB ISO — including when the gate
+        # FAILS the build.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kratosos-release-metadata
+          path: |
+            SHA256SUMS
+            kratosos-build-info.txt
+            kratosos-amd64.packages
+            kratosos.spdx.json
+            kratosos-suid-inventory.txt
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Upload ISO
+        # Only on a clean build: a release that failed the SUID gate must NOT
+        # yield a downloadable ISO.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kratosos-iso
           path: |
             kratosos-*.iso
             SHA256SUMS
+            kratosos-build-info.txt
             kratosos-amd64.packages
             kratosos.spdx.json
             kratosos-suid-inventory.txt

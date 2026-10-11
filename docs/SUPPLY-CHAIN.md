@@ -41,6 +41,34 @@ symlinks, systemd-resolved DoT, polkit per-surface actions) and measures the
 boot chain with `kratos bootcheck` (TPM PCRs / ESP hashes vs. a recorded
 baseline).
 
+## The release pipeline (source → ISO)
+
+Every ISO is built in CI (`.github/workflows/ci.yml`) with a verifiable path
+from source:
+
+- **Gated on tests:** `build-iso` has `needs: test` — a red security suite
+  yields no ISO.
+- **Pinned inputs:** the Debian base is pinned by image **digest**, and every
+  third-party GitHub Action by **commit SHA** (not a movable tag).
+- **Checksums + build-info:** `SHA256SUMS` and a `kratosos-build-info.txt`
+  (source revision, base-image digest, kernel version, package-manifest hash)
+  are published.
+- **SBOM:** an SPDX software bill of materials generated from the built image's
+  real dpkg database.
+- **Signed provenance:** a cryptographic build-provenance attestation ties the
+  ISO to this repo + workflow + commit (`gh attestation verify <iso> -R <repo>`).
+- **Privileged-binary release gate:** every SUID/SGID binary and capability
+  holder in the image is inventoried and compared to a reviewed allowlist
+  (`tests/suid-allowlist.txt`). An **unexpected** privileged binary **fails the
+  build** — an unreviewed root-capable binary never ships. The inventory and
+  the above metadata are published as a small `kratosos-release-metadata`
+  artifact (separate from the multi-GB ISO), even when the gate fails, so a
+  block is diagnosable without downloading the image.
+
+Still open (tracked): reproducible/bit-identical builds (live-build pulls from
+the live Debian archive, so byte-for-byte reproducibility isn't guaranteed yet),
+GPG-signed release manifests, and an independent third-party audit.
+
 ## Honest limits
 
 - **No upstream signature exists for the Ollama tarball** — SHA256 pinning is
