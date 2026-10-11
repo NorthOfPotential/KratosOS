@@ -133,6 +133,9 @@ run tests/test_polkit.sh
 step "local AI coder (hardware detection + model catalog)"
 run tests/test_ai.sh
 
+step "privileged-binary release gate (SUID/caps allowlist)"
+run tests/test_suid_gate.sh
+
 echo
 if (( status == 0 )); then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi
 exit "$status"

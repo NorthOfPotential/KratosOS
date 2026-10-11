@@ -30,9 +30,27 @@
 /usr/libexec/polkit-agent-helper-1
 /usr/sbin/unix_chkpwd
 /usr/sbin/pam_extrausers_chkpwd
+/usr/bin/sg
+# subuid/subgid mapping helpers (userns, flatpak) — setuid or cap_setuid
+/usr/bin/newuidmap
+/usr/bin/newgidmap
 # --- KDE / desktop ---
 /usr/lib/xorg/Xorg.wrap
 /usr/bin/kcheckpass
+/usr/libexec/kcheckpass
+/usr/lib/x86_64-linux-gnu/libexec/kcheckpass
+# --- sandboxing (we ship and rely on these) ---
+# firejail is SUID root by design (that is how it builds its sandbox).
+/usr/bin/firejail
+# bubblewrap, used by flatpak; SUID only where unprivileged userns is off.
+/usr/bin/bwrap
+/usr/lib/flatpak/flatpak-bwrap
+# --- virtualization (libvirt + qemu bridge networking) ---
+/usr/lib/qemu/qemu-bridge-helper
+/usr/libexec/qemu-bridge-helper
+# --- filesystem helpers (fuse / NTFS migration media) ---
+/usr/bin/fusermount
+/usr/bin/ntfs-3g
 # --- file capabilities (ping etc.) ---
 /usr/bin/ping
 /usr/bin/mtr-packet
