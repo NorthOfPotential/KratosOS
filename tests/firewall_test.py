@@ -36,7 +36,7 @@ def load(mode):
     tmp = tempfile.mkdtemp()
     defs = os.path.join(tmp, "vpn.inc")
     with open(defs, "w") as f:
-        f.write(f'define WG_IF = "wgtest"\ndefine WG_ENDPOINT = {VPN_ENDPOINT}\ndefine WG_PORT = {VPN_PORT}\ndefine WG_DNS = {{ {VPN_DNS} }}\n')
+        f.write(f'define WG_IF = "wgtest"\ndefine WG_ENDPOINT = {VPN_ENDPOINT}\ndefine WG_PORT = {VPN_PORT}\ndefine WG_DNS = {{ {VPN_DNS} }}\ndefine WG_FWMARK = 0xca6c\n')
     text = text.replace("/run/kratos/vpn.nft", defs)
     rules = os.path.join(tmp, f"{mode}.nft")
     with open(rules, "w") as f:
@@ -93,6 +93,24 @@ def udp(dst, port, sport=0):
     return left_machine(17, dst, port)
 
 
+def udp_marked(dst, port, mark, sport=0):
+    """Like udp(), but stamps the socket with SO_MARK — simulates WireGuard's
+    own fwmark-tagged encrypted packets. Needs CAP_NET_ADMIN (we have it in the
+    test netns). A non-root process cannot do this, which is the whole point."""
+    drain()
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, mark)
+        s.bind(("0.0.0.0", sport))
+        s.sendto(b"x", (dst, port))
+    except OSError:
+        pass
+    finally:
+        s.close()
+    return left_machine(17, dst, port)
+
+
 def tcp(dst, port):
     drain()
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -140,8 +158,11 @@ def main():
 
     print("mode: vpn (kill switch, tunnel down)")
     load("vpn")
-    expect("WireGuard to VPN endpoint allowed", udp(VPN_ENDPOINT, VPN_PORT), True)
-    expect("WireGuard to another server blocked", udp("10.99.0.51", VPN_PORT), False)
+    # Finding R8-8 closed: only WireGuard's own fwmark-tagged packets may reach
+    # the endpoint. An unmarked packet (any local process) is now dropped.
+    expect("unmarked UDP to VPN endpoint BLOCKED (covert channel closed)", udp(VPN_ENDPOINT, VPN_PORT), False)
+    expect("WireGuard (fwmark) to VPN endpoint allowed", udp_marked(VPN_ENDPOINT, VPN_PORT, 0xca6c), True)
+    expect("WireGuard to another server blocked", udp_marked("10.99.0.51", VPN_PORT, 0xca6c), False)
     expect("clear-text DNS blocked", udp("9.9.9.9", 53), False)
     # The VPN resolver is allowed ONLY inside the tunnel (oifname wg); off the
     # tunnel (here, no wg iface so it would use the clear NIC) it stays blocked,
@@ -156,8 +177,9 @@ def main():
     # Must let DHCP + the WireGuard handshake through so the network can reach
     # network-online.target, but NOTHING clear-text (no leak window).
     expect("DHCP allowed", udp("10.99.0.1", 67, sport=68), True)
-    expect("WireGuard to VPN endpoint allowed", udp(VPN_ENDPOINT, VPN_PORT), True)
-    expect("WireGuard to another server blocked", udp("10.99.0.51", VPN_PORT), False)
+    expect("unmarked UDP to VPN endpoint BLOCKED (covert channel closed)", udp(VPN_ENDPOINT, VPN_PORT), False)
+    expect("WireGuard (fwmark) to VPN endpoint allowed", udp_marked(VPN_ENDPOINT, VPN_PORT, 0xca6c), True)
+    expect("WireGuard to another server blocked", udp_marked("10.99.0.51", VPN_PORT, 0xca6c), False)
     expect("clear-text DNS blocked", udp("9.9.9.9", 53), False)
     expect("HTTPS blocked (no clearnet during bootstrap)", tcp("93.184.216.34", 443), False)
 

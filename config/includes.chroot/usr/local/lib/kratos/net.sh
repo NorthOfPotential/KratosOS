@@ -3,8 +3,15 @@
 # first, so there is never a moment without a firewall.
 
 WG_IMPORTED="$KRATOS_ETC/wireguard/kratos0.conf"   # user's WireGuard config
-WG_RUNTIME="$KRATOS_RUN/wg/kratos0.conf"           # copy without DNS= line
+WG_RUNTIME="$KRATOS_RUN/wg/kratos0.conf"           # copy without DNS= line, with FwMark
 WG_IF="kratos0"
+# The firewall mark WireGuard stamps on its OWN encrypted output packets, so the
+# vpn firewall can allow ONLY WireGuard-originated traffic out to the endpoint —
+# closing the endpoint covert channel (any local process could otherwise send
+# arbitrary UDP to the VPN host:port outside the tunnel). 0xca6c (51820) is
+# wg-quick's own default, so our explicit FwMark and its auto-mark agree. A
+# non-root process cannot set SO_MARK, so it cannot forge this.
+WG_FWMARK="0xca6c"
 
 load_ruleset() {
     nft -f "$KRATOS_ETC/modes/$1.nft" || die "failed to load firewall ruleset '$1'"
@@ -68,6 +75,7 @@ define WG_IF = "$WG_IF"
 define WG_ENDPOINT = $host
 define WG_PORT = $port
 define WG_DNS = { ${dnsset:-127.0.0.1} }
+define WG_FWMARK = $WG_FWMARK
 EOF
 }
 
@@ -80,11 +88,22 @@ wg_up() {
     dns="$(awk -F' *= *' 'tolower($1)=="dns"{print $2; exit}' "$WG_IMPORTED" | tr ',' ' ')"
 
     install -d -m 700 "$KRATOS_RUN/wg"
-    # wg-quick would hand DNS to resolvconf; we configure resolved ourselves
-    grep -iv '^[[:space:]]*dns[[:space:]]*=' "$WG_IMPORTED" > "$WG_RUNTIME"
+    # Build the runtime config: strip DNS= (wg-quick would hand it to resolvconf;
+    # we configure resolved ourselves) and inject our FwMark into [Interface] so
+    # WireGuard marks its encrypted packets from the very first handshake — the
+    # vpn firewall only lets marked (WireGuard-originated) traffic reach the
+    # endpoint. awk inserts it right after the [Interface] header.
+    grep -iv '^[[:space:]]*dns[[:space:]]*=' "$WG_IMPORTED" \
+        | awk -v m="$WG_FWMARK" '
+            { print }
+            !done && tolower($0) ~ /^[[:space:]]*\[interface\][[:space:]]*$/ { print "FwMark = " m; done=1 }
+          ' > "$WG_RUNTIME"
     chmod 600 "$WG_RUNTIME"
 
     wg-quick up "$WG_RUNTIME" >/dev/null
+    # Belt-and-suspenders: reassert the mark on the live interface in case the
+    # config path above was bypassed (e.g. a non-standard [Interface] header).
+    wg set "$WG_IF" fwmark "$WG_FWMARK" 2>/dev/null || true
     if [[ -n "$dns" ]]; then
         # shellcheck disable=SC2086
         resolvectl dns "$WG_IF" $dns

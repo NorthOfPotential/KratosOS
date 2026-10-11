@@ -36,11 +36,13 @@
       are discarded. A "fresh" disposable on an *old* base is not a secure VM —
       the bases need an explicit, signed, periodic refresh (the R4 cache-freshness
       logic is the starting point).
-- [ ] **Tie the WireGuard endpoint firewall exception to the kernel socket**
-      (R9-11): `vpn.nft` currently allows UDP to the configured `WG_ENDPOINT:WG_PORT`
-      tuple, so malware could send arbitrary UDP to exactly that host:port outside
-      the tunnel (a very narrow channel, not a general clearnet bypass). Bind the
-      exception to WireGuard-originated traffic via an fwmark/socket match instead.
+- [x] **Tie the WireGuard endpoint firewall exception to the kernel socket**
+      (R9-11 / R8-8): `vpn.nft` and `vpn-bootstrap.nft` now gate the endpoint on
+      `meta mark $WG_FWMARK`; `wg_up` stamps that fwmark (config `FwMark` +
+      a live `wg set fwmark`). A non-root process cannot set `SO_MARK`, so it can
+      no longer send UDP to the VPN host:port outside the tunnel. Verified in a
+      network namespace (`firewall_test.py`): unmarked UDP to the endpoint is
+      dropped; fwmark-tagged (WireGuard) traffic passes.
 - [ ] **Functional in-tunnel VPN DNS test** (R9-12): `tests/firewall_test.py`
       proves provider DNS on the *physical* interface is blocked, but not that DNS
       to the provider resolver *through* a real `wgtest` tunnel interface succeeds.

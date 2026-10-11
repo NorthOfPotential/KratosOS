@@ -41,7 +41,10 @@ table inet kratos {
         meta nfproto ipv6 drop
 
         udp sport 68 udp dport 67 accept
-        ip daddr $WG_ENDPOINT udp dport $WG_PORT accept
+        # Only WireGuard's own marked packets may reach the endpoint to bring the
+        # tunnel up (finding R8-8): wg-quick stamps WG_FWMARK from the config
+        # before the first handshake, so a local process still can't ride this.
+        meta mark $WG_FWMARK ip daddr $WG_ENDPOINT udp dport $WG_PORT accept
         # Deliberately NO port-53 and NO general egress: nothing clear-text
         # leaves while the tunnel is still down.
         reject

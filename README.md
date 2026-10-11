@@ -134,6 +134,15 @@ tests/                           test suite
 
 ## Status
 
-v0.2, early. The firewall, the isolation check, the shutdown ordering and the
-migration import are tested. The full ISO build and Stealth Mode on real
-hardware have **not** been tested end to end yet. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+v0.2, early. Tested in CI and under automated checks: the firewall behaviour
+(including the VPN kill-switch and the fwmark-bound WireGuard endpoint — unmarked
+traffic to the VPN host is dropped, proven in a network namespace), the
+isolation check, the Stealth shutdown ordering, and the migration import. The
+**ISO now builds in CI** and **boots and installs in a VM** (KDE live desktop +
+Calamares full-disk-encryption install).
+
+Still **not** verified: the full stack on **bare metal**, and a real Stealth
+(Whonix) session end to end on physical hardware — including failure, reboot,
+suspend/resume and network-transition behaviour. Until that is done, treat
+KratosOS as a promising experimental distribution, not something to trust with a
+high-risk operational identity. See [`docs/ROADMAP.md`](docs/ROADMAP.md).

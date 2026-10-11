@@ -56,5 +56,25 @@ else
     flunk "rejected a clean WireGuard config"
 fi
 
+# The VPN firewall must bind the endpoint exception to WireGuard's own fwmark
+# (finding R8-8) so a non-root process can't send arbitrary UDP to the VPN
+# host:port outside the tunnel.
+inc="$(cd "$(dirname "$0")/.." && pwd)/config/includes.chroot"
+for rs in modes/vpn.nft modes/vpn-bootstrap.nft; do
+    # The endpoint-accept line must be gated on the WireGuard fwmark.
+    if grep -qE 'meta mark .*WG_FWMARK .*WG_ENDPOINT .*WG_PORT accept' "$inc/etc/kratos/$rs" \
+       && ! grep -qE '^[[:space:]]*ip daddr .*WG_ENDPOINT .*WG_PORT accept' "$inc/etc/kratos/$rs"; then
+        pass "$rs gates the endpoint on WG_FWMARK (no unmarked covert channel)"
+    else
+        flunk "$rs allows the endpoint without the WireGuard fwmark"
+    fi
+done
+if grep -qE 'wg set .*WG_IF.* fwmark' "$inc/usr/local/lib/kratos/net.sh" \
+   && grep -qF 'FwMark = ' "$inc/usr/local/lib/kratos/net.sh"; then
+    pass "wg_up stamps the fwmark (config FwMark + live reassert)"
+else
+    flunk "wg_up does not set the WireGuard fwmark"
+fi
+
 echo
 if (( fail )); then echo "WG VALIDATION TESTS FAILED"; exit 1; else echo "WireGuard import is injection-safe"; exit 0; fi
