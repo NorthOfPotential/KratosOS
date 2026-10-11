@@ -88,3 +88,22 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
   to a search engine (DuckDuckGo by default) — that traffic goes out like any
   other, subject to your current `kratos mode` (normal/VPN/offline).
 - The services ship **disabled**; they are enabled only after `kratos-ai setup`.
+
+## Download integrity
+
+`kratos-ai setup` installs code as root, so the downloads are verified:
+
+- The **Ollama runtime** is pinned to a specific release and its **SHA256 is
+  verified before extraction** (fail-closed). The archive is screened for
+  path-traversal members and unpacked into `/usr/local`. Pin the artifact
+  independently of the origin with:
+  ```
+  sudo KRATOS_AI_OLLAMA_SHA256=<hex> kratos-ai setup
+  ```
+  Full origin authentication (a signature over the tarball) isn't offered
+  upstream, so this verifies integrity against the pinned release; the SHA256
+  pin is the strongest available.
+- **Open WebUI** installs from PyPI; its large dependency tree is installed as
+  the unprivileged `kratos-ai` service account, never as root.
+- **Models** are pulled by Ollama, which verifies each blob against its
+  manifest digest.
