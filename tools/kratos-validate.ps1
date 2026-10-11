@@ -218,6 +218,11 @@ function Phase-VM {
         if ($LASTEXITCODE -eq 0) { Say "nested virtualization: ON" }
         else { Warn "could not enable nested virtualization on this CPU - the offline/firewall checks still work; the Stealth/sVirt test needs it." }
         & $vbox modifyvm $VMName --audio none 2>&1 | Out-Null   # best-effort; option name varies by VBox version
+        # Give the VM a USB controller (OHCI/USB 1.1 - no Extension Pack needed) so
+        # the USB bus (/sys/bus/usb) exists in the guest; otherwise usbguard has
+        # nothing to enumerate and the USBGuard test is meaningless.
+        & $vbox modifyvm $VMName --usbohci on 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { & $vbox modifyvm $VMName --usb on 2>&1 | Out-Null }  # older VBox flag
 
         $vdi = Join-Path (Join-Path $vmdir $VMName) "$VMName.vdi"
         Say "creating a $DiskGB GB virtual disk (the VM's own disk - not your PC's) ..."
