@@ -14,6 +14,10 @@
 : "${AI_VENV:=$AI_HOME/venv}"
 : "${AI_STATE:=/var/lib/kratos/ai}"
 : "${OLLAMA_BIN:=/usr/local/bin/ollama}"
+# Integrity baseline: the SHA256 of the Ollama binary as it was VERIFIED at
+# install. Re-checked on every service start so a post-install swap of the
+# native, root-capable runtime is caught and the daemon refuses to run.
+: "${OLLAMA_SHA_BASELINE:=$AI_STATE/ollama.sha256}"
 : "${OLLAMA_HOST:=127.0.0.1:11434}"
 : "${WEBUI_HOST:=127.0.0.1}"
 : "${WEBUI_PORT:=8080}"

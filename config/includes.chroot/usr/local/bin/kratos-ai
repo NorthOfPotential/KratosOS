@@ -20,6 +20,19 @@ PROVISIONED_MARK="$AI_STATE/provisioned"
 
 need_root() { [[ "$(id -u)" -eq 0 ]] || die "this needs root: run 'sudo kratos-ai $1'"; }
 
+# Tamper gate: the installed Ollama binary must still match the hash we recorded
+# when we VERIFIED it at install. Run as ExecStartPre (fail-closed) and on demand.
+verify_ollama() {
+    [[ -x "$OLLAMA_BIN" ]] || { err "ollama binary missing ($OLLAMA_BIN)"; exit 1; }
+    [[ -r "$OLLAMA_SHA_BASELINE" ]] || { err "no integrity baseline — run: sudo kratos-ai setup"; exit 1; }
+    local want got; want="$(cat "$OLLAMA_SHA_BASELINE")"; got="$(sha256sum "$OLLAMA_BIN" | awk '{print $1}')"
+    if [[ "$got" != "$want" ]]; then
+        err "INTEGRITY FAILURE: $OLLAMA_BIN changed since install (recorded $want, now $got). Refusing to run."
+        err "If you deliberately updated Ollama, re-baseline with: sudo kratos-ai setup"
+        exit 1
+    fi
+}
+
 require_network() {
     # Local inference needs no network, but provisioning and web search do.
     if ! curl -fsS --connect-timeout 8 -o /dev/null "https://ollama.com" 2>/dev/null; then
@@ -64,8 +77,13 @@ install_ollama() {
     getent group  ollama >/dev/null || groupadd --system ollama
     getent passwd ollama >/dev/null || useradd  --system --home-dir "$AI_STATE" --shell /usr/sbin/nologin -g ollama ollama
     install -d -m 750 -o ollama -g ollama "$AI_STATE"
+    # Record the VERIFIED binary's hash as the integrity baseline (root-owned,
+    # 0600). ollama.service re-checks it on every start (ExecStartPre) and fails
+    # closed if the binary was swapped after install.
+    sha256sum "$OLLAMA_BIN" | awk '{print $1}' > "$OLLAMA_SHA_BASELINE"
+    chmod 600 "$OLLAMA_SHA_BASELINE"
     systemctl daemon-reload
-    ok "Ollama installed"
+    ok "Ollama installed and integrity baseline recorded"
 }
 
 setup_webui() {
@@ -160,6 +178,9 @@ Inference runs 100% on-device; only setup (and optional web search) use the netw
   model list       List installed models.
   model pull <tag> Download another Ollama model.
   model use <tag>  Set the default model.
+  verify           Re-check the Ollama runtime against the hash recorded at
+                   install (tamper detection). The service also does this on
+                   every start and refuses to run on a mismatch.
 
 Notes:
   * NPUs are detected but NOT yet usable for inference on Linux; GPU (CUDA/ROCm/
@@ -176,6 +197,8 @@ case "${1:-help}" in
     start)   need_root start; systemctl start ollama.service kratos-openwebui.service; ok "started" ;;
     stop)    need_root stop;  systemctl stop  kratos-openwebui.service ollama.service; ok "stopped" ;;
     model)   shift; cmd_model "$@" ;;
+    verify)         verify_ollama && ok "Ollama runtime integrity OK (matches the hash recorded at install)" ;;
+    verify-ollama)  verify_ollama ;;   # fail-closed gate used by ollama.service ExecStartPre
     help|-h|--help) usage ;;
     *) err "unknown command: $1"; echo; usage; exit 1 ;;
 esac
