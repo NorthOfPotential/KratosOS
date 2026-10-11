@@ -39,6 +39,41 @@ HTML
 ) && pass "picks the highest version of the chosen flavor" \
   || flunk "wrong latest-image selection"
 
+echo "— _whonix_pick_version_dir picks the newest version subdirectory —"
+(
+    load
+    idx="$tmp/vidx.html"
+    cat > "$idx" <<'HTML'
+<a href="17.9.9.9/">old major</a>
+<a href="18.2.1.9/">newest</a>
+<a href="18.1.0.0/">mid</a>
+<a href="signed-by/">not a version</a>
+HTML
+    v="$(_whonix_pick_version_dir "$idx")"
+    [[ "$v" == "18.2.1.9/" ]]
+) && pass "descends to the highest version directory" \
+  || flunk "wrong version-directory selection"
+
+echo "— _whonix_discover_url handles the per-version layout + LXQt fallback (Whonix 18) —"
+out="$(
+    load
+    curl() {
+        local ofile="" url=""
+        while [[ $# -gt 0 ]]; do case "$1" in -o) ofile="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done
+        case "$url" in
+            */libvirt/)            echo '<a href="18.2.1.9/">v</a>' > "$ofile" ;;   # top: only version dirs
+            */libvirt/18.2.1.9/)   echo '<a href="Whonix-LXQt-18.2.1.9.Intel_AMD64.qcow2.libvirt.xz">w</a>' > "$ofile" ;;  # no Xfce, only LXQt
+            *)                     echo d > "$ofile" ;;
+        esac
+    }
+    _whonix_discover_url "https://dl.example/libvirt/"
+)"
+if [[ "$out" == "https://dl.example/libvirt/18.2.1.9/Whonix-LXQt-18.2.1.9.Intel_AMD64.qcow2.libvirt.xz" ]]; then
+    pass "discovers newest version dir and falls back to the LXQt flavor"
+else
+    flunk "versioned-layout discovery failed ($out)"
+fi
+
 echo "— stealth_fetch_whonix downloads image + .asc via (mocked) curl —"
 out="$(
     load

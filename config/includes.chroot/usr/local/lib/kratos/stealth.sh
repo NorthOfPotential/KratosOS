@@ -329,6 +329,47 @@ _whonix_pick_latest() {   # <index-file> <baseurl> <flavor>
     printf '%s%s\n' "$base" "$name"
 }
 
+# Newest version SUBDIRECTORY from a download-directory index, or empty. Whonix
+# serves images under per-version dirs now (…/libvirt/<version>/Whonix-…), so the
+# top /libvirt/ index lists version directories, not image files. Pure function.
+_whonix_pick_version_dir() {   # <index-file> -> e.g. "18.2.1.9/"
+    local idx="$1" v
+    # Prefer quoted hrefs ("18.2.1.9/"); fall back to bare dir names in the text.
+    v="$(grep -oE 'href="[0-9]+(\.[0-9]+)+/"' "$idx" 2>/dev/null \
+         | sed -E 's/^href="//; s/"$//' | sort -V | tail -n1)"
+    [[ -n "$v" ]] || v="$(grep -oE '[0-9]+(\.[0-9]+){2,}/' "$idx" 2>/dev/null | sort -V | tail -n1)"
+    [[ -n "$v" ]] || return 1
+    printf '%s\n' "$v"
+}
+
+# Resolve the newest Whonix KVM image URL under a base directory, coping with
+# BOTH a flat listing (images directly in /libvirt/) and the current per-version
+# layout (/libvirt/<version>/Whonix-<flavor>-<version>…). Tries the preferred
+# flavor first, then the other graphical/CLI flavors, since Whonix 18 ships LXQt
+# (and CLI) rather than Xfce. Does network I/O (not pure); echoes URL or returns 1.
+_whonix_discover_url() {   # <baseurl> -> echoes full image URL
+    local base="${1%/}/" idx vdir url f
+    local curl_opts=(-fL --proto "=https" --tlsv1.2 --connect-timeout 30)
+    # Preferred flavor first, then the rest (deduplicated), graphical before CLI.
+    local -a flavors=("${STEALTH_WHONIX_FLAVOR:-Xfce}")
+    for f in Xfce LXQt CLI; do
+        [[ " ${flavors[*]} " == *" $f "* ]] || flavors+=("$f")
+    done
+    idx="$(mktemp)" || return 1
+    curl "${curl_opts[@]}" -sS "$base" -o "$idx" 2>/dev/null || { rm -f "$idx"; return 1; }
+    # (a) flat layout: image files are directly in this index.
+    for f in "${flavors[@]}"; do
+        if url="$(_whonix_pick_latest "$idx" "$base" "$f")"; then rm -f "$idx"; printf '%s\n' "$url"; return 0; fi
+    done
+    # (b) versioned layout: descend into the newest version subdirectory.
+    vdir="$(_whonix_pick_version_dir "$idx")" || { rm -f "$idx"; return 1; }
+    curl "${curl_opts[@]}" -sS "${base}${vdir}" -o "$idx" 2>/dev/null || { rm -f "$idx"; return 1; }
+    for f in "${flavors[@]}"; do
+        if url="$(_whonix_pick_latest "$idx" "${base}${vdir}" "$f")"; then rm -f "$idx"; printf '%s\n' "$url"; return 0; fi
+    done
+    rm -f "$idx"; return 1
+}
+
 # Version string embedded in a Whonix KVM image filename, or empty.
 _whonix_file_version() {   # <path-or-name>
     local b="${1##*/}"
@@ -340,17 +381,13 @@ _whonix_file_version() {   # <path-or-name>
 # when offline. Honors STEALTH_WHONIX_URL (a pin means "this is latest").
 _whonix_remote_latest_version() {
     local base="${STEALTH_WHONIX_BASEURL:-https://download.whonix.org/libvirt/}"
-    local flavor="${STEALTH_WHONIX_FLAVOR:-Xfce}" url idx
+    local url
     if [[ -n "${STEALTH_WHONIX_URL:-}" ]]; then
         _whonix_file_version "$STEALTH_WHONIX_URL"; return 0
     fi
-    base="${base%/}/"
-    idx="$(mktemp)"
-    if curl -fL --proto "=https" --tlsv1.2 --connect-timeout 20 -sS "$base" -o "$idx" 2>/dev/null \
-        && url="$(_whonix_pick_latest "$idx" "$base" "$flavor")"; then
+    if url="$(_whonix_discover_url "$base")"; then
         _whonix_file_version "$url"
     fi
-    rm -f "$idx"
 }
 
 # Download the latest Whonix KVM image + its .asc into <destdir>. Echoes the
@@ -360,21 +397,16 @@ _whonix_remote_latest_version() {
 stealth_fetch_whonix() {   # <destdir> -> echoes archive path
     local dest="$1"
     local base="${STEALTH_WHONIX_BASEURL:-https://download.whonix.org/libvirt/}"
-    local url="${STEALTH_WHONIX_URL:-}" flavor="${STEALTH_WHONIX_FLAVOR:-Xfce}"
+    local url="${STEALTH_WHONIX_URL:-}"
     base="${base%/}/"
     install -d -m 700 "$dest"
     local curl_opts=(-fL --proto "=https" --tlsv1.2 --connect-timeout 30)
     if [[ -z "$url" ]]; then
-        local idx="$dest/index.html"
-        curl "${curl_opts[@]}" -sS "$base" -o "$idx" >&2 || return 1
-        url="$(_whonix_pick_latest "$idx" "$base" "$flavor")" || {
-            # Some mirrors expose a 'latest/' directory; try it once.
-            if curl "${curl_opts[@]}" -sS "${base}latest/" -o "$idx" 2>/dev/null; then
-                url="$(_whonix_pick_latest "$idx" "${base}latest/" "$flavor")" || true
-            fi
+        url="$(_whonix_discover_url "$base")" || {
+            warn "could not find a Whonix KVM image under $base (Whonix layout change?);" \
+                 "set STEALTH_WHONIX_URL to a direct .qcow2.libvirt.xz URL from https://www.whonix.org/wiki/KVM"
+            return 1
         }
-        [[ -n "$url" ]] || { warn "could not find a Whonix KVM image at $base (set STEALTH_WHONIX_URL)"; return 1; }
-        rm -f "$idx"
     fi
     local arc="$dest/${url##*/}"
     info "Downloading $(basename "$arc") (one time)..." >&2
