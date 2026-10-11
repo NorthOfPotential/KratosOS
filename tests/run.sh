@@ -14,6 +14,7 @@ step "shellcheck"
 run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
     $inc/usr/local/bin/kratos-apply-look $inc/usr/local/bin/kratos-logwatch \
     $inc/usr/local/bin/kratos-runscript $inc/usr/local/bin/kratos-sec \
+    $inc/usr/local/bin/kratos-ai \
     $inc/usr/local/lib/kratos/sectools-gen $inc/usr/local/lib/kratos/sec-shell \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
     $inc/usr/local/libexec/kratos/* \
@@ -128,6 +129,9 @@ run tests/test_netprivacy.sh
 
 step "polkit action split"
 run tests/test_polkit.sh
+
+step "local AI coder (hardware detection + model catalog)"
+run tests/test_ai.sh
 
 echo
 if (( status == 0 )); then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi

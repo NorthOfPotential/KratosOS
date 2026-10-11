@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR/../lib/kratos
+# kratos-ai — KratosOS local AI coder: a fully-local Ollama + Open WebUI stack
+# with an abliterated coder model auto-sized to this machine. Inference runs
+# entirely on-device; the only network use is the one-time runtime+model
+# download (and optional web search). Works offline once provisioned.
+set -euo pipefail
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
+      LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT PYTHONPATH PYTHONSTARTUP PYTHONHOME 2>/dev/null || true
+
+KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
+# shellcheck source=common.sh
+. "$KRATOS_LIB/common.sh"
+# shellcheck source=ai.sh
+. "$KRATOS_LIB/ai.sh"
+
+PROVISIONED_MARK="$AI_STATE/provisioned"
+
+need_root() { [[ "$(id -u)" -eq 0 ]] || die "this needs root: run 'sudo kratos-ai $1'"; }
+
+require_network() {
+    # Local inference needs no network, but provisioning and web search do.
+    if ! curl -fsS --connect-timeout 8 -o /dev/null "https://ollama.com" 2>/dev/null; then
+        die "no network (or KratosOS is in offline mode). Switch first: sudo kratos mode normal"
+    fi
+}
+
+install_ollama() {
+    if [[ -x "$OLLAMA_BIN" ]]; then ok "Ollama already installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -n1))"; return; fi
+    require_network
+    info "Installing the Ollama runtime (one time)..."
+    local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+    curl -fL --proto "=https" --tlsv1.2 --connect-timeout 30 "$KRATOS_AI_OLLAMA_URL" -o "$tmp/ollama.tgz" \
+        || die "could not download the Ollama runtime"
+    tar -xzf "$tmp/ollama.tgz" -C /usr \
+        || die "could not unpack the Ollama runtime"
+    [[ -x "$OLLAMA_BIN" ]] || die "Ollama binary not found after install"
+    # Dedicated unprivileged service account for the daemon.
+    getent group  ollama >/dev/null || groupadd --system ollama
+    getent passwd ollama >/dev/null || useradd  --system --home-dir "$AI_STATE" --shell /usr/sbin/nologin -g ollama ollama
+    install -d -m 750 -o ollama -g ollama "$AI_STATE"
+    systemctl daemon-reload
+    ok "Ollama installed"
+}
+
+setup_webui() {
+    if [[ -x "$AI_VENV/bin/open-webui" ]]; then ok "Open WebUI already installed"; return; fi
+    require_network
+    need_cmd python3
+    info "Installing Open WebUI (first time pulls a few hundred MB)..."
+    install -d -m 755 "$AI_HOME"
+    python3 -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
+    "$AI_VENV/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
+    "$AI_VENV/bin/pip" install open-webui || die "could not install Open WebUI"
+    getent group  kratos-ai >/dev/null || groupadd --system kratos-ai
+    getent passwd kratos-ai >/dev/null || useradd  --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
+    install -d -m 750 -o kratos-ai -g kratos-ai "$AI_HOME/data"
+    ok "Open WebUI installed"
+}
+
+pull_model() {
+    local budget model label
+    budget="$(ai_budget_gb)"; read -r model label < <(ai_pick_model "$budget")
+    systemctl enable --now ollama.service >/dev/null 2>&1 || true
+    # Wait for the daemon socket.
+    local n=0; while (( n++ < 30 )); do curl -fsS -o /dev/null "http://$OLLAMA_HOST/api/version" 2>/dev/null && break; sleep 1; done
+    info "Pulling model: $model  ($label) — sized to ~${budget} GB budget. This is large; one time."
+    OLLAMA_HOST="$OLLAMA_HOST" "$OLLAMA_BIN" pull "$model" || die "could not pull $model (check connection, or set KRATOS_AI_MODEL)"
+    printf '%s\n' "$model" > "$AI_STATE/model"
+    ok "Model ready: $model"
+}
+
+cmd_setup() {
+    need_root setup
+    info "== KratosOS local AI setup =="
+    ai_report_hardware
+    install -d -m 750 "$AI_STATE"
+    install_ollama
+    pull_model
+    setup_webui
+    systemctl enable --now kratos-openwebui.service >/dev/null 2>&1 || warn "Open WebUI service did not start; check: journalctl -u kratos-openwebui"
+    touch "$PROVISIONED_MARK"
+    ok "Done. Open the assistant with:  kratos-ai ui   (or the 'Kratos AI' app)"
+    info "  UI: http://$WEBUI_HOST:$WEBUI_PORT"
+}
+
+cmd_status() {
+    ai_report_hardware
+    echo
+    info "Services:"
+    local s
+    for s in ollama kratos-openwebui; do
+        if systemctl is-active --quiet "$s" 2>/dev/null; then ok "$s: active"; else warn "$s: not running"; fi
+    done
+    if [[ -f "$PROVISIONED_MARK" ]]; then ok "provisioned"; else warn "not provisioned yet — run: sudo kratos-ai setup"; fi
+    [[ -f "$AI_STATE/model" ]] && ok "active model: $(cat "$AI_STATE/model")"
+}
+
+cmd_ui() {
+    if [[ ! -f "$PROVISIONED_MARK" ]]; then
+        warn "The AI assistant isn't set up yet."
+        info "Run once:  sudo kratos-ai setup"
+        exit 1
+    fi
+    systemctl is-active --quiet kratos-openwebui 2>/dev/null || { need_root ui; systemctl start kratos-openwebui; }
+    local url="http://$WEBUI_HOST:$WEBUI_PORT"
+    info "Opening $url"
+    command -v xdg-open >/dev/null 2>&1 && exec xdg-open "$url" >/dev/null 2>&1
+    info "Open your browser at: $url"
+}
+
+cmd_model() {
+    case "${1:-}" in
+        list) "$OLLAMA_BIN" list ;;
+        pull) [[ -n "${2:-}" ]] || die "usage: kratos-ai model pull <ollama-tag>"; need_root "model pull $2"; "$OLLAMA_BIN" pull "$2" ;;
+        use)  [[ -n "${2:-}" ]] || die "usage: kratos-ai model use <ollama-tag>"; need_root "model use $2"; printf '%s\n' "$2" > "$AI_STATE/model"; ok "default model set to $2 (select it in the UI)" ;;
+        *)    die "usage: kratos-ai model {list|pull <tag>|use <tag>}" ;;
+    esac
+}
+
+usage() {
+    cat <<EOF
+${BOLD}kratos-ai${RESET} — a fully-local AI coder (Ollama + Open WebUI), auto-sized to your machine.
+Inference runs 100% on-device; only setup (and optional web search) use the network.
+
+  setup            Detect hardware, install the runtime, download the best-fit
+                   abliterated coder model, and start the UI.  (needs sudo)
+  ui               Open the assistant in your browser.
+  status           Show detected hardware, chosen model, and service state.
+  detect           Show hardware detection + which model would be chosen.
+  start | stop     Start/stop the local AI services.
+  model list       List installed models.
+  model pull <tag> Download another Ollama model.
+  model use <tag>  Set the default model.
+
+Notes:
+  * NPUs are detected but NOT yet usable for inference on Linux; GPU (CUDA/ROCm/
+    Vulkan) is used when present, otherwise CPU + RAM.
+  * Override the model with  KRATOS_AI_MODEL=<ollama-tag>  before 'setup'.
+EOF
+}
+
+case "${1:-help}" in
+    setup)   cmd_setup ;;
+    status)  cmd_status ;;
+    detect)  ai_report_hardware ;;
+    ui)      cmd_ui ;;
+    start)   need_root start; systemctl start ollama.service kratos-openwebui.service; ok "started" ;;
+    stop)    need_root stop;  systemctl stop  kratos-openwebui.service ollama.service; ok "stopped" ;;
+    model)   shift; cmd_model "$@" ;;
+    help|-h|--help) usage ;;
+    *) err "unknown command: $1"; echo; usage; exit 1 ;;
+esac
