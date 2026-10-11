@@ -16,6 +16,10 @@ SupplementaryGroups=render video
 Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=HOME=/var/lib/kratos/ai
 Environment=OLLAMA_MODELS=/var/lib/kratos/ai/models
+# Tamper gate: verify the binary still matches the hash recorded when it was
+# verified at install; fail closed on a mismatch. '+' runs it as root so it can
+# read the root-owned baseline, regardless of User=ollama.
+ExecStartPre=+/usr/local/bin/kratos-ai verify-ollama
 ExecStart=/usr/local/bin/ollama serve
 Restart=on-failure
 RestartSec=3

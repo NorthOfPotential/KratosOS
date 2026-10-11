@@ -68,6 +68,17 @@ if grep -qE 'runuser -u kratos-ai -- .*pip.? install open-webui' "$cli"; then
     pass "Open WebUI pip install runs as the unprivileged kratos-ai user, not root"
 else flunk "pip install still runs as root (hostile-dependency root-RCE)"; fi
 
+echo "— tamper monitoring: the Ollama runtime is integrity-gated on every start —"
+if grep -qE 'sha256sum .*OLLAMA_BIN.* > .*OLLAMA_SHA_BASELINE' "$cli"; then
+    pass "install records a SHA256 integrity baseline for the binary"
+else flunk "no integrity baseline recorded at install"; fi
+if grep -q 'INTEGRITY FAILURE' "$cli" && grep -qE 'verify-ollama\)' "$cli"; then
+    pass "verify_ollama fails closed on a binary mismatch"
+else flunk "no fail-closed integrity verification"; fi
+if grep -qE '^ExecStartPre=\+/usr/local/bin/kratos-ai verify-ollama' "$root/etc/systemd/system/ollama.service"; then
+    pass "ollama.service re-verifies the binary (ExecStartPre) before every start"
+else flunk "ollama.service has no ExecStartPre integrity gate"; fi
+
 echo "— AI services are sandboxed (NoNewPrivileges + ProtectSystem=strict) —"
 for u in ollama.service kratos-openwebui.service; do
     f="$root/etc/systemd/system/$u"
