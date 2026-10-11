@@ -18,6 +18,18 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 
+# Parse UNTRUSTED XML with defusedxml when available. The stdlib ElementTree
+# parser is NOT hardened against maliciously constructed XML (entity-expansion
+# "billion laughs" / quadratic blowup -> memory-exhaustion DoS during
+# provisioning); the Python docs' XML security note says to use defusedxml for
+# data that may be hostile. We still BUILD/WRITE trees with the stdlib API. If
+# defusedxml is somehow absent, fall back so provisioning never hard-fails on a
+# missing optional dependency.
+try:
+    from defusedxml.ElementTree import parse as _safe_parse
+except Exception:  # pragma: no cover - defusedxml is an optional hardening dep
+    _safe_parse = ET.parse
+
 EXT, INT = "kx-ext", "kx-int"
 GW, WS = "kx-gw", "kx-ws"
 SPICE_DIR = "/run/kratos/spice"
@@ -321,10 +333,10 @@ def write(root, path):
 
 
 def cmd_prepare(a):
-    gw = ET.parse(a.gw_xml).getroot()
-    ws = ET.parse(a.ws_xml).getroot()
-    ext = ET.parse(a.ext_xml).getroot()
-    int_ = ET.parse(a.int_xml).getroot()
+    gw = _safe_parse(a.gw_xml).getroot()
+    ws = _safe_parse(a.ws_xml).getroot()
+    ext = _safe_parse(a.ext_xml).getroot()
+    int_ = _safe_parse(a.int_xml).getroot()
     harden_domain(gw, GW, a.gw_disk, a.gw_ram)
     harden_domain(ws, WS, a.ws_disk, a.ws_ram)
     harden_network(ext, EXT)
@@ -342,15 +354,15 @@ def _disk_path(root):
 
 
 def cmd_check(a):
-    gw = ET.parse(f"{a.dir}/{GW}.xml").getroot()
-    ws = ET.parse(f"{a.dir}/{WS}.xml").getroot()
+    gw = _safe_parse(f"{a.dir}/{GW}.xml").getroot()
+    ws = _safe_parse(f"{a.dir}/{WS}.xml").getroot()
     check_domain(gw)
     check_domain(ws)
     # The compartments must not share a backing disk.
     if _disk_path(gw) == _disk_path(ws):
         raise Violation("Gateway and Workstation share a disk")
-    check_network(ET.parse(f"{a.dir}/{EXT}.xml").getroot())
-    check_network(ET.parse(f"{a.dir}/{INT}.xml").getroot())
+    check_network(_safe_parse(f"{a.dir}/{EXT}.xml").getroot())
+    check_network(_safe_parse(f"{a.dir}/{INT}.xml").getroot())
 
 
 def main():

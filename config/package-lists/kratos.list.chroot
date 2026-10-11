@@ -94,6 +94,9 @@ gnupg
 xz-utils
 python3
 python3-pyqt6
+# defusedxml: parse the (verified) Whonix libvirt XML with a parser hardened
+# against entity-expansion DoS, instead of the stdlib ElementTree.
+python3-defusedxml
 
 # ── Local AI coder (kratos-ai: Ollama + Open WebUI) ─────────────
 # Runtime deps only; Ollama + Open WebUI + the model are fetched on first run
