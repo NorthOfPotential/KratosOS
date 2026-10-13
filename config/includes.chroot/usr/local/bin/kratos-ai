@@ -71,7 +71,11 @@ install_ollama() {
     getent group ollama >/dev/null || groupadd --system ollama
     getent passwd ollama >/dev/null || useradd --system --home-dir "$AI_STATE/models" --shell /usr/sbin/nologin -g ollama ollama
     prepare_ai_state
-    if [[ -x "$OLLAMA_BIN" ]]; then ok "Ollama already installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -n1))"; return; fi
+    if [[ -x "$OLLAMA_BIN" ]]; then
+        verify_ollama || die "existing Ollama binary failed integrity verification"
+        ok "Ollama already installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -n1))"
+        return
+    fi
     require_network
     info "Installing the Ollama runtime ($KRATOS_AI_OLLAMA_VERSION, one time)..."
     local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
@@ -109,21 +113,38 @@ install_ollama() {
 }
 
 setup_webui() {
-    if [[ -x "$AI_VENV/bin/open-webui" ]]; then ok "Open WebUI already installed"; return; fi
-    require_network
     need_cmd python3
-    info "Installing Open WebUI (first time pulls a few hundred MB)..."
-    # Create the unprivileged service account FIRST, then run the whole venv +
-    # pip install AS THAT USER. open-webui pulls a large PyPI dependency tree and
-    # pip executes package build code; running it as root would make any hostile
-    # dependency root-RCE. As kratos-ai it can only harm its own sandboxed tree.
-    getent group  kratos-ai >/dev/null || groupadd --system kratos-ai
-    getent passwd kratos-ai >/dev/null || useradd  --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
-    install -d -m 750 -o kratos-ai -g kratos-ai "$AI_HOME" "$AI_HOME/data"
+    # The WebUI service must be able to write user DATA, not its own Python
+    # code. Previously it owned /opt/kratos-ai and its venv, permitting a
+    # compromised WebUI process to rewrite startup code persistently.
+    getent group kratos-ai >/dev/null || groupadd --system kratos-ai
+    getent passwd kratos-ai >/dev/null || useradd --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
+    [[ ! -L "$AI_HOME" && ! -L "$AI_VENV" && ! -L "$AI_HOME/data" ]] \
+        || die "AI home/venv/data contains an unsafe symlink"
+    install -d -m 755 -o root -g root "$AI_HOME"
+    install -d -m 750 -o kratos-ai -g kratos-ai "$AI_HOME/data"
+    if [[ -x "$AI_VENV/bin/open-webui" && "$(stat -c '%u' "$AI_VENV")" == 0 ]]; then
+        # An existing root-owned venv remains immutable to the service.
+        chmod -R go-w "$AI_VENV"
+        ok "Open WebUI already installed (root-owned code; separate data)"
+        return
+    fi
+    require_network
+    info "Installing Open WebUI as an unprivileged account (then sealing its code as root)..."
+    # Existing service-owned venv could contain code planted by a compromised
+    # daemon. Rebuild it from packages, rather than blessing that code as root.
+    systemctl stop kratos-openwebui.service >/dev/null 2>&1 || true
+    rm -rf -- "$AI_VENV"
+    install -d -m 750 -o kratos-ai -g kratos-ai "$AI_VENV"
+    # Pip executes third-party package build code, so NEVER run this as root.
     runuser -u kratos-ai -- python3 -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install open-webui || die "could not install Open WebUI"
-    ok "Open WebUI installed (as the unprivileged kratos-ai user)"
+    # Root controls executable code for subsequent launches. The isolated
+    # service keeps read/write access ONLY to /opt/kratos-ai/data.
+    chown -R root:root "$AI_VENV"
+    chmod -R go-w "$AI_VENV"
+    ok "Open WebUI installed (pip unprivileged, venv sealed root-owned)"
 }
 
 pull_model() {
