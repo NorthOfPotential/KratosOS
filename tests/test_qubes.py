@@ -275,11 +275,17 @@ class EffectivePolicy(unittest.TestCase):
         (@default, @adminvm, @dispvm, @dispvm:<tmpl>) are kept."""
         s = kq._egress_specials({
             "@anyvm", "@tag:kratos-persona", "@type:AppVM",
-            "@dispvm:whonix-ws-18", "@default", "personal"})
+            "@dispvm:whonix-ws-18", "@dispvm:@tag:trusted",
+            "@dispvm:@type:AppVM", "@dispvm:", "@default", "personal"})
         self.assertNotIn("@anyvm", s)
         self.assertFalse(any(x.startswith("@tag:") or x.startswith("@type:") for x in s),
                          f"a policy matcher leaked into the probe targets: {s}")
         self.assertNotIn("personal", s)   # concrete domains are added separately
+        self.assertNotIn("@dispvm:@tag:trusted", s)
+        self.assertNotIn("@dispvm:@type:AppVM", s)
+        self.assertNotIn("@dispvm:", s)
+        self.assertFalse(kq._valid_intended_target("@dispvm:@tag:sensitive"))
+        self.assertFalse(kq._valid_intended_target("@dispvm:@type:AppVM"))
         self.assertIn("@dispvm:whonix-ws-18", s)
         self.assertIn("@default", s)
         self.assertIn("@adminvm", s)

@@ -397,7 +397,11 @@ def _valid_intended_target(t):
     intended-target selectors are added here."""
     if t in ("@adminvm", "@default", "@dispvm"):
         return True
-    if t.startswith("@dispvm:"):        # a concrete DispVM template is valid
+    # "@dispvm:@tag:foo" and "@dispvm:@type:AppVM" are POLICY matchers, not
+    # valid caller-requested IntendedTargets. Prefix-only validation admitted
+    # these and made the real Qubes policy evaluation abort on an invalid
+    # synthesized Request (audit unavailable instead of an authoritative pass).
+    if re.fullmatch(r"@dispvm:[A-Za-z0-9][A-Za-z0-9_.-]*", t):
         return True
     return False                        # @anyvm, @tag:*, @type:*, bare @ -> no
 

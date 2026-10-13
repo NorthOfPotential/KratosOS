@@ -11,7 +11,7 @@
 # Prints the full inventory to stdout (CI uploads it as an artifact). If an
 # allowlist exists, any path NOT on it is printed as "UNEXPECTED" and the script
 # exits non-zero, so a release can gate on an unreviewed privileged binary.
-set -uo pipefail
+set -euo pipefail
 root="${1:?usage: suid-audit.sh <root-dir> [allowlist]}"
 allow="${2:-$(cd "$(dirname "$0")" && pwd)/suid-allowlist.txt}"
 
@@ -21,18 +21,20 @@ inv="$(mktemp)"; trap 'rm -f "$inv"' EXIT
 # setuid/setgid regular files, as paths relative to the image root.
 find "$root" -xdev -type f -perm /6000 -printf '/%P\tSUID/SGID\n' 2>/dev/null | sort >> "$inv"
 # files carrying capabilities (getcap reads the security.capability xattr).
-if command -v getcap >/dev/null 2>&1; then
-    getcap -r "$root" 2>/dev/null \
-        | sed -E "s#^$root##; s/[[:space:]]+/\tCAP /" | sort >> "$inv"
-fi
+# Fail CLOSED if the scanner is missing or fails. Otherwise a build with
+# unexpected file capabilities could pass as "empty inventory".
+command -v getcap >/dev/null 2>&1 \
+    || { echo "suid-audit: getcap is REQUIRED for the release gate" >&2; exit 2; }
+getcap -r "$root" 2>/dev/null \
+    | sed -E "s#^$root##; s/[[:space:]]+/\tCAP /" | sort >> "$inv"
 
 echo "=== KratosOS privileged-binary inventory ==="
 cat "$inv"
 echo "=== $(wc -l < "$inv") entr$([ "$(wc -l < "$inv")" = 1 ] && echo y || echo ies) ==="
 
 if [ ! -f "$allow" ]; then
-    echo "note: no allowlist at $allow — inventory only (nothing gated)."
-    exit 0
+    echo "suid-audit: reviewed allowlist MISSING ($allow); refusing to release" >&2
+    exit 2
 fi
 
 # Anything in the inventory whose path is not on the allowlist is unexpected.

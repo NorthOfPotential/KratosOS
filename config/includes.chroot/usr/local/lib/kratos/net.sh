@@ -203,7 +203,9 @@ _RFKILL_SYS="${KRATOS_RFKILL_SYS:-/sys/class/rfkill}"
 # Transmitter-capable radio classes offline must silence — INCLUDING Bluetooth
 # (finding R13-5): BT is its own rfkill class, so blocking only wifi/wwan left it
 # advertising/scanning despite the "layer-1 silence" claim.
-_rfkill_is_radio() { case "$1" in wlan|wifi|wwan|bluetooth) return 0 ;; *) return 1 ;; esac; }
+# Include every transmitter-capable Linux rfkill type; blocking these is
+# best-effort (a device/firmware may not expose a writable rfkill switch).
+_rfkill_is_radio() { case "$1" in wlan|wifi|wwan|bluetooth|uwb|nfc|gps|wimax|fm) return 0 ;; *) return 1 ;; esac; }
 
 # A STABLE hardware identity for an rfkill sysfs dir (finding R13-4): the resolved
 # device path encodes bus topology (PCI slot / USB port) and survives reboot and
@@ -211,12 +213,15 @@ _rfkill_is_radio() { case "$1" in wlan|wifi|wwan|bluetooth) return 0 ;; *) retur
 # counter that can reorder and re-enable the WRONG transmitter on restore. Falls
 # back to the device name. Spaces collapsed so it stays one token.
 _rfkill_identity() {   # <rfkill sysfs dir>
-    local hw=""
-    # Only trust the device link when it actually resolves — `readlink -f`
-    # canonicalizes even a non-existent path, so guard with -e.
+    local hw="" type
+    type="$(cat "$1/type" 2>/dev/null)" || return 1
+    _rfkill_is_radio "$type" || return 1
+    # An ACPI/WMI parent can expose TWO switches (Wi-Fi and Bluetooth) with
+    # exactly the same /device symlink. Without type in this identity, restoring
+    # an unblocked BT radio can accidentally turn on disabled Wi-Fi.
     if [[ -e "$1/device" ]]; then hw="$(readlink -f "$1/device" 2>/dev/null)"; fi
     if [[ -n "$hw" ]]; then hw="hw:${hw#/sys}"; else hw="name:$(cat "$1/name" 2>/dev/null)"; fi
-    printf '%s\n' "${hw// /_}"
+    printf '%s:%s\n' "${hw// /_}" "$type"
 }
 
 # Emit "rfkill <identity> <type> <blocked|unblocked>" for every radio-class device.
@@ -246,15 +251,18 @@ _rfkill_block_all() {
 
 # Unblock the single device whose current stable identity matches the saved one.
 _rfkill_unblock_identity() {   # <identity>
-    local d
+    local d match="" count=0
+    # A parent path plus rfkill type may STILL collide on unusual hardware
+    # (two wlan rfkill switches under one parent). Never arbitrarily unblock
+    # the first match: refuse the restore instead of enabling the wrong radio.
     for d in "$_RFKILL_SYS"/rfkill*; do
         [[ -w "$d/soft" ]] || continue
         if [[ "$(_rfkill_identity "$d")" == "$1" ]]; then
-            echo 0 > "$d/soft" 2>/dev/null || true
-            return 0
+            match="$d"; count=$((count + 1))
         fi
     done
-    return 1
+    (( count == 1 )) || return 1
+    echo 0 > "$match/soft" 2>/dev/null
 }
 
 net_links() {

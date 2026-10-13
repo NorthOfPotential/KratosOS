@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # intentional literal $VARIABLE patterns in grep assertions
 # Local AI coder: model selection scales with hardware, the picker is
 # overridable, and the CLI/services/launcher are shipped correctly (disabled,
 # gated on their binaries, provisioned on first run). Real provisioning (Ollama
@@ -58,7 +59,7 @@ if grep -q 'sha256sum ' "$cli" && grep -q 'FAILED checksum' "$cli" \
    && grep -q 'cannot verify the Ollama download' "$cli"; then
     pass "Ollama tarball SHA256 is verified, failing closed when no checksum"
 else flunk "Ollama download is not checksum-verified (root-RCE risk)"; fi
-if grep -q 'refusing to extract' "$cli" && grep -q 'tar -tzf' "$cli"; then
+if grep -q 'refusing to extract' "$cli" && grep -q 'check-ollama-archive.py' "$cli"; then
     pass "archive members are screened for path traversal before extraction"
 else flunk "no path-traversal screen before tar extraction"; fi
 if grep -qF -- '-C /usr/local' "$cli" && ! grep -qE -- 'tar -xzf [^ ]+ -C /usr[[:space:]]' "$cli"; then
@@ -69,7 +70,7 @@ if grep -qE 'runuser -u kratos-ai -- .*pip.? install open-webui' "$cli"; then
 else flunk "pip install still runs as root (hostile-dependency root-RCE)"; fi
 
 echo "— tamper monitoring: the Ollama runtime is integrity-gated on every start —"
-if grep -qE 'sha256sum .*OLLAMA_BIN.* > .*OLLAMA_SHA_BASELINE' "$cli"; then
+if grep -q 'save_ai_control_file "$OLLAMA_SHA_BASELINE"' "$cli" && grep -q 'mv -Tf' "$cli"; then
     pass "install records a SHA256 integrity baseline for the binary"
 else flunk "no integrity baseline recorded at install"; fi
 if grep -q 'INTEGRITY FAILURE' "$cli" && grep -qE 'verify-ollama\)' "$cli"; then
@@ -78,6 +79,26 @@ else flunk "no fail-closed integrity verification"; fi
 if grep -qE '^ExecStartPre=\+/usr/local/bin/kratos-ai verify-ollama' "$root/etc/systemd/system/ollama.service"; then
     pass "ollama.service re-verifies the binary (ExecStartPre) before every start"
 else flunk "ollama.service has no ExecStartPre integrity gate"; fi
+
+echo "— daemon cannot alter root-written integrity state —"
+if grep -q 'install -d -m 755 -o root -g root "$AI_STATE"' "$cli" \
+   && grep -q 'install -d -m 750 -o ollama -g ollama "$AI_STATE/models"' "$cli" \
+   && grep -q '^ReadWritePaths=/var/lib/kratos/ai/models' "$root/etc/systemd/system/ollama.service" \
+   && ! grep -Fxq 'ReadWritePaths=/var/lib/kratos/ai' "$root/etc/systemd/system/ollama.service"; then
+    pass "root-owned control directory, daemon-writable models only"
+else
+    flunk "daemon can write root-owned control state"
+fi
+
+echo "— WebUI must not persist compromised code across restarts —"
+if grep -q 'chown -R root:root "$AI_VENV"' "$cli" \
+   && grep -q 'chmod -R go-w "$AI_VENV"' "$cli" \
+   && grep -q '^ReadWritePaths=/opt/kratos-ai/data' "$root/etc/systemd/system/kratos-openwebui.service" \
+   && ! grep -Fxq 'ReadWritePaths=/opt/kratos-ai' "$root/etc/systemd/system/kratos-openwebui.service"; then
+    pass "WebUI code is root-owned, only user data is writable"
+else
+    flunk "WebUI service can change its own startup code"
+fi
 
 echo "— AI services are sandboxed (NoNewPrivileges + ProtectSystem=strict) —"
 for u in ollama.service kratos-openwebui.service; do

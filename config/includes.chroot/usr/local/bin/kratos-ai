@@ -10,6 +10,16 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
       LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT PYTHONPATH PYTHONSTARTUP PYTHONHOME 2>/dev/null || true
 
+# Production entry points must never source caller-selected privileged code.
+# The main 'kratos' CLI already enforces this; apply the same safeguard to
+# kratos-ai, including its systemd root ExecStartPre integrity verifier.
+_self="$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")"
+if [[ "$_self" == /usr/local/bin/kratos-ai ]]; then
+    unset KRATOS_LIB AI_HOME AI_VENV AI_STATE OLLAMA_BIN OLLAMA_SHA_BASELINE \
+          OLLAMA_HOST WEBUI_HOST WEBUI_PORT
+fi
+unset _self
+
 KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 # shellcheck source=common.sh
 . "$KRATOS_LIB/common.sh"
@@ -18,18 +28,45 @@ KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 
 PROVISIONED_MARK="$AI_STATE/provisioned"
 
+# Separate trusted control state from model data writable by the daemon.
+# /var/lib/kratos/ai MUST be root-owned: previously it was owned by ollama,
+# allowing that service to plant symlinks under root-written paths
+# (ollama.sha256 and model). This is a local privilege/availability boundary.
+prepare_ai_state() {
+    [[ ! -L "$AI_STATE" ]] || die "AI state directory is a symlink; refusing to use it"
+    install -d -m 755 -o root -g root "$AI_STATE"
+    _is_root_owned_secure "$AI_STATE" || die "AI state directory must be root-owned and non-writable by others"
+    [[ ! -L "$AI_STATE/models" ]] || die "AI model directory is a symlink; refusing to use it"
+    install -d -m 750 -o ollama -g ollama "$AI_STATE/models"
+}
+
+# Atomic replace, never a redirection through an untrusted existing pathname.
+# Both files stay root-owned and cannot be replaced by the ollama account.
+save_ai_control_file() {
+    local dest="$1" value="$2" mode="$3" tmp
+    tmp="$(mktemp "$AI_STATE/.control.XXXXXXXX")" || die "cannot create AI control-file staging"
+    printf '%s\n' "$value" > "$tmp"
+    chmod "$mode" "$tmp"
+    mv -Tf -- "$tmp" "$dest" || die "cannot publish AI control file"
+}
+
 need_root() { [[ "$(id -u)" -eq 0 ]] || die "this needs root: run 'sudo kratos-ai $1'"; }
 
 # Tamper gate: the installed Ollama binary must still match the hash we recorded
 # when we VERIFIED it at install. Run as ExecStartPre (fail-closed) and on demand.
 verify_ollama() {
     [[ -x "$OLLAMA_BIN" ]] || { err "ollama binary missing ($OLLAMA_BIN)"; exit 1; }
-    [[ -r "$OLLAMA_SHA_BASELINE" ]] || { err "no integrity baseline — run: sudo kratos-ai setup"; exit 1; }
+    [[ -f "$OLLAMA_SHA_BASELINE" && ! -L "$OLLAMA_SHA_BASELINE" ]] \
+        || { err "no safe integrity baseline — run: sudo kratos-ai setup"; return 1; }
+    if ! _is_root_owned_secure "$AI_STATE" || ! _is_root_owned_secure "$OLLAMA_SHA_BASELINE"; then
+        err "AI integrity baseline or parent is not securely root-owned"
+        return 1
+    fi
     local want got; want="$(cat "$OLLAMA_SHA_BASELINE")"; got="$(sha256sum "$OLLAMA_BIN" | awk '{print $1}')"
     if [[ "$got" != "$want" ]]; then
         err "INTEGRITY FAILURE: $OLLAMA_BIN changed since install (recorded $want, now $got). Refusing to run."
         err "If you deliberately updated Ollama, re-baseline with: sudo kratos-ai setup"
-        exit 1
+        return 1
     fi
 }
 
@@ -41,7 +78,16 @@ require_network() {
 }
 
 install_ollama() {
-    if [[ -x "$OLLAMA_BIN" ]]; then ok "Ollama already installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -n1))"; return; fi
+    # Migrate even an already-provisioned installation away from the old
+    # daemon-owned control directory before attempting any root file writes.
+    getent group ollama >/dev/null || groupadd --system ollama
+    getent passwd ollama >/dev/null || useradd --system --home-dir "$AI_STATE/models" --shell /usr/sbin/nologin -g ollama ollama
+    prepare_ai_state
+    if [[ -x "$OLLAMA_BIN" ]]; then
+        verify_ollama || die "existing Ollama binary failed integrity verification"
+        ok "Ollama already installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -n1))"
+        return
+    fi
     require_network
     info "Installing the Ollama runtime ($KRATOS_AI_OLLAMA_VERSION, one time)..."
     local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
@@ -63,45 +109,57 @@ install_ollama() {
     [[ "${got,,}" == "${want,,}" ]] || die "Ollama download FAILED checksum (got $got, want $want) — refusing to install"
     ok "Ollama download verified (sha256)"
 
-    # DEFENSE IN DEPTH: reject any archive member with an absolute path or a
-    # '..' traversal before extracting; unpack into /usr/local (matches
-    # OLLAMA_BIN) as a non-owner, without restoring archived ownership/setuid.
-    if tar -tzf "$tgz" | grep -qE '^/|(^|/)\.\.(/|$)'; then
-        die "Ollama archive contains unsafe paths (absolute or '..') — refusing to extract"
-    fi
+    # Validate all member names, types and symlink targets before root extraction.
+    # Unlike tar -tzf | grep -q, this reads the entire archive and fails closed.
+    python3 "$KRATOS_LIB/check-ollama-archive.py" "$tgz" \
+        || die "Ollama archive contains unsafe members — refusing to extract"
     install -d -m 755 /usr/local
     tar -xzf "$tgz" -C /usr/local --no-same-owner --no-same-permissions \
         || die "could not unpack the Ollama runtime"
     [[ -x "$OLLAMA_BIN" ]] || die "Ollama binary not found after install ($OLLAMA_BIN)"
-    # Dedicated unprivileged service account for the daemon.
-    getent group  ollama >/dev/null || groupadd --system ollama
-    getent passwd ollama >/dev/null || useradd  --system --home-dir "$AI_STATE" --shell /usr/sbin/nologin -g ollama ollama
-    install -d -m 750 -o ollama -g ollama "$AI_STATE"
-    # Record the VERIFIED binary's hash as the integrity baseline (root-owned,
-    # 0600). ollama.service re-checks it on every start (ExecStartPre) and fails
-    # closed if the binary was swapped after install.
-    sha256sum "$OLLAMA_BIN" | awk '{print $1}' > "$OLLAMA_SHA_BASELINE"
-    chmod 600 "$OLLAMA_SHA_BASELINE"
+    # The daemon cannot write $AI_STATE or the root-owned hash; it can only
+    # write into $AI_STATE/models. Replace the hash atomically as root.
+    save_ai_control_file "$OLLAMA_SHA_BASELINE" "$(sha256sum "$OLLAMA_BIN" | awk '{print $1}')" 600
     systemctl daemon-reload
     ok "Ollama installed and integrity baseline recorded"
 }
 
 setup_webui() {
-    if [[ -x "$AI_VENV/bin/open-webui" ]]; then ok "Open WebUI already installed"; return; fi
-    require_network
     need_cmd python3
-    info "Installing Open WebUI (first time pulls a few hundred MB)..."
-    # Create the unprivileged service account FIRST, then run the whole venv +
-    # pip install AS THAT USER. open-webui pulls a large PyPI dependency tree and
-    # pip executes package build code; running it as root would make any hostile
-    # dependency root-RCE. As kratos-ai it can only harm its own sandboxed tree.
-    getent group  kratos-ai >/dev/null || groupadd --system kratos-ai
-    getent passwd kratos-ai >/dev/null || useradd  --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
-    install -d -m 750 -o kratos-ai -g kratos-ai "$AI_HOME" "$AI_HOME/data"
+    # The WebUI service must be able to write user DATA, not its own Python
+    # code. Previously it owned /opt/kratos-ai and its venv, permitting a
+    # compromised WebUI process to rewrite startup code persistently.
+    getent group kratos-ai >/dev/null || groupadd --system kratos-ai
+    getent passwd kratos-ai >/dev/null || useradd --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
+    [[ ! -L "$AI_HOME" ]] || die "AI home is an unsafe symlink"
+    # Revoke service ownership of the parent BEFORE inspecting children.
+    # This closes a possible swap-to-symlink race during legacy migration.
+    install -d -m 755 -o root -g root "$AI_HOME"
+    [[ ! -L "$AI_VENV" && ! -L "$AI_HOME/data" ]] \
+        || die "AI venv/data contains an unsafe symlink"
+    install -d -m 750 -o kratos-ai -g kratos-ai "$AI_HOME/data"
+    if [[ -x "$AI_VENV/bin/open-webui" && "$(stat -c '%u' "$AI_VENV")" == 0 ]]; then
+        # An existing root-owned venv remains immutable to the service.
+        chmod -R go-w "$AI_VENV"
+        ok "Open WebUI already installed (root-owned code; separate data)"
+        return
+    fi
+    require_network
+    info "Installing Open WebUI as an unprivileged account (then sealing its code as root)..."
+    # Existing service-owned venv could contain code planted by a compromised
+    # daemon. Rebuild it from packages, rather than blessing that code as root.
+    systemctl stop kratos-openwebui.service >/dev/null 2>&1 || true
+    rm -rf -- "$AI_VENV"
+    install -d -m 750 -o kratos-ai -g kratos-ai "$AI_VENV"
+    # Pip executes third-party package build code, so NEVER run this as root.
     runuser -u kratos-ai -- python3 -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install open-webui || die "could not install Open WebUI"
-    ok "Open WebUI installed (as the unprivileged kratos-ai user)"
+    # Root controls executable code for subsequent launches. The isolated
+    # service keeps read/write access ONLY to /opt/kratos-ai/data.
+    chown -R root:root "$AI_VENV"
+    chmod -R go-w "$AI_VENV"
+    ok "Open WebUI installed (pip unprivileged, venv sealed root-owned)"
 }
 
 pull_model() {
@@ -112,7 +170,7 @@ pull_model() {
     local n=0; while (( n++ < 30 )); do curl -fsS -o /dev/null "http://$OLLAMA_HOST/api/version" 2>/dev/null && break; sleep 1; done
     info "Pulling model: $model  ($label) — sized to ~${budget} GB budget. This is large; one time."
     OLLAMA_HOST="$OLLAMA_HOST" "$OLLAMA_BIN" pull "$model" || die "could not pull $model (check connection, or set KRATOS_AI_MODEL)"
-    printf '%s\n' "$model" > "$AI_STATE/model"
+    save_ai_control_file "$AI_STATE/model" "$model" 644
     ok "Model ready: $model"
 }
 
@@ -120,7 +178,6 @@ cmd_setup() {
     need_root setup
     info "== KratosOS local AI setup =="
     ai_report_hardware
-    install -d -m 750 "$AI_STATE"
     install_ollama
     pull_model
     setup_webui
@@ -159,7 +216,7 @@ cmd_model() {
     case "${1:-}" in
         list) "$OLLAMA_BIN" list ;;
         pull) [[ -n "${2:-}" ]] || die "usage: kratos-ai model pull <ollama-tag>"; need_root "model pull $2"; "$OLLAMA_BIN" pull "$2" ;;
-        use)  [[ -n "${2:-}" ]] || die "usage: kratos-ai model use <ollama-tag>"; need_root "model use $2"; printf '%s\n' "$2" > "$AI_STATE/model"; ok "default model set to $2 (select it in the UI)" ;;
+        use)  [[ -n "${2:-}" ]] || die "usage: kratos-ai model use <ollama-tag>"; need_root "model use $2"; prepare_ai_state; save_ai_control_file "$AI_STATE/model" "$2" 644; ok "default model set to $2 (select it in the UI)" ;;
         *)    die "usage: kratos-ai model {list|pull <tag>|use <tag>}" ;;
     esac
 }

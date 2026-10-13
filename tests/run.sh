@@ -84,6 +84,9 @@ fi
 step "stylometry normalizer"
 run python3 -m unittest tests.test_stylo
 
+step "Ollama installer archive confinement"
+run python3 -m unittest tests.test_ollama_archive
+
 step "decoy rate math"
 run python3 -m unittest tests.test_decoy
 
@@ -132,6 +135,9 @@ run tests/test_polkit.sh
 
 step "local AI coder (hardware detection + model catalog)"
 run tests/test_ai.sh
+
+step "AI installer integrity state resists symlink overwrite"
+run bash tests/test_ai_state.sh
 
 step "privileged-binary release gate (SUID/caps allowlist)"
 run tests/test_suid_gate.sh
