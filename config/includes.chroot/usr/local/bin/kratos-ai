@@ -48,8 +48,10 @@ verify_ollama() {
     [[ -x "$OLLAMA_BIN" ]] || { err "ollama binary missing ($OLLAMA_BIN)"; exit 1; }
     [[ -f "$OLLAMA_SHA_BASELINE" && ! -L "$OLLAMA_SHA_BASELINE" ]] \
         || { err "no safe integrity baseline — run: sudo kratos-ai setup"; return 1; }
-    _is_root_owned_secure "$AI_STATE" && _is_root_owned_secure "$OLLAMA_SHA_BASELINE" \
-        || { err "AI integrity baseline or parent is not securely root-owned"; return 1; }
+    if ! _is_root_owned_secure "$AI_STATE" || ! _is_root_owned_secure "$OLLAMA_SHA_BASELINE"; then
+        err "AI integrity baseline or parent is not securely root-owned"
+        return 1
+    fi
     local want got; want="$(cat "$OLLAMA_SHA_BASELINE")"; got="$(sha256sum "$OLLAMA_BIN" | awk '{print $1}')"
     if [[ "$got" != "$want" ]]; then
         err "INTEGRITY FAILURE: $OLLAMA_BIN changed since install (recorded $want, now $got). Refusing to run."
