@@ -53,6 +53,15 @@ done
 d="$root/usr/share/applications/kratos-ai.desktop"
 if [[ -f "$d" ]] && grep -q '^Exec=.*kratos-ai' "$d"; then pass "Kratos AI launcher present"; else flunk "launcher missing"; fi
 
+echo "— patched third-party versions must be enforced (not just documented) —"
+if grep -q 'v0.40.3' "$lib/ai.sh" \
+   && grep -q 'ollama-linux-amd64.tar.zst' "$lib/ai.sh" \
+   && grep -q 'ollama version is' "$cli" \
+   && grep -q '0.12.0' "$cli" \
+   && grep -q '"open-webui==$webui_version"' "$cli"; then
+    pass "security-patched Ollama and Open WebUI releases are selected and verified"
+else flunk "AI runtime still risks installing a vulnerable version"; fi
+
 echo "— supply-chain: the Ollama runtime download is verified before it is unpacked as root —"
 cli="$root/usr/local/bin/kratos-ai"
 if grep -q 'sha256sum ' "$cli" && grep -q 'FAILED checksum' "$cli" \
@@ -62,7 +71,7 @@ else flunk "Ollama download is not checksum-verified (root-RCE risk)"; fi
 if grep -q 'refusing to extract' "$cli" && grep -q 'check-ollama-archive.py' "$cli"; then
     pass "archive members are screened for path traversal before extraction"
 else flunk "no path-traversal screen before tar extraction"; fi
-if grep -qF -- '-C /usr/local' "$cli" && ! grep -qE -- 'tar -xzf [^ ]+ -C /usr[[:space:]]' "$cli"; then
+if grep -qF -- '-C /usr/local' "$cli" && grep -q 'tar --zstd -xf' "$cli"; then
     pass "extracts into /usr/local (matches OLLAMA_BIN), not bare /usr"
 else flunk "extraction target mismatch with OLLAMA_BIN"; fi
 if grep -qE 'runuser -u kratos-ai -- .*pip.? install open-webui' "$cli"; then
