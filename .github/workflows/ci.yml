@@ -100,6 +100,9 @@ jobs:
           output-file: kratosos.spdx.json
           upload-artifact: false
       - name: Privileged-binary inventory (SUID/SGID + capabilities) — RELEASE GATE
+        # `bash -e` alone masks failures on the left side of a pipe to tee.
+        # Explicit bash enables pipefail; set it in the script as a second gate.
+        shell: bash
         # Finding 46 / P2: inventory every setuid/setgid binary and capability
         # holder in the built image and compare to tests/suid-allowlist.txt. This
         # is now a HARD GATE: an unexpected privileged binary (not on the
@@ -111,6 +114,7 @@ jobs:
         # the package or add the path to tests/suid-allowlist.txt.
         run: |
           apt-get install -y --no-install-recommends libcap2-bin >/dev/null 2>&1 || true
+          set -euo pipefail
           tests/suid-audit.sh ./chroot | tee kratosos-suid-inventory.txt
       - name: Attest build provenance
         # A signed, cryptographically verifiable record of WHERE and HOW the ISO
