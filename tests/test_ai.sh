@@ -53,6 +53,7 @@ done
 d="$root/usr/share/applications/kratos-ai.desktop"
 if [[ -f "$d" ]] && grep -q '^Exec=.*kratos-ai' "$d"; then pass "Kratos AI launcher present"; else flunk "launcher missing"; fi
 
+cli="$root/usr/local/bin/kratos-ai"
 echo "— patched third-party versions must be enforced (not just documented) —"
 if grep -q 'v0.40.3' "$lib/ai.sh" \
    && grep -q 'ollama-linux-amd64.tar.zst' "$lib/ai.sh" \
