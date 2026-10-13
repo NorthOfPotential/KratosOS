@@ -108,7 +108,7 @@ install_ollama() {
     # INTEGRITY: never extract an unverified archive as root. Prefer a baked
     # pin; else verify against the release's sha256sum.txt (same pinned HTTPS
     # origin). Fail closed if neither is available.
-    local got want=""; got="$(sha256sum "$tarball" | awk '{print $1}')""
+    local got want=""; got="$(sha256sum "$tarball" | awk '{print $1}')"
     if [[ -n "$KRATOS_AI_OLLAMA_SHA256" ]]; then
         want="$KRATOS_AI_OLLAMA_SHA256"
     elif curl -fL --proto "=https" --tlsv1.2 --connect-timeout 30 \
