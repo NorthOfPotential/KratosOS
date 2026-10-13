@@ -23,34 +23,21 @@ if "$audit" "$root" >/dev/null 2>&1; then
 else
     pass "audit fails closed on an unexpected SUID binary"
 fi
-# The actual workflow pipes inventory output through tee. With ordinary
-# "bash -e", the pipeline incorrectly succeeds because tee exits 0. Enforce
-# pipefail and exercise the SAME pipeline used by the release workflow.
+# The release workflow runs the audit through tee: the pipeline MUST keep
+# the status of the audit, not just the exit code of tee.
 if bash -euo pipefail -c '"$1" "$2" | tee "$3"' bash "$audit" "$root" "$root/inventory.txt" >/dev/null 2>&1; then
-    flunk "release pipeline hid an unexpected SUID binary behind tee"
+    flunk "release pipeline hid an unexpected privileged binary behind tee"
 else
-    pass "release pipeline preserves inventory failure through tee"
+    pass "release pipeline preserves audit failures through tee"
 fi
 rm -rf "$root"
 
-echo "— CI step explicitly opts into pipefail —"
+echo "— GitHub Actions uses a pipefail-aware shell for its release gate —"
 if grep -A 15 'name: Privileged-binary inventory' "$here/../.github/workflows/ci.yml" \
-   | grep -qE '^[[:space:]]+shell: bash
-root="$(mktemp -d)"; mkdir -p "$root/usr/bin"
-: > "$root/usr/bin/firejail"; chmod 4755 "$root/usr/bin/firejail"
-: > "$root/usr/bin/sudo";     chmod 4755 "$root/usr/bin/sudo"
-if "$audit" "$root" >/dev/null 2>&1; then
-    pass "audit passes when everything is allowlisted"
+    | grep -qE '^[[:space:]]+shell: bash$'; then
+    pass "privileged inventory step has shell: bash"
 else
-    flunk "audit flagged an allowlisted-only image"
-fi
-rm -rf "$root"
-
-exit "$fail"
-; then
-    pass "privileged-binary CI step runs bash with pipefail"
-else
-    flunk "privileged-binary CI step does not request a pipefail shell"
+    flunk "privileged inventory step could mask a failed audit"
 fi
 
 echo "— an image with only allowlisted privileged binaries passes —"
