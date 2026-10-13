@@ -49,6 +49,21 @@ if "$audit" "$root" >/dev/null 2>&1; then
 else
     flunk "audit flagged an allowlisted-only image"
 fi
+echo "— scanner failures and absent allowlist must NOT permit a release —"
+tools="$(mktemp -d)"
+printf '#!/bin/sh\nexit 42\n' > "$tools/getcap"
+chmod 755 "$tools/getcap"
+if PATH="$tools:$PATH" "$audit" "$root" >/dev/null 2>&1; then
+    flunk "privileged inventory passed after the capability scanner failed"
+else
+    pass "capability scanner failure blocks release"
+fi
+if "$audit" "$root" "$root/does-not-exist.allowlist" >/dev/null 2>&1; then
+    flunk "privileged inventory passed without an allowlist"
+else
+    pass "missing allowlist blocks release"
+fi
+rm -rf "$tools"
 rm -rf "$root"
 
 exit "$fail"
