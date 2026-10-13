@@ -85,20 +85,30 @@ install_ollama() {
     prepare_ai_state
     if [[ -x "$OLLAMA_BIN" ]]; then
         verify_ollama || die "existing Ollama binary failed integrity verification"
-        ok "Ollama already installed ($("$OLLAMA_BIN" --version 2>/dev/null | head -n1))"
-        return
+        # An intact but OUTDATED binary is still vulnerable. Earlier builds
+        # pinned 0.30.10, including versions affected by path traversal/SSRF.
+        local installed_version
+        installed_version="$("$OLLAMA_BIN" --version 2>/dev/null || true)"
+        if [[ "$installed_version" == *"ollama version is ${KRATOS_AI_OLLAMA_VERSION#v}"* ]]; then
+            ok "Ollama already installed ($installed_version)"
+            return
+        fi
+        warn "Ollama needs a security upgrade ($installed_version -> $KRATOS_AI_OLLAMA_VERSION)"
+        systemctl stop ollama.service >/dev/null 2>&1 || true
     fi
     require_network
-    info "Installing the Ollama runtime ($KRATOS_AI_OLLAMA_VERSION, one time)..."
+    info "Installing or updating the Ollama runtime ($KRATOS_AI_OLLAMA_VERSION)..."
+    need_cmd zstd tar python3
     local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
-    local tgz="$tmp/ollama.tgz" asset; asset="${KRATOS_AI_OLLAMA_URL##*/}"
-    curl -fL --proto "=https" --tlsv1.2 --connect-timeout 30 "$KRATOS_AI_OLLAMA_URL" -o "$tgz" \
+    local tarball="$tmp/ollama.tar.zst" asset; asset="${KRATOS_AI_OLLAMA_URL##*/}"
+    [[ "$asset" == *.tar.zst ]] || die "unsupported Ollama archive; require .tar.zst"
+    curl -fL --proto "=https" --tlsv1.2 --connect-timeout 30 "$KRATOS_AI_OLLAMA_URL" -o "$tarball" \
         || die "could not download the Ollama runtime"
 
     # INTEGRITY: never extract an unverified archive as root. Prefer a baked
     # pin; else verify against the release's sha256sum.txt (same pinned HTTPS
     # origin). Fail closed if neither is available.
-    local got want=""; got="$(sha256sum "$tgz" | awk '{print $1}')"
+    local got want=""; got="$(sha256sum "$tarball" | awk '{print $1}')""
     if [[ -n "$KRATOS_AI_OLLAMA_SHA256" ]]; then
         want="$KRATOS_AI_OLLAMA_SHA256"
     elif curl -fL --proto "=https" --tlsv1.2 --connect-timeout 30 \
@@ -111,10 +121,10 @@ install_ollama() {
 
     # Validate all member names, types and symlink targets before root extraction.
     # Unlike tar -tzf | grep -q, this reads the entire archive and fails closed.
-    python3 "$KRATOS_LIB/check-ollama-archive.py" "$tgz" \
+    python3 "$KRATOS_LIB/check-ollama-archive.py" "$tarball" \
         || die "Ollama archive contains unsafe members — refusing to extract"
     install -d -m 755 /usr/local
-    tar -xzf "$tgz" -C /usr/local --no-same-owner --no-same-permissions \
+    tar --zstd -xf "$tarball" -C /usr/local --no-same-owner --no-same-permissions \
         || die "could not unpack the Ollama runtime"
     [[ -x "$OLLAMA_BIN" ]] || die "Ollama binary not found after install ($OLLAMA_BIN)"
     # The daemon cannot write $AI_STATE or the root-owned hash; it can only
@@ -124,42 +134,59 @@ install_ollama() {
     ok "Ollama installed and integrity baseline recorded"
 }
 
+# Read distribution metadata with the SYSTEM Python in isolated mode rather
+# than executing potentially service-controlled venv scripts as root.
+installed_webui_version() {
+    python3 -I - "$AI_VENV" <<'PY'
+from importlib import metadata
+from pathlib import Path
+import sys
+for site in Path(sys.argv[1]).glob("lib/python*/site-packages"):
+    for dist in metadata.distributions(path=[str(site)]):
+        if (dist.metadata.get("Name", "").lower().replace("-", "_") == "open_webui"):
+            print(dist.version)
+            raise SystemExit(0)
+PY
+}
+
 setup_webui() {
     need_cmd python3
-    # The WebUI service must be able to write user DATA, not its own Python
-    # code. Previously it owned /opt/kratos-ai and its venv, permitting a
-    # compromised WebUI process to rewrite startup code persistently.
+    # Pin to a release including the published Sep 2026 SSRF/XSS/auth fixes.
+    # Versionless 'pip install open-webui' plus "already installed" bypassed
+    # upgrades entirely, leaving installations on known vulnerable versions.
+    local webui_version="0.12.0" installed
     getent group kratos-ai >/dev/null || groupadd --system kratos-ai
     getent passwd kratos-ai >/dev/null || useradd --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
     [[ ! -L "$AI_HOME" ]] || die "AI home is an unsafe symlink"
-    # Revoke service ownership of the parent BEFORE inspecting children.
-    # This closes a possible swap-to-symlink race during legacy migration.
     install -d -m 755 -o root -g root "$AI_HOME"
     [[ ! -L "$AI_VENV" && ! -L "$AI_HOME/data" ]] \
         || die "AI venv/data contains an unsafe symlink"
     install -d -m 750 -o kratos-ai -g kratos-ai "$AI_HOME/data"
-    if [[ -x "$AI_VENV/bin/open-webui" && "$(stat -c '%u' "$AI_VENV")" == 0 ]]; then
-        # An existing root-owned venv remains immutable to the service.
+    installed="$(installed_webui_version)"
+    # Only a fully root-owned venv can be reused; prior versions let the
+    # daemon edit its own code, so simply chowning it would bless implants.
+    if [[ -x "$AI_VENV/bin/open-webui" && "$installed" == "$webui_version" ]] \
+       && [[ "$(stat -c '%u' "$AI_VENV")" == 0 ]] \
+       && [[ -z "$(find "$AI_VENV" -xdev ! -uid 0 -print -quit)" ]]; then
         chmod -R go-w "$AI_VENV"
-        ok "Open WebUI already installed (root-owned code; separate data)"
+        ok "Open WebUI $webui_version already installed (root-owned code)"
         return
     fi
     require_network
-    info "Installing Open WebUI as an unprivileged account (then sealing its code as root)..."
-    # Existing service-owned venv could contain code planted by a compromised
-    # daemon. Rebuild it from packages, rather than blessing that code as root.
+    info "Installing patched Open WebUI $webui_version with unprivileged pip..."
     systemctl stop kratos-openwebui.service >/dev/null 2>&1 || true
     rm -rf -- "$AI_VENV"
     install -d -m 750 -o kratos-ai -g kratos-ai "$AI_VENV"
-    # Pip executes third-party package build code, so NEVER run this as root.
     runuser -u kratos-ai -- python3 -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
-    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install open-webui || die "could not install Open WebUI"
-    # Root controls executable code for subsequent launches. The isolated
-    # service keeps read/write access ONLY to /opt/kratos-ai/data.
+    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install "open-webui==$webui_version" \
+        || die "could not install patched Open WebUI"
+    installed="$(installed_webui_version)"
+    [[ "$installed" == "$webui_version" ]] \
+        || die "Open WebUI version mismatch after install (found $installed; want $webui_version)"
     chown -R root:root "$AI_VENV"
     chmod -R go-w "$AI_VENV"
-    ok "Open WebUI installed (pip unprivileged, venv sealed root-owned)"
+    ok "Open WebUI $webui_version installed (unprivileged build, immutable code)"
 }
 
 pull_model() {
