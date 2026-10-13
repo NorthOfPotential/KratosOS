@@ -136,6 +136,9 @@ run tests/test_polkit.sh
 step "local AI coder (hardware detection + model catalog)"
 run tests/test_ai.sh
 
+step "AI installer integrity state resists symlink overwrite"
+run bash tests/test_ai_state.sh
+
 step "privileged-binary release gate (SUID/caps allowlist)"
 run tests/test_suid_gate.sh
 
