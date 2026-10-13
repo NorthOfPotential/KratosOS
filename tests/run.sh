@@ -84,6 +84,9 @@ fi
 step "stylometry normalizer"
 run python3 -m unittest tests.test_stylo
 
+step "Ollama installer archive confinement"
+run python3 -m unittest tests.test_ollama_archive
+
 step "decoy rate math"
 run python3 -m unittest tests.test_decoy
 
