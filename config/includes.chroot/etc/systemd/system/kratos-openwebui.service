@@ -30,7 +30,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
-ReadWritePaths=/opt/kratos-ai
+# Open WebUI cannot rewrite its own venv/startup scripts. Only data persists.
+ReadWritePaths=/opt/kratos-ai/data
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
