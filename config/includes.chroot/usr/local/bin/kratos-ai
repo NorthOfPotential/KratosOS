@@ -93,31 +93,10 @@ install_ollama() {
     [[ "${got,,}" == "${want,,}" ]] || die "Ollama download FAILED checksum (got $got, want $want) — refusing to install"
     ok "Ollama download verified (sha256)"
 
-    # A same-origin checksum does NOT make an archive intrinsically safe to
-    # extract as root. Validate every tar member, including symlink targets,
-    # before unpacking. Reject device files, FIFOs, hardlinks, absolute paths,
-    # parent traversal and links that resolve outside /usr/local.
-    python3 - "$tgz" <<'PY' || die "Ollama archive contains unsafe members — refusing to extract"
-import posixpath
-import sys
-import tarfile
-
-with tarfile.open(sys.argv[1], "r:gz") as archive:
-    for member in archive:
-        name = member.name
-        parts = name.split("/")
-        if not name or posixpath.isabs(name) or ".." in parts or "\\x00" in name:
-            raise SystemExit(f"unsafe member path: {name!r}")
-        if not (member.isfile() or member.isdir() or member.issym()):
-            raise SystemExit(f"unsafe member type: {name!r}")
-        if member.issym():
-            link = member.linkname
-            if not link or posixpath.isabs(link) or "\\x00" in link:
-                raise SystemExit(f"unsafe link: {name!r} -> {link!r}")
-            target = posixpath.normpath(posixpath.join(posixpath.dirname(name), link))
-            if target == ".." or target.startswith("../") or target.startswith("/"):
-                raise SystemExit(f"link escapes installation directory: {name!r} -> {link!r}")
-PY
+    # Validate all member names, types and symlink targets before root extraction.
+    # Unlike tar -tzf | grep -q, this reads the entire archive and fails closed.
+    python3 "$KRATOS_LIB/check-ollama-archive.py" "$tgz" \
+        || die "Ollama archive contains unsafe members — refusing to extract"
     install -d -m 755 /usr/local
     tar -xzf "$tgz" -C /usr/local --no-same-owner --no-same-permissions \
         || die "could not unpack the Ollama runtime"
