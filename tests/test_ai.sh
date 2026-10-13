@@ -74,7 +74,8 @@ else flunk "no path-traversal screen before tar extraction"; fi
 if grep -qF -- '-C /usr/local' "$cli" && grep -q 'tar --zstd -xf' "$cli"; then
     pass "extracts into /usr/local (matches OLLAMA_BIN), not bare /usr"
 else flunk "extraction target mismatch with OLLAMA_BIN"; fi
-if grep -qE 'runuser -u kratos-ai -- .*pip.? install open-webui' "$cli"; then
+if grep -q 'runuser -u kratos-ai --' "$cli" \
+   && grep -q '"open-webui==$webui_version"' "$cli"; then
     pass "Open WebUI pip install runs as the unprivileged kratos-ai user, not root"
 else flunk "pip install still runs as root (hostile-dependency root-RCE)"; fi
 
