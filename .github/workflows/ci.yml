@@ -20,7 +20,7 @@ jobs:
       - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck nftables qemu-utils python3
+          sudo apt-get install -y shellcheck nftables qemu-utils python3 libcap2-bin
       - name: Create test users for the isolation attack suite
         run: |
           sudo groupadd -r kstealth || true
@@ -113,7 +113,7 @@ jobs:
         # without downloading the ISO: read the UNEXPECTED paths, then either drop
         # the package or add the path to tests/suid-allowlist.txt.
         run: |
-          apt-get install -y --no-install-recommends libcap2-bin >/dev/null 2>&1 || true
+          apt-get install -y --no-install-recommends libcap2-bin
           set -euo pipefail
           tests/suid-audit.sh ./chroot | tee kratosos-suid-inventory.txt
       - name: Attest build provenance
