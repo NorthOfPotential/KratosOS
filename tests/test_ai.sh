@@ -63,6 +63,11 @@ if grep -q 'v0.40.3' "$lib/ai.sh" \
     pass "security-patched Ollama and Open WebUI releases are selected and verified"
 else flunk "AI runtime still risks installing a vulnerable version"; fi
 
+if grep -q 'requires Python 3.11/3.12' "$cli" \
+   && grep -q 'python3.11 python3.12 python3' "$cli"; then
+    pass "Open WebUI refuses unsupported Python 3.13 instead of downgrading"
+else flunk "Open WebUI may run on unsupported Python or downgrade insecurely"; fi
+
 echo "— supply-chain: the Ollama runtime download is verified before it is unpacked as root —"
 cli="$root/usr/local/bin/kratos-ai"
 if grep -q 'sha256sum ' "$cli" && grep -q 'FAILED checksum' "$cli" \
