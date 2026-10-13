@@ -25,7 +25,7 @@ mkrf 1 bluetooth hci0 0
 mkrf 2 wwan      wwan0 1
 
 export KRATOS_RFKILL_SYS="$sys"
-export KRATOS_ETC="$tmp/etc" KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run"
+export KRATOS_ETC="$tmp/etc" KRATOS_STATE="$tmp/state" KRATOS_RUN="$tmp/run" KRATOS_LIB="$lib"
 mkdir -p "$KRATOS_ETC" "$KRATOS_STATE" "$KRATOS_RUN"
 . "$lib/common.sh"; . "$lib/net.sh"
 
