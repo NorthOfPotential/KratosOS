@@ -109,7 +109,12 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
 - **Open WebUI** is pinned to **0.12.0** rather than a versionless PyPI
   install, since older releases have published SSRF/XSS and authorization
   advisories. Setup checks the installed version and recreates out-of-date
-  environments. The dependency tree is installed as the unprivileged
+  environments. **Important:** Debian 13/Trixie's default Python is 3.13,
+  but Open WebUI 0.12.0 requires Python 3.11 or 3.12, which Trixie does not
+  package. If neither runtime is installed, setup FAILS CLOSED with an
+  explanation; do not bypass the interpreter requirement or downgrade to a
+  vulnerable Open WebUI. A supported Python runtime must be separately
+  provisioned before enabling the UI. The dependency tree is installed as the unprivileged
   `kratos-ai` account; the executable venv is then sealed root-owned and
   made read-only to the service. Only `/opt/kratos-ai/data` remains writable.
   **Dependency pinning is not a substitute for future security updates**.
