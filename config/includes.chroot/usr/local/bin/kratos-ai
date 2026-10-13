@@ -131,9 +131,12 @@ setup_webui() {
     # compromised WebUI process to rewrite startup code persistently.
     getent group kratos-ai >/dev/null || groupadd --system kratos-ai
     getent passwd kratos-ai >/dev/null || useradd --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
-    [[ ! -L "$AI_HOME" && ! -L "$AI_VENV" && ! -L "$AI_HOME/data" ]] \
-        || die "AI home/venv/data contains an unsafe symlink"
+    [[ ! -L "$AI_HOME" ]] || die "AI home is an unsafe symlink"
+    # Revoke service ownership of the parent BEFORE inspecting children.
+    # This closes a possible swap-to-symlink race during legacy migration.
     install -d -m 755 -o root -g root "$AI_HOME"
+    [[ ! -L "$AI_VENV" && ! -L "$AI_HOME/data" ]] \
+        || die "AI venv/data contains an unsafe symlink"
     install -d -m 750 -o kratos-ai -g kratos-ai "$AI_HOME/data"
     if [[ -x "$AI_VENV/bin/open-webui" && "$(stat -c '%u' "$AI_VENV")" == 0 ]]; then
         # An existing root-owned venv remains immutable to the service.
