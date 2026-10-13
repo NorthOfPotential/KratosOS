@@ -172,12 +172,25 @@ setup_webui() {
         ok "Open WebUI $webui_version already installed (root-owned code)"
         return
     fi
+    # Open WebUI explicitly supports Python 3.11/3.12. Debian 13 uses
+    # Python 3.13 by default, which upstream does NOT support. Never force an
+    # unsupported interpreter or silently install an old vulnerable WebUI.
+    local python_cmd="" candidate version
+    for candidate in python3.11 python3.12 python3; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        version="$("$candidate" -c 'import sys;print("%d.%d"%sys.version_info[:2])')" || continue
+        if [[ "$version" == 3.11 || "$version" == 3.12 ]]; then
+            python_cmd="$(command -v "$candidate")"
+            break
+        fi
+    done
+    [[ -n "$python_cmd" ]] || die "Open WebUI $webui_version requires Python 3.11/3.12; Debian 13 defaults to unsupported 3.13. Install an independently managed, updated Python 3.11/3.12 runtime first; refusing to install a vulnerable or incompatible WebUI."
     require_network
     info "Installing patched Open WebUI $webui_version with unprivileged pip..."
     systemctl stop kratos-openwebui.service >/dev/null 2>&1 || true
     rm -rf -- "$AI_VENV"
     install -d -m 750 -o kratos-ai -g kratos-ai "$AI_VENV"
-    runuser -u kratos-ai -- python3 -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
+    runuser -u kratos-ai -- "$python_cmd" -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install "open-webui==$webui_version" \
         || die "could not install patched Open WebUI"
