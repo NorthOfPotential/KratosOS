@@ -58,9 +58,9 @@ if grep -q 'sha256sum ' "$cli" && grep -q 'FAILED checksum' "$cli" \
    && grep -q 'cannot verify the Ollama download' "$cli"; then
     pass "Ollama tarball SHA256 is verified, failing closed when no checksum"
 else flunk "Ollama download is not checksum-verified (root-RCE risk)"; fi
-if grep -q 'refusing to extract' "$cli" && grep -q 'tar -tzf' "$cli"; then
-    pass "archive members are screened for path traversal before extraction"
-else flunk "no path-traversal screen before tar extraction"; fi
+if grep -q 'refusing to extract' "$cli" && grep -q 'check-ollama-archive.py' "$cli"; then
+    pass "archive path/link validation happens before root extraction"
+else flunk "no archive path/link validator before root extraction"; fi
 if grep -qF -- '-C /usr/local' "$cli" && ! grep -qE -- 'tar -xzf [^ ]+ -C /usr[[:space:]]' "$cli"; then
     pass "extracts into /usr/local (matches OLLAMA_BIN), not bare /usr"
 else flunk "extraction target mismatch with OLLAMA_BIN"; fi
@@ -69,15 +69,40 @@ if grep -qE 'runuser -u kratos-ai -- .*pip.? install open-webui' "$cli"; then
 else flunk "pip install still runs as root (hostile-dependency root-RCE)"; fi
 
 echo "— tamper monitoring: the Ollama runtime is integrity-gated on every start —"
-if grep -qE 'sha256sum .*OLLAMA_BIN.* > .*OLLAMA_SHA_BASELINE' "$cli"; then
-    pass "install records a SHA256 integrity baseline for the binary"
-else flunk "no integrity baseline recorded at install"; fi
+if grep -q 'save_ai_control_file "$OLLAMA_SHA_BASELINE"' "$cli" && grep -q 'mv -Tf' "$cli"; then
+    pass "root-owned integrity baseline published by atomic rename (no symlink follow)"
+else flunk "unsafe integrity baseline storage"; fi
 if grep -q 'INTEGRITY FAILURE' "$cli" && grep -qE 'verify-ollama\)' "$cli"; then
     pass "verify_ollama fails closed on a binary mismatch"
 else flunk "no fail-closed integrity verification"; fi
 if grep -qE '^ExecStartPre=\+/usr/local/bin/kratos-ai verify-ollama' "$root/etc/systemd/system/ollama.service"; then
     pass "ollama.service re-verifies the binary (ExecStartPre) before every start"
 else flunk "ollama.service has no ExecStartPre integrity gate"; fi
+
+echo "— AI daemon must not control root-written state —"
+if grep -q 'install -d -m 755 -o root -g root "$AI_STATE"' "$cli" \
+   && grep -q 'install -d -m 750 -o ollama -g ollama "$AI_STATE/models"' "$cli" \
+   && grep -q '^ReadWritePaths=/var/lib/kratos/ai/models' "$root/etc/systemd/system/ollama.service" \
+   && ! grep -q '^ReadWritePaths=/var/lib/kratos/ai
+for u in ollama.service kratos-openwebui.service; do
+    f="$root/etc/systemd/system/$u"
+    if grep -q '^NoNewPrivileges=yes' "$f" && grep -q '^ProtectSystem=strict' "$f" \
+       && grep -q '^RestrictAddressFamilies=' "$f"; then
+        pass "$u hardened (no-new-privs, strict system, restricted address families)"
+    else flunk "$u missing baseline sandboxing"; fi
+done
+
+echo "— AI services ship DISABLED (provisioned by 'kratos-ai setup', not at build) —"
+if ! grep -rq 'ollama\.service\|kratos-openwebui\.service' "$here/../config/hooks/live/" 2>/dev/null; then
+    pass "AI services are not auto-enabled during the build"
+else flunk "AI services enabled at build (must be enabled only after setup)"; fi
+
+exit "$fail"
+ "$root/etc/systemd/system/ollama.service"; then
+    pass "state and SHA256 parent are root-owned; model storage is daemon-owned"
+else
+    flunk "AI daemon has control of root-written state or broad write permissions"
+fi
 
 echo "— AI services are sandboxed (NoNewPrivileges + ProtectSystem=strict) —"
 for u in ollama.service kratos-openwebui.service; do
