@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # intentional literal $VARIABLE patterns in grep assertions
 # Local AI coder: model selection scales with hardware, the picker is
 # overridable, and the CLI/services/launcher are shipped correctly (disabled,
 # gated on their binaries, provisioned on first run). Real provisioning (Ollama
