@@ -89,6 +89,16 @@ else
     flunk "daemon can write root-owned control state"
 fi
 
+echo "— WebUI must not persist compromised code across restarts —"
+if grep -q 'chown -R root:root "$AI_VENV"' "$cli" \
+   && grep -q 'chmod -R go-w "$AI_VENV"' "$cli" \
+   && grep -q '^ReadWritePaths=/opt/kratos-ai/data' "$root/etc/systemd/system/kratos-openwebui.service" \
+   && ! grep -Fxq 'ReadWritePaths=/opt/kratos-ai' "$root/etc/systemd/system/kratos-openwebui.service"; then
+    pass "WebUI code is root-owned, only user data is writable"
+else
+    flunk "WebUI service can change its own startup code"
+fi
+
 echo "— AI services are sandboxed (NoNewPrivileges + ProtectSystem=strict) —"
 for u in ollama.service kratos-openwebui.service; do
     f="$root/etc/systemd/system/$u"
