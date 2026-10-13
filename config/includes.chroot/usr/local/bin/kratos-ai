@@ -10,6 +10,16 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
       LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT PYTHONPATH PYTHONSTARTUP PYTHONHOME 2>/dev/null || true
 
+# Production entry points must never source caller-selected privileged code.
+# The main 'kratos' CLI already enforces this; apply the same safeguard to
+# kratos-ai, including its systemd root ExecStartPre integrity verifier.
+_self="$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")"
+if [[ "$_self" == /usr/local/bin/kratos-ai ]]; then
+    unset KRATOS_LIB AI_HOME AI_VENV AI_STATE OLLAMA_BIN OLLAMA_SHA_BASELINE \
+          OLLAMA_HOST WEBUI_HOST WEBUI_PORT
+fi
+unset _self
+
 KRATOS_LIB="${KRATOS_LIB:-/usr/local/lib/kratos}"
 # shellcheck source=common.sh
 . "$KRATOS_LIB/common.sh"
