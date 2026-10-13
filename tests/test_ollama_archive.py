@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import pathlib
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -70,6 +71,31 @@ class OllamaArchiveTests(unittest.TestCase):
 
     def test_devices_refused(self):
         self.check([("bin/odd", "device", "")], False)
+
+    def test_modern_zstd_release(self):
+        # The published Ollama 0.40.3 Linux bundle is tar.zst, not tar.gz.
+        with tempfile.TemporaryDirectory() as d:
+            plain = pathlib.Path(d) / "vendor.tar"
+            compressed = pathlib.Path(d) / "vendor.tar.zst"
+            with tarfile.open(plain, "w") as tf:
+                member = tarfile.TarInfo("bin/ollama")
+                member.size = 1
+                tf.addfile(member, io.BytesIO(b"x"))
+            subprocess.run(["zstd", "-q", "-f", str(plain), "-o", str(compressed)], check=True)
+            validator.validate(compressed)
+
+    def test_modern_zstd_escaping_link_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            plain = pathlib.Path(d) / "malicious.tar"
+            compressed = pathlib.Path(d) / "malicious.tar.zst"
+            with tarfile.open(plain, "w") as tf:
+                link = tarfile.TarInfo("lib/ollama/unsafe")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "../../../etc"
+                tf.addfile(link)
+            subprocess.run(["zstd", "-q", "-f", str(plain), "-o", str(compressed)], check=True)
+            with self.assertRaises(validator.UnsafeArchive):
+                validator.validate(compressed)
 
 
 if __name__ == "__main__":

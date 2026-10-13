@@ -93,17 +93,30 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
 
 `kratos-ai setup` installs code as root, so the downloads are verified:
 
-- The **Ollama runtime** is pinned to a specific release and its **SHA256 is
-  verified before extraction** (fail-closed). The archive is screened for
-  path-traversal members and unpacked into `/usr/local`. Pin the artifact
-  independently of the origin with:
+- The **Ollama runtime** is pinned to **v0.40.3** (current on 2026-10-13)
+  with its official `.tar.zst` release-asset SHA256 embedded in the build.
+  The checksum is verified before extraction (fail-closed), and the tar stream
+  is screened for path traversal, symlink escapes and special files.
+  A verified older installed Ollama is **upgraded** on the next
+  `sudo kratos-ai setup` instead of being silently reused. To override the
+  digest when intentionally using an alternative pinned release:
   ```
   sudo KRATOS_AI_OLLAMA_SHA256=<hex> kratos-ai setup
   ```
   Full origin authentication (a signature over the tarball) isn't offered
   upstream, so this verifies integrity against the pinned release; the SHA256
   pin is the strongest available.
-- **Open WebUI** installs from PyPI; its large dependency tree is installed as
-  the unprivileged `kratos-ai` service account, never as root.
+- **Open WebUI** is pinned to **0.12.0** rather than a versionless PyPI
+  install, since older releases have published SSRF/XSS and authorization
+  advisories. Setup checks the installed version and recreates out-of-date
+  environments. **Important:** Debian 13/Trixie's default Python is 3.13,
+  but Open WebUI 0.12.0 requires Python 3.11 or 3.12, which Trixie does not
+  package. If neither runtime is installed, setup FAILS CLOSED with an
+  explanation; do not bypass the interpreter requirement or downgrade to a
+  vulnerable Open WebUI. A supported Python runtime must be separately
+  provisioned before enabling the UI. The dependency tree is installed as the unprivileged
+  `kratos-ai` account; the executable venv is then sealed root-owned and
+  made read-only to the service. Only `/opt/kratos-ai/data` remains writable.
+  **Dependency pinning is not a substitute for future security updates**.
 - **Models** are pulled by Ollama, which verifies each blob against its
   manifest digest.
