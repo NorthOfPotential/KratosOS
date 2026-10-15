@@ -35,7 +35,8 @@ param(
     [int]$MemMB     = 6144,     # raise to 8192+ if your PC has >=16 GB RAM (inner VMs want RAM)
     [int]$CPUs      = 2,
     [int]$DiskGB    = 30,       # the VM's own virtual disk (for an in-VM install, if you do one)
-    [switch]$Wait               # getiso: keep polling until the CI build publishes the ISO
+    [switch]$Wait,              # getiso: dispatch a matching build if needed, then poll
+    [string]$Branch = 'claude/privacy-centric-os-vgpsve' # branch whose source tree the ISO must match
 )
 
 # NOTE: 'Continue', not 'Stop'. Native tools (gh, VBoxManage) write progress and
@@ -43,7 +44,7 @@ param(
 # error and aborts. We check $LASTEXITCODE explicitly instead.
 $ErrorActionPreference = 'Continue'
 $Owner = 'NorthOfPotential'; $Repo = 'KratosOS'
-$RawBase = "https://raw.githubusercontent.com/$Owner/$Repo/main"
+$RawBase = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch"
 $ActionsUrl = "https://github.com/$Owner/$Repo/actions"
 
 function Say   ($m) { Write-Host "  $m" }
@@ -84,14 +85,40 @@ function Phase-Deps {
 
 function Ensure-Work { New-Item -ItemType Directory -Force -Path $Work | Out-Null }
 
-function Get-LatestIsoRunId {
-    # The build-iso job ONLY runs on workflow_dispatch (or tags), so only those
-    # runs carry the kratosos-iso artifact. A plain push/PR run succeeds its test
-    # job but has no ISO - don't pick those. Newest successful dispatch run wins.
-    $id = gh run list --repo "$Owner/$Repo" --workflow ci.yml --event workflow_dispatch --status success `
-            --json databaseId,createdAt -q 'sort_by(.createdAt)|reverse|.[0].databaseId' 2>&1 |
-          Where-Object { $_ -match '^\d+$' } | Select-Object -First 1
-    return $id
+function Get-CommitTreeSha ([string]$Revision) {
+    # Git trees (file content) are the identity we care about. A merge commit
+    # may have a different SHA yet exactly the same files as the topic branch.
+    $out = gh api "repos/$Owner/$Repo/git/commits/$Revision" --jq '.tree.sha' 2>&1
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return ($out | Where-Object { $_ -match '^[0-9a-f]{40}$' } | Select-Object -First 1)
+}
+
+function Get-ExpectedTreeSha {
+    $head = gh api "repos/$Owner/$Repo/branches/$Branch" --jq '.commit.sha' 2>&1
+    if ($LASTEXITCODE -ne 0) { Die "Cannot resolve branch '$Branch': $head" }
+    $head = $head | Where-Object { $_ -match '^[0-9a-f]{40}$' } | Select-Object -First 1
+    if (-not $head) { Die "GitHub returned no valid HEAD SHA for '$Branch'." }
+    $tree = Get-CommitTreeSha $head
+    if (-not $tree) { Die "Cannot resolve the Git tree for HEAD $head." }
+    Say "branch $Branch at $head (tree $tree)"
+    return $tree
+}
+
+function Get-LatestIsoRunId ([string]$ExpectedTree) {
+    # A successful run from another branch, or an older source revision, is NOT
+    # a valid installer test. Accept a main-branch merge only if its Git tree
+    # exactly matches the requested branch's tree.
+    $json = gh run list --repo "$Owner/$Repo" --workflow ci.yml --event workflow_dispatch --status success --limit 100 --json databaseId,headSha,createdAt 2>&1
+    if ($LASTEXITCODE -ne 0) { Die "Cannot list GitHub builds: $json" }
+    try { $runs = @($json | ConvertFrom-Json) }
+    catch { Die "Cannot parse GitHub build list: $_" }
+    foreach ($run in ($runs | Sort-Object createdAt -Descending)) {
+        if (-not $run.headSha) { continue }
+        if ((Get-CommitTreeSha $run.headSha) -eq $ExpectedTree) {
+            return $run.databaseId
+        }
+    }
+    return $null
 }
 
 function Phase-GetIso {
@@ -105,9 +132,11 @@ function Phase-GetIso {
         gh auth login --hostname github.com --web --git-protocol https
     }
 
+    $expectedTree = Get-ExpectedTreeSha
+    $buildTriggered = $false
     $rid = $null
     for ($try = 0; ; $try++) {
-        $rid = Get-LatestIsoRunId
+        $rid = Get-LatestIsoRunId $expectedTree
         if (-not $rid) {
             Say "no completed workflow_dispatch build yet..."
         } else {
@@ -150,6 +179,12 @@ This is a transfer problem on this PC, not a missing build. Try:
 "@
             }
         }
+        if ($Wait -and -not $buildTriggered) {
+            Say "No usable ISO yet for this branch's Git tree; dispatching a fresh build..."
+            $dispatch = gh workflow run ci.yml --repo "$Owner/$Repo" --ref "$Branch" 2>&1
+            if ($LASTEXITCODE -ne 0) { Die "Cannot dispatch a build on $Branch: $dispatch" }
+            $buildTriggered = $true
+        }
         if (-not $Wait) {
             Die @"
 No downloadable ISO yet.
@@ -168,19 +203,32 @@ The cloud build may still be running, or it may have failed.
     if (-not $iso) { Die "download finished but no kratosos-*.iso is in $Work" }
     Say "ISO: $($iso.FullName)  ($([math]::Round($iso.Length/1GB,2)) GB)"
 
+    # The checksum and provenance are security gates, not warnings. Never boot
+    # an ISO if the artifact is missing verification data or verification fails.
     $sums = Join-Path $Work 'SHA256SUMS'
-    if (Test-Path $sums) {
-        $want = (Get-Content $sums | Where-Object { $_ -match [regex]::Escape($iso.Name) } |
-                 ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1)
-        if ($want) {
-            $got = (Get-FileHash $iso.FullName -Algorithm SHA256).Hash.ToLower()
-            if ($got -eq $want.ToLower()) { Say "checksum OK (SHA256SUMS)" }
-            else { Warn "CHECKSUM MISMATCH - do not trust this ISO (want $want got $got)" }
-        }
+    if (-not (Test-Path $sums)) { Die 'SHA256SUMS missing from the ISO artifact.' }
+    $hashLine = Get-Content $sums | Where-Object {
+        (($_ -split '\s+')[-1]).TrimStart('*') -eq $iso.Name
+    } | Select-Object -First 1
+    if (-not $hashLine) { Die "No checksum found for $($iso.Name)." }
+    $want = ($hashLine -split '\s+')[0]
+    if ($want -notmatch '^[0-9a-fA-F]{64}$') { Die 'Malformed SHA256SUMS entry.' }
+    $got = (Get-FileHash $iso.FullName -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $want.ToLower()) { Die "CHECKSUM MISMATCH: do not boot this ISO (expected $want, got $got)." }
+    Say 'checksum VERIFIED (SHA256SUMS)'
+
+    $info = Join-Path $Work 'kratosos-build-info.txt'
+    if (-not (Test-Path $info)) { Die 'kratosos-build-info.txt missing from the ISO artifact.' }
+    $revisionLine = Get-Content $info | Where-Object { $_ -match '^source_revision:\s+[0-9a-f]{40}\s*$' } | Select-Object -First 1
+    if (-not $revisionLine) { Die 'Build info has no valid source revision.' }
+    $sourceRevision = ($revisionLine -split '\s+')[-1]
+    if ((Get-CommitTreeSha $sourceRevision) -ne $expectedTree) {
+        Die "Artifact revision $sourceRevision does not match branch $Branch; refuse stale or unrelated ISO."
     }
-    # Optional: verify the build-provenance attestation (proves CI built it).
-    gh attestation verify $iso.FullName -R "$Owner/$Repo" 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { Say "build provenance attestation VERIFIED" }
+    Say "build source VERIFIED ($sourceRevision)"
+    $attestation = gh attestation verify $iso.FullName -R "$Owner/$Repo" 2>&1
+    if ($LASTEXITCODE -ne 0) { Die "Build provenance attestation FAILED: $attestation" }
+    Say 'build provenance attestation VERIFIED'
     Set-Content -Path (Join-Path $Work '.iso-path') -Value $iso.FullName
     Say "Saved ISO path for the 'vm' step."
 }
