@@ -17,16 +17,41 @@ chk "$nm" '^wifi\.cloned-mac-address=random'     "Wi-Fi MAC randomized per conne
 chk "$nm" '^ethernet\.cloned-mac-address=random' "Ethernet MAC randomized per connection"
 chk "$nm" '^ipv4\.dhcp-send-hostname=false'      "hostname not sent in DHCP"
 chk "$nm" '^ipv4\.dhcp-client-id=mac'            "DHCP client-id tied to the (random) MAC, not a stable DUID"
-chk "$nm" '^ipv4\.dhcp-fqdn=$'                   "no DHCP FQDN sent"
 chk "$nm" '^connection\.mdns=0'                  "mDNS off"
 chk "$nm" '^connection\.llmnr=0'                 "LLMNR off"
 
 echo "— DNS goes to the configured resolver, not the network's (live-probe finding) —"
-# NetworkManager must ignore the DHCP/RA-advertised resolver, or systemd-resolved
-# installs it as PER-LINK DNS and prefers it over the global Quad9 + authenticated
-# DoT config — silently sending every lookup to the network's own resolver.
-chk "$nm" '^ipv4\.ignore-auto-dns=(true|yes|1)'  "ignore DHCP-provided IPv4 DNS (use Quad9 DoT)"
-chk "$nm" '^ipv6\.ignore-auto-dns=(true|yes|1)'  "ignore RA/DHCPv6-provided IPv6 DNS (use Quad9 DoT)"
+# NetworkManager must not hand the DHCP/RA-advertised resolver to
+# systemd-resolved as per-link DNS (it would be used alongside / instead of
+# global Quad9 DoT). NM does this whenever resolved runs unless told not to;
+# the old per-connection ipv4/ipv6.ignore-auto-dns "defaults" were silently
+# ignored by NM ("unknown key"; VM install test: ens3 got DNS 10.0.2.3).
+main="$(sed -n '/^\[main\]/,/^\[/p' "$nm")"
+if grep -qx 'dns=none' <<<"$main" && grep -qx 'systemd-resolved=false' <<<"$main"; then
+    pass "NetworkManager never pushes network-provided DNS to the resolver"
+else
+    flunk "NetworkManager can push DHCP/RA DNS to systemd-resolved (need [main] dns=none + systemd-resolved=false)"
+fi
+# [connection] only honours a fixed set of keys; anything else is dropped with
+# a log warning, i.e. a privacy setting that silently does nothing. Allowlist =
+# keys NetworkManager 1.52 (trixie) accepted in the VM test.
+conn_ok=" wifi.cloned-mac-address ethernet.cloned-mac-address ipv4.dhcp-send-hostname ipv4.dhcp-client-id ipv6.dhcp-duid ipv6.ip6-privacy connection.mdns connection.llmnr "
+bad_keys=""
+while IFS='=' read -r k _; do
+    [[ -z "$k" || "$k" == \#* || "$k" == \[* ]] && continue
+    [[ "$conn_ok" == *" $k "* ]] || bad_keys="$bad_keys $k"
+done < <(sed -n '/^\[connection\]/,/^\[/p' "$nm")
+if [[ -z "$bad_keys" ]]; then
+    pass "every [connection] default is one NetworkManager actually honours"
+else
+    flunk "[connection] keys NetworkManager ignores (no effect):$bad_keys"
+fi
+# /etc/resolv.conf must point at resolved's stub. live-build ships it as an
+# empty regular file and the vendor tmpfiles rule ("L!") never replaces an
+# existing file, so the installed system had an empty resolv.conf.
+tmpf="$root/etc/tmpfiles.d/systemd-resolve.conf"
+chk "$tmpf" '^L\+!?[[:space:]]+/etc/resolv\.conf[[:space:]].*\.\./run/systemd/resolve/stub-resolv\.conf$' \
+    "/etc/resolv.conf is forced to the systemd-resolved stub at boot"
 # The system resolver itself must be configured for Quad9 over authenticated DoT
 # (a #hostname on each server so the TLS certificate name is verified).
 rc="$root/etc/systemd/resolved.conf.d/kratos-privacy.conf"

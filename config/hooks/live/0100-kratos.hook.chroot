@@ -180,6 +180,21 @@ for b in /usr/share/calamares/branding/*/branding.desc \
         -e 's/^([[:space:]]*bootloaderEntryName:[[:space:]]*).*/\1KratosOS/' \
         "$b"
 done
+# Encrypted installs must be able to unlock their root at boot. Calamares
+# installs offline from this image, so the initramfs LUKS support has to be
+# here already; without it every "Encrypt system" install drops to
+# "(initramfs)" after GRUB. Fail the build rather than ship that.
+if [ -x /usr/bin/calamares ] && [ ! -e /usr/share/initramfs-tools/hooks/cryptroot ]; then
+    echo "KratosOS: cryptsetup-initramfs missing; encrypted installs would not boot" >&2
+    exit 1
+fi
+# Installer reliability: run our uncapped target unmount right before
+# Calamares' own "umount" job, whose 10-second-capped `umount -lv` otherwise
+# fails good installs on slow disks ("could not be unmounted. Installation
+# failed."). Fails the build if settings.conf can't be patched.
+if [ -x /usr/bin/calamares ]; then
+    /usr/local/libexec/kratos/kratos-calamares-unmount --patch-settings /etc/calamares/settings.conf
+fi
 # Default KDE wallpaper for brand-new user profiles (best-effort; the
 # kratos-look autostart also applies it live).
 update-mime-database /usr/share/mime >/dev/null 2>&1 || true

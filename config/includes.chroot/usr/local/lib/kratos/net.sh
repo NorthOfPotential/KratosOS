@@ -466,8 +466,18 @@ dns_status() {
 net_status() {
     load_config
     info "${BOLD}Network mode:${RESET} $(saved_mode)"
+    # Reading the ruleset needs root. Unprivileged, `nft list` always fails, so
+    # the plain `kratos status` the login banner suggests used to print
+    # "[FAIL] firewall NOT loaded" on a correctly firewalled system (VM install
+    # test). Without root, report the service state and point to sudo instead.
     if nft list table inet kratos >/dev/null 2>&1; then
         ok "firewall loaded"
+    elif (( ${KRATOS_TEST_EUID:-$EUID} != 0 )); then
+        if systemctl is-active --quiet kratos-firewall.service 2>/dev/null; then
+            warn "firewall service active (run 'sudo kratos status' to verify the loaded ruleset)"
+        else
+            bad "firewall service NOT active"
+        fi
     else
         bad "firewall NOT loaded"
     fi

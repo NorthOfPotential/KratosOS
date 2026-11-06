@@ -84,6 +84,20 @@ cage
 seatd
 ovmf
 cryptsetup
+# cryptsetup-initramfs: the initramfs "cryptroot" hook/scripts that unlock a LUKS
+# root at boot. Calamares installs OFFLINE from this image, so if it is not in
+# the image every "Encrypt system" install is UNBOOTABLE: GRUB unlocks /boot,
+# then the initramfs has no cryptsetup and drops to "(initramfs)" (VM install
+# test): nothing else in the image pulls it in.
+cryptsetup-initramfs
+# systemd-cryptsetup: the crypttab generator that unlocks every LUKS volume
+# other than root at boot (trixie split it out of systemd). Without it the
+# installer's encrypted swap is never opened: swap stays off and boot waits
+# ~90 s for the device, then swap.target fails (VM install test).
+systemd-cryptsetup
+# keyutils: Debian's Calamares helper also apt-installs it for LUKS installs;
+# pin it rather than rely on it arriving transitively.
+keyutils
 # acl: setfacl grants libvirt-qemu execute-only traversal of the 0700 vault so
 # the non-root VMs can reach their disks without loosening permissions (R8-1).
 acl

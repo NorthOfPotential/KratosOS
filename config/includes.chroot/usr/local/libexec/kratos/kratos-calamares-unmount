@@ -1,0 +1,102 @@
+#!/bin/sh
+# kratos-calamares-unmount — run by the Calamares "kratos-unmount" job, which
+# the image hook inserts into /etc/calamares/settings.conf immediately BEFORE
+# Calamares' own "umount" job.
+#
+# Why this exists (VM install test, Calamares 3.3.14): the stock umount job ends
+# with `umount -lv <target root>` under a HARD-CODED 10-second timeout and calls
+# the install failed if that does not return 0 in time:
+#     "The device mounted at '/tmp/calamares-root-XXXX' could not be unmounted.
+#      Installation failed."
+# On a freshly written ~10 GB ext4-on-LUKS root the last unmount routinely takes
+# longer than 10 s on slow storage (VirtualBox dynamic disks, emulated AES), so a
+# perfectly good install was reported as failed. It ALSO fails if anything (an
+# auto-mounter, a file manager) still holds the target, which is the other cause
+# we hit in VirtualBox (see /etc/xdg/device_automounter_kcmrc).
+#
+# So we do the real unmount here, with no 10 s cap: sync, unmount the target
+# tree deepest-first, retrying while it is busy, and only as a last resort
+# detach lazily. Then — because the stock job unconditionally runs
+# `umount -lv <root>` and fails on "not mounted" — we leave a tiny empty tmpfs on
+# the root directory for it to unmount instantly. Nothing is ever written to it.
+#
+# Usage:
+#   kratos-calamares-unmount [ROOT...]          (default: every /tmp/calamares-root-*)
+#   kratos-calamares-unmount --patch-settings FILE   (build time: edit settings.conf)
+set -u
+
+log() { echo "kratos-unmount: $*"; }
+
+# Insert "- kratos-unmount" directly before the "- umount" exec step. Idempotent.
+# Exit non-zero if the file has no umount step to anchor on, so the image build
+# fails loudly instead of silently shipping an installer without the fix.
+patch_settings() {
+    f=$1
+    [ -f "$f" ] || { log "no $f"; return 1; }
+    if ! grep -Eq '^[[:space:]]*-[[:space:]]+kratos-unmount[[:space:]]*$' "$f"; then
+        sed -i -E 's/^([[:space:]]*)-[[:space:]]+umount[[:space:]]*$/\1- kratos-unmount\n\1- umount/' "$f"
+    fi
+    # Verify: kratos-unmount must be the step right before umount.
+    awk '
+        /^[[:space:]]*-[[:space:]]+kratos-unmount[[:space:]]*$/ { prev = "k"; next }
+        /^[[:space:]]*-[[:space:]]+umount[[:space:]]*$/ { if (prev == "k") ok = 1; prev = ""; next }
+        { prev = "" }
+        END { exit ok ? 0 : 1 }' "$f" || { log "could not insert kratos-unmount before umount in $f"; return 1; }
+}
+
+if [ "${1:-}" = "--patch-settings" ]; then
+    patch_settings "${2:?settings.conf path}"
+    exit $?
+fi
+
+TRIES=${KRATOS_UNMOUNT_TRIES:-60}   # x 2 s between tries = up to ~2 min per busy mount
+PAUSE=${KRATOS_UNMOUNT_PAUSE:-2}
+
+# Unmount everything mounted at $1 (stacked mounts included). Busy -> wait and
+# retry; still busy after TRIES -> report who holds it, then detach lazily.
+unmount_one() {
+    mp=$1; n=0
+    while mountpoint -q "$mp"; do
+        umount "$mp" 2>/dev/null && continue
+        n=$((n + 1))
+        if [ "$n" -lt "$TRIES" ]; then
+            sleep "$PAUSE"
+            continue
+        fi
+        log "$mp still busy after $n tries; holders:"
+        fuser -vm "$mp" 2>&1 | sed 's/^/    /'
+        log "detaching $mp lazily"
+        umount -l "$mp" || { log "lazy unmount of $mp failed"; return 1; }
+    done
+}
+
+unmount_root() {
+    root=$1
+    log "unmounting target $root"
+    sync
+    # Deepest first: a child path sorts after its parent, so reverse order works.
+    findmnt -Rrn -o TARGET "$root" 2>/dev/null | sort -ru | while IFS= read -r mp; do
+        [ "$mp" = "$root" ] && continue
+        unmount_one "$mp" || exit 1
+    done || return 1
+    sync
+    unmount_one "$root" || return 1
+    sync
+    # Placeholder so Calamares' own capped `umount -lv <root>` succeeds at once.
+    mount -t tmpfs -o size=16k,mode=0700,nosuid,nodev,noexec kratos-unmounted "$root" \
+        || { log "could not mount placeholder on $root"; return 1; }
+    log "target $root unmounted"
+}
+
+if [ "$#" -gt 0 ]; then
+    roots=$(printf '%s\n' "$@")
+else
+    roots=$(findmnt -rn -o TARGET | grep -E '^/tmp/calamares-root-[^/]+$' | sort -u)
+fi
+[ -n "$roots" ] || { log "no Calamares target is mounted; nothing to do"; exit 0; }
+
+rc=0
+for r in $roots; do
+    unmount_root "$r" || rc=1
+done
+exit "$rc"

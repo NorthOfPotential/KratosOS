@@ -30,10 +30,20 @@ fi
 # /etc/xdg/kscreenlockerrc, so an installed system needs no repair and a failure
 # here fails CLOSED. Relax it ONLY in the live session, where the passwordless
 # amnesic user would otherwise be locked out with no way back in.
-if grep -qw boot=live /proc/cmdline 2>/dev/null || [ -e /run/live/medium ]; then
+if grep -qw boot=live "${KRATOS_PROC_CMDLINE:-/proc/cmdline}" 2>/dev/null || [ -e /run/live/medium ]; then
     if command -v kwriteconfig6 >/dev/null 2>&1; then
         kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock false 2>/dev/null || true
         kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false 2>/dev/null || true
+        # The screen locker already loaded /etc/xdg's Autolock=true when the
+        # session started and does not watch its config file, so the write
+        # above alone changes nothing until the next login (VM test: the live
+        # desktop still locked after 5 idle minutes, mid-install). Tell it to
+        # re-read; retry briefly in case it isn't on the session bus yet.
+        for _ in 1 2 3 4 5 6; do
+            dbus-send --session --print-reply --dest=org.freedesktop.ScreenSaver \
+                /ScreenSaver org.kde.screensaver.configure >/dev/null 2>&1 && break
+            sleep 5
+        done
     fi
 fi
 

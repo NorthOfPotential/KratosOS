@@ -1,0 +1,9 @@
+# KratosOS: unmount the install target ourselves, with no 10-second cap, right
+# before Calamares' own "umount" job (whose capped `umount -lv` otherwise fails
+# a good install on slow disks). See /usr/local/libexec/kratos/kratos-calamares-unmount.
+---
+type:       "job"
+name:       "kratos-unmount"
+interface:  "process"
+command:    "/usr/local/libexec/kratos/kratos-calamares-unmount"
+timeout:    900
