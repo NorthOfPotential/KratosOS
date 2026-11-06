@@ -142,6 +142,9 @@ run bash tests/test_ai_state.sh
 step "privileged-binary release gate (SUID/caps allowlist)"
 run tests/test_suid_gate.sh
 
+step "package lists are valid live-build input"
+run tests/test_package_lists.sh
+
 echo
 if (( status == 0 )); then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi
 exit "$status"
