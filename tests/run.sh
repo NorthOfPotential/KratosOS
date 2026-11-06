@@ -148,6 +148,9 @@ run tests/test_package_lists.sh
 step "installer final unmount (no 10 s Calamares cap)"
 run tests/test_calamares_unmount.sh
 
+step "installer works offline (LUKS initramfs, GRUB in image)"
+run tests/test_installer_offline.sh
+
 echo
 if (( status == 0 )); then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi
 exit "$status"
