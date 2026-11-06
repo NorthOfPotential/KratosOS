@@ -92,7 +92,10 @@ acl
 tpm2-tools
 gnupg
 xz-utils
-zstd  # Ollama >=0.35 official Linux release archives are .tar.zst
+# zstd: Ollama >=0.35 official Linux release archives are .tar.zst.
+# (live-build reads every word on a non-comment line as a package name, so
+# comments must be on their own line, never trailing.)
+zstd
 python3
 python3-pyqt6
 # defusedxml: parse the (verified) Whonix libvirt XML with a parser hardened
