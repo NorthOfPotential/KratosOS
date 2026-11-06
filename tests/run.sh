@@ -151,6 +151,9 @@ run tests/test_calamares_unmount.sh
 step "installer works offline (LUKS initramfs, GRUB in image)"
 run tests/test_installer_offline.sh
 
+step "kratos status firewall line (no false FAIL without root)"
+run tests/test_status_firewall.sh
+
 echo
 if (( status == 0 )); then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi
 exit "$status"
