@@ -14,7 +14,7 @@ Group=ollama
 # GPU access when a driver is present (harmless on CPU-only machines).
 SupplementaryGroups=render video
 Environment=OLLAMA_HOST=127.0.0.1:11434
-Environment=HOME=/var/lib/kratos/ai
+Environment=HOME=/var/lib/kratos/ai/models
 Environment=OLLAMA_MODELS=/var/lib/kratos/ai/models
 # Tamper gate: verify the binary still matches the hash recorded when it was
 # verified at install; fail closed on a mismatch. '+' runs it as root so it can
@@ -29,7 +29,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/var/lib/kratos/ai
+# The parent stores a root-owned integrity baseline and model selection;
+# only the per-model subtree is writable to this service.
+ReadWritePaths=/var/lib/kratos/ai/models
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

@@ -1,0 +1,19 @@
+# KratosOS: never auto-mount storage devices.
+#
+# Two reasons:
+#  1) Security — a privacy/anti-forensics OS must not silently mount whatever
+#     disk or USB stick is attached (auto-mount is a classic malicious-USB and
+#     evil-maid vector). This complements USBGuard: even an allowed device is
+#     not mounted until the user chooses to. Mount manually from Dolphin.
+#  2) Install reliability — during a Calamares install the KDE device
+#     auto-mounter would race the installer and grab the freshly created target
+#     partition, so Calamares could not unmount it to finish ("the device
+#     mounted at ... could not be unmounted. Installation failed.").
+#
+# System-wide default (XDG_CONFIG_DIRS includes /etc/xdg); a user can still
+# re-enable it in System Settings if they want it.
+[General]
+AutomountEnabled=false
+AutomountOnLogin=false
+AutomountOnPlugin=false
+AutomountUnknownDevices=false

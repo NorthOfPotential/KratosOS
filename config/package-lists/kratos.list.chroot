@@ -92,6 +92,7 @@ acl
 tpm2-tools
 gnupg
 xz-utils
+zstd  # Ollama >=0.35 official Linux release archives are .tar.zst
 python3
 python3-pyqt6
 # defusedxml: parse the (verified) Whonix libvirt XML with a parser hardened

@@ -569,13 +569,28 @@ host_lockdown() {
         fi
     fi
     if [[ "$STEALTH_BLOCK_BLUETOOTH" == yes ]]; then
+        # Snapshot individual Bluetooth adapters, rather than undoing a
+        # type-wide block with "rfkill unblock bluetooth". That old undo
+        # enabled *every* adapter, including radios the user had intentionally
+        # disabled before Stealth Mode (privacy regression).
+        local bt_kind bt_identity bt_type bt_before bt_saved=()
+        while read -r bt_kind bt_identity bt_type bt_before; do
+            if [[ "$bt_kind" == rfkill && "$bt_type" == bluetooth && "$bt_before" == unblocked ]]; then
+                bt_saved+=("$bt_identity")
+            fi
+        done < <(_rfkill_snapshot)
         if ! command -v rfkill >/dev/null; then
             _protect_failed bluetooth "rfkill is not installed, so Bluetooth could not be disabled"
-        elif rfkill list bluetooth 2>/dev/null | grep -q 'Soft blocked: no'; then
-            if rfkill block bluetooth; then undo "rfkill unblock bluetooth"; ok "bluetooth off"
+        elif (( ${#bt_saved[@]} > 0 )); then
+            # Record the precise restore actions BEFORE blocking, so rollback
+            # can recover even when rfkill reports a partially completed block.
+            for bt_identity in "${bt_saved[@]}"; do
+                undo "rfkill-restore $bt_identity"
+            done
+            if rfkill block bluetooth; then ok "bluetooth off"
             else _protect_failed bluetooth "rfkill could not block Bluetooth"; fi
         else
-            ok "bluetooth off"
+            ok "bluetooth already off (or no adapter present)"
         fi
     fi
     if [[ "$STEALTH_BLOCK_CAMERA" == yes ]]; then
@@ -692,6 +707,15 @@ host_restore() {
         # Split on whitespace into argv; run the array directly, no shell.
         read -ra parts <<< "$cmd"
         [[ ${#parts[@]} -gt 0 ]] || continue
+        # Internal one-device restore; NEVER pass a broad "unblock bluetooth"
+        # command through the undo log. An ambiguous or vanished identity
+        # stays blocked instead of unblocking the wrong transmitter.
+        if [[ "${parts[0]}" == rfkill-restore ]]; then
+            if (( ${#parts[@]} != 2 )) || ! _rfkill_unblock_identity "${parts[1]}"; then
+                warn "cannot safely restore Bluetooth device: $cmd"
+            fi
+            continue
+        fi
         if [[ "$_UNDO_ALLOWED" != *" ${parts[0]} "* ]]; then
             warn "refusing to run unexpected undo step: $cmd"
             continue

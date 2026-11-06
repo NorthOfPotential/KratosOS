@@ -120,6 +120,34 @@ CONF
 firecfg >/dev/null 2>&1 || true
 rm -f /etc/firejail/firejail.users
 
+# ── Shrink the privileged attack surface (release-gate findings) ─────────────
+# The SUID/capability inventory of a real built image flagged privileged
+# binaries KratosOS does not need. tests/suid-allowlist.txt is the reviewed set.
+#
+# 1) No mail server. exim4 (SUID root, long root-CVE history) arrived only via
+#    rkhunter's SOFT Recommends (bsd-mailx / default-mta). An apt pin in
+#    includes.chroot_before_packages keeps it out; purge here as a backstop.
+if dpkg-query -W -f='${Status}\n' exim4-base 2>/dev/null | grep -q 'install ok installed'; then
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        exim4 exim4-base exim4-config exim4-daemon-light bsd-mailx || true
+fi
+# 2) Drop setuid where the binary is only ever started by root anyway, so the
+#    bit is pure local-privilege-escalation surface. dpkg-statoverride makes
+#    the change survive package upgrades.
+#    - pppd: NetworkManager/ModemManager already run it as root.
+#    - ntfs-3g: only `kratos migrate` (root) and udisks2 (root) mount NTFS.
+#    - spice usb-acl-helper: lets a VM viewer grab host USB devices; USB
+#      passthrough into the Stealth VMs is exactly what must NOT happen.
+while read -r owner group mode path; do
+    [ -e "$path" ] || continue
+    dpkg-statoverride --list "$path" >/dev/null 2>&1 \
+        || dpkg-statoverride --update --add "$owner" "$group" "$mode" "$path"
+done <<'EOF'
+root dip  0754 /usr/sbin/pppd
+root root 0755 /usr/bin/ntfs-3g
+root root 0755 /usr/libexec/spice-client-glib-usb-acl-helper
+EOF
+
 # ── Branding: make the installer and look say KratosOS, not Debian ──────────
 chmod 755 /usr/local/bin/kratos-apply-look 2>/dev/null || true
 # Rename the installer launcher ("Install Debian" -> "Install KratosOS").

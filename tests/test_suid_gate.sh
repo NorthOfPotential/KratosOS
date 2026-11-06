@@ -23,7 +23,22 @@ if "$audit" "$root" >/dev/null 2>&1; then
 else
     pass "audit fails closed on an unexpected SUID binary"
 fi
+# The release workflow runs the audit through tee: the pipeline MUST keep
+# the status of the audit, not just the exit code of tee.
+if bash -euo pipefail -c '"$1" "$2" | tee "$3"' bash "$audit" "$root" "$root/inventory.txt" >/dev/null 2>&1; then
+    flunk "release pipeline hid an unexpected privileged binary behind tee"
+else
+    pass "release pipeline preserves audit failures through tee"
+fi
 rm -rf "$root"
+
+echo "— GitHub Actions uses a pipefail-aware shell for its release gate —"
+if grep -A 15 'name: Privileged-binary inventory' "$here/../.github/workflows/ci.yml" \
+    | grep -qE '^[[:space:]]+shell: bash$'; then
+    pass "privileged inventory step has shell: bash"
+else
+    flunk "privileged inventory step could mask a failed audit"
+fi
 
 echo "— an image with only allowlisted privileged binaries passes —"
 root="$(mktemp -d)"; mkdir -p "$root/usr/bin"
@@ -34,6 +49,40 @@ if "$audit" "$root" >/dev/null 2>&1; then
 else
     flunk "audit flagged an allowlisted-only image"
 fi
+echo "— scanner failures and absent allowlist must NOT permit a release —"
+tools="$(mktemp -d)"
+printf '#!/bin/sh\nexit 42\n' > "$tools/getcap"
+chmod 755 "$tools/getcap"
+if PATH="$tools:$PATH" "$audit" "$root" >/dev/null 2>&1; then
+    flunk "privileged inventory passed after the capability scanner failed"
+else
+    pass "capability scanner failure blocks release"
+fi
+if "$audit" "$root" "$root/does-not-exist.allowlist" >/dev/null 2>&1; then
+    flunk "privileged inventory passed without an allowlist"
+else
+    pass "missing allowlist blocks release"
+fi
+rm -rf "$tools"
 rm -rf "$root"
+
+echo "— privileged binaries the OS does not need are removed, not allowlisted —"
+hook="$here/../config/hooks/live/0100-kratos.hook.chroot"
+pin="$here/../config/includes.chroot_before_packages/etc/apt/preferences.d/kratos-no-mta.pref"
+for p in /usr/sbin/exim4 /usr/sbin/pppd /usr/bin/ntfs-3g /usr/libexec/spice-client-glib-usb-acl-helper; do
+    if grep -qxF "$p" "$allow"; then flunk "$p is allowlisted (it should be removed/de-privileged instead)"
+    else pass "$p is not on the allowlist"; fi
+done
+if [[ -f "$pin" ]] && grep -qE '^Package: exim4\*' "$pin" && grep -qE '^Pin-Priority: -1' "$pin"; then
+    pass "apt pin keeps an MTA (exim4) out of the image and the installed system"
+else flunk "no apt pin blocking exim4"; fi
+if grep -qE 'apt-get purge -y' "$hook" && grep -q 'exim4-daemon-light' "$hook"; then
+    pass "build hook purges exim4 as a backstop"
+else flunk "build hook does not purge exim4"; fi
+for p in /usr/sbin/pppd /usr/bin/ntfs-3g /usr/libexec/spice-client-glib-usb-acl-helper; do
+    if grep -qE "^root (root|dip) +07[0-9]{2} $p$" "$hook"; then
+        pass "setuid stripped (dpkg-statoverride) from $p"
+    else flunk "setuid not stripped from $p"; fi
+done
 
 exit "$fail"
