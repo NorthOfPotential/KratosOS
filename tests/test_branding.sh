@@ -128,6 +128,36 @@ if grep -q 'Autolock false' "$inc/usr/local/bin/kratos-apply-look" \
 else
     flunk "apply-look does not relax auto-lock for the live session"
 fi
+# Behaviour: run apply-look with stubbed KDE tools. In the live session it must
+# write Autolock=false AND then tell the RUNNING locker to re-read its config
+# (VM test: without the D-Bus configure call the live desktop still locked
+# after 5 idle minutes). On an installed system it must not touch the lock.
+look_run() {  # $1 = kernel cmdline to present; prints the stub call log
+    local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/cfg"
+    for c in kwriteconfig6 dbus-send sleep; do
+        printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n' "$c" "$d" > "$d/bin/$c"; chmod +x "$d/bin/$c"
+    done
+    printf '%s\n' "$1" > "$d/cmdline"
+    PATH="$d/bin:/usr/bin:/bin" XDG_CONFIG_HOME="$d/cfg" KRATOS_PROC_CMDLINE="$d/cmdline" \
+        bash "$inc/usr/local/bin/kratos-apply-look" >/dev/null 2>&1
+    cat "$d/calls" 2>/dev/null; rm -rf "$d"
+}
+live_calls="$(look_run "BOOT_IMAGE=/live/vmlinuz boot=live components quiet")"
+if grep -q 'kwriteconfig6 .*--key Autolock false' <<<"$live_calls" \
+   && grep -A99 'Autolock false' <<<"$live_calls" | grep -q 'dbus-send .*org.kde.screensaver.configure'; then
+    pass "live session: Autolock=false written, then the running locker is told to reload"
+else
+    flunk "live session: running screen locker is not told to reload its config"
+    while IFS= read -r l; do echo "        $l"; done <<<"$live_calls"
+fi
+if [[ -e /run/live/medium ]]; then
+    echo "  SKIP  installed-system check (this host is itself a live system)"
+elif inst_calls="$(look_run "BOOT_IMAGE=/vmlinuz root=/dev/mapper/x ro quiet")"; \
+     grep -qE 'Autolock|screensaver' <<<"$inst_calls"; then
+    flunk "installed system: apply-look touched the screen lock"
+else
+    pass "installed system: screen lock left at the secure default"
+fi
 
 echo
 if (( fail )); then echo "BRANDING TESTS FAILED"; exit 1; else echo "branding assets OK"; exit 0; fi
