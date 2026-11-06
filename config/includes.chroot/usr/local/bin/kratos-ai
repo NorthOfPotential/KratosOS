@@ -134,6 +134,42 @@ install_ollama() {
     ok "Ollama installed and integrity baseline recorded"
 }
 
+# Open WebUI requires Python 3.11/3.12 (requires-python "<3.13"), but Debian 13
+# ships only 3.13, so on KratosOS there is no usable system interpreter. We
+# provision an APP-PRIVATE CPython 3.12 with uv: uv is installed from PyPI as a
+# single hash-pinned wheel (pip --require-hashes refuses anything else), and uv
+# verifies the interpreter download against the SHA256s embedded in that pinned
+# uv release. Everything runs as the unprivileged kratos-ai account; the result
+# is then made root-owned and read-only so the service cannot alter its own
+# interpreter. Bump these three together.
+UV_VERSION="0.13.7"
+UV_WHEEL_SHA256="2c9bdc4a872b60a93c5f26c0791089ea11585a4f9d3b3c017d78eb8487505e25"
+UV_PYTHON="3.12"
+
+# Echoes the path of the provisioned python3.12 on stdout; all logs to stderr.
+provision_python312() {
+    local boot="$AI_HOME/.uv-bootstrap" pydir="$AI_HOME/python" py
+    [[ ! -L "$boot" && ! -L "$pydir" ]] || die "uv bootstrap/python dir is an unsafe symlink"
+    rm -rf -- "$boot" "$pydir"
+    install -d -m 750 -o kratos-ai -g kratos-ai "$boot" "$pydir"
+    printf 'uv==%s --hash=sha256:%s\n' "$UV_VERSION" "$UV_WHEEL_SHA256" > "$boot/requirements.txt"
+    chown kratos-ai:kratos-ai "$boot/requirements.txt"
+    local -a uvenv=(env HOME="$boot" XDG_CACHE_HOME="$boot/cache" UV_NO_CONFIG=1
+                    UV_PYTHON_INSTALL_DIR="$pydir" UV_PYTHON_BIN_DIR="$boot/bin")
+    info "Provisioning an app-private Python $UV_PYTHON for Open WebUI (Debian 13 ships only 3.13)..." >&2
+    runuser -u kratos-ai -- python3 -m venv "$boot/venv" >&2 || return 1
+    runuser -u kratos-ai -- "$boot/venv/bin/pip" install --quiet --no-cache-dir --require-hashes --no-deps \
+        --only-binary=:all: -r "$boot/requirements.txt" >&2 || return 1
+    runuser -u kratos-ai -- "${uvenv[@]}" "$boot/venv/bin/uv" python install "$UV_PYTHON" >&2 || return 1
+    py="$(runuser -u kratos-ai -- "${uvenv[@]}" "$boot/venv/bin/uv" python find \
+            --python-preference only-managed "$UV_PYTHON")" || return 1
+    [[ "$py" == "$pydir"/* && -x "$py" ]] || { err "uv returned an unexpected interpreter: $py"; return 1; }
+    rm -rf -- "$boot"                       # uv is no longer needed
+    # root-owned + read/exec for the service account, but never writable by it
+    chown -R root:root "$pydir"; chmod -R go-w,go+rX "$pydir"
+    printf '%s\n' "$py"
+}
+
 # Read distribution metadata with the SYSTEM Python in isolated mode rather
 # than executing potentially service-controlled venv scripts as root.
 installed_webui_version() {
@@ -151,10 +187,11 @@ PY
 
 setup_webui() {
     need_cmd python3
-    # Pin to a release including the published Sep 2026 SSRF/XSS/auth fixes.
-    # Versionless 'pip install open-webui' plus "already installed" bypassed
-    # upgrades entirely, leaving installations on known vulnerable versions.
-    local webui_version="0.12.0" installed
+    # Pinned to the newest release. 0.12.3, 0.12.4, 0.12.5 and 0.13.0 each ship
+    # undisclosed security fixes upstream says to apply ASAP, so 0.12.0 is known
+    # vulnerable. Versionless 'pip install open-webui' plus "already installed"
+    # bypassed upgrades entirely, leaving installations on vulnerable versions.
+    local webui_version="0.13.0" installed
     getent group kratos-ai >/dev/null || groupadd --system kratos-ai
     getent passwd kratos-ai >/dev/null || useradd --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
     [[ ! -L "$AI_HOME" ]] || die "AI home is an unsafe symlink"
@@ -167,14 +204,17 @@ setup_webui() {
     # daemon edit its own code, so simply chowning it would bless implants.
     if [[ -x "$AI_VENV/bin/open-webui" && "$installed" == "$webui_version" ]] \
        && [[ "$(stat -c '%u' "$AI_VENV")" == 0 ]] \
-       && [[ -z "$(find "$AI_VENV" -xdev ! -uid 0 -print -quit)" ]]; then
-        chmod -R go-w "$AI_VENV"
+       && [[ -z "$(find "$AI_VENV" -xdev ! -uid 0 -print -quit)" ]] \
+       && [[ ! -e "$AI_HOME/python" || -z "$(find "$AI_HOME/python" -xdev ! -uid 0 -print -quit)" ]]; then
+        chmod -R go-w,go+rX "$AI_VENV"
         ok "Open WebUI $webui_version already installed (root-owned code)"
         return
     fi
-    # Open WebUI explicitly supports Python 3.11/3.12. Debian 13 uses
-    # Python 3.13 by default, which upstream does NOT support. Never force an
-    # unsupported interpreter or silently install an old vulnerable WebUI.
+    # Open WebUI explicitly supports Python 3.11/3.12 only. Never force an
+    # unsupported interpreter or silently install an old vulnerable WebUI:
+    # prefer a system 3.11/3.12; otherwise (the normal case on Debian 13, which
+    # ships only 3.13) provision a hash-verified app-private 3.12 with uv.
+    require_network
     local python_cmd="" candidate version
     for candidate in python3.11 python3.12 python3; do
         command -v "$candidate" >/dev/null 2>&1 || continue
@@ -184,21 +224,26 @@ setup_webui() {
             break
         fi
     done
-    [[ -n "$python_cmd" ]] || die "Open WebUI $webui_version requires Python 3.11/3.12; Debian 13 defaults to unsupported 3.13. Install an independently managed, updated Python 3.11/3.12 runtime first; refusing to install a vulnerable or incompatible WebUI."
-    require_network
+    if [[ -z "$python_cmd" ]]; then
+        python_cmd="$(provision_python312)" \
+            || die "could not provision Python $UV_PYTHON for Open WebUI (it requires 3.11/3.12; Debian 13 ships 3.13)"
+    fi
     info "Installing patched Open WebUI $webui_version with unprivileged pip..."
     systemctl stop kratos-openwebui.service >/dev/null 2>&1 || true
     rm -rf -- "$AI_VENV"
     install -d -m 750 -o kratos-ai -g kratos-ai "$AI_VENV"
     runuser -u kratos-ai -- "$python_cmd" -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
-    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
-    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install "open-webui==$webui_version" \
+    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir --upgrade pip >/dev/null 2>&1 || true
+    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir "open-webui==$webui_version" \
         || die "could not install patched Open WebUI"
     installed="$(installed_webui_version)"
     [[ "$installed" == "$webui_version" ]] \
         || die "Open WebUI version mismatch after install (found $installed; want $webui_version)"
+    # Root-owned and not writable by the service, but READABLE/traversable: the
+    # venv was created 750 kratos-ai, and chown to root alone would leave it
+    # 750 root:root, which the kratos-ai service could not even enter.
     chown -R root:root "$AI_VENV"
-    chmod -R go-w "$AI_VENV"
+    chmod -R go-w,go+rX "$AI_VENV"
     ok "Open WebUI $webui_version installed (unprivileged build, immutable code)"
 }
 

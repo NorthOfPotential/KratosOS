@@ -26,15 +26,15 @@
 # (not a moving "latest") and verify its SHA256 before extracting as root — an
 # unverified archive unpacked into a system path is a root-RCE waiting to happen.
 # Upstream 0.30.10 is in the affected range for 2026 /api/pull path-traversal
-# and redirect-SSRF advisories. v0.40.3 is the current stable release on
-# 2026-10-13. The modern official Linux bundle uses tar.zst, not .tgz.
-: "${KRATOS_AI_OLLAMA_VERSION:=v0.40.3}"
+# and redirect-SSRF advisories. v0.40.15 is the current stable release on
+# 2026-11-06. The modern official Linux bundle uses tar.zst, not .tgz.
+: "${KRATOS_AI_OLLAMA_VERSION:=v0.40.15}"
 : "${KRATOS_AI_OLLAMA_BASEURL:=https://github.com/ollama/ollama/releases/download}"
 : "${KRATOS_AI_OLLAMA_URL:=${KRATOS_AI_OLLAMA_BASEURL}/${KRATOS_AI_OLLAMA_VERSION}/ollama-linux-amd64.tar.zst}"
-# Trusted GitHub release asset SHA256 for the exact v0.40.3 amd64 tar.zst;
+# Trusted GitHub release asset SHA256 for the exact v0.40.15 amd64 tar.zst;
 # the archive is verified before any root extraction. For nondefault versions
 # also explicitly override SHA256, otherwise the checksum refuses to install.
-: "${KRATOS_AI_OLLAMA_SHA256:=ce6f8b671a699bf1ebafb28d60dbbabf4f37b30b499145fa308a8ba72de021d6}"
+: "${KRATOS_AI_OLLAMA_SHA256:=628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379}"
 
 # ── Hardware detection ────────────────────────────────────────────────────────
 # Each reader honors a KRATOS_AI_* override so the selection logic is unit

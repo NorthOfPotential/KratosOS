@@ -20,8 +20,11 @@ class OllamaArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = pathlib.Path(d) / "release.tgz"
             with tarfile.open(path, "w:gz") as tf:
-                for name, kind, target in members:
+                for entry in members:
+                    name, kind, target = entry[:3]
                     member = tarfile.TarInfo(name)
+                    if len(entry) > 3:
+                        member.mode = entry[3]
                     if kind == "file":
                         member.size = 1
                         tf.addfile(member, io.BytesIO(b"x"))
@@ -71,6 +74,33 @@ class OllamaArchiveTests(unittest.TestCase):
 
     def test_devices_refused(self):
         self.check([("bin/odd", "device", "")], False)
+
+    def test_dot_slash_prefixed_layout_ok(self):
+        self.check([("./bin/ollama", "file", ""), ("./lib/ollama/x.so", "file", "")], True)
+
+    def test_cannot_overwrite_kratos_cli(self):
+        # A "relative", traversal-free path that would clobber KratosOS's own
+        # root tool in /usr/local/bin. Must be refused by the layout allowlist.
+        self.check([("bin/kratos", "file", "")], False)
+
+    def test_cannot_overwrite_kratos_libs(self):
+        self.check([("lib/kratos/common.sh", "file", "")], False)
+
+    def test_unexpected_top_level_refused(self):
+        self.check([("etc/profile.d/evil.sh", "file", "")], False)
+
+    def test_setuid_member_refused(self):
+        self.check([("bin/ollama", "file", "", 0o4755)], False)
+
+    def test_setgid_member_refused(self):
+        self.check([("lib/ollama/x.so", "file", "", 0o2755)], False)
+
+    def test_symlink_outside_lib_refused(self):
+        # Even a link that stays inside /usr/local is refused outside lib/ollama/.
+        self.check([("bin/ollama", "link", "../lib/ollama/real")], False)
+
+    def test_symlink_into_bin_refused(self):
+        self.check([("lib/ollama/x", "link", "../../bin/ollama")], False)
 
     def test_modern_zstd_release(self):
         # The published Ollama 0.40.3 Linux bundle is tar.zst, not tar.gz.

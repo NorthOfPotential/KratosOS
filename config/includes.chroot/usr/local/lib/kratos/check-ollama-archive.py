@@ -16,23 +16,50 @@ class UnsafeArchive(ValueError):
     pass
 
 
+# The archive is unpacked as root into /usr/local, which also holds KratosOS's
+# own privileged tools (/usr/local/bin/kratos*, /usr/local/lib/kratos/). The
+# official Ollama layout is exactly bin/ollama + lib/ollama/**, so anything else
+# — even a perfectly "relative" path like bin/kratos — is refused: a release
+# (or a compromised pin) must never be able to overwrite KratosOS itself.
+_LIB = "lib/ollama/"
+_ALLOWED_DIRS = {"bin", "lib", "lib/ollama"}
+
+
+def _norm(name):
+    while name.startswith("./"):
+        name = name[2:]
+    return name.rstrip("/")
+
+
+def _allowed_path(path, is_dir):
+    if is_dir:
+        return path in _ALLOWED_DIRS or path.startswith(_LIB)
+    return path == "bin/ollama" or path.startswith(_LIB)
+
+
 def _check_members(archive):
     for member in archive:
-        name = member.name
+        raw = member.name
         # A member with '..' is rejected even if normalization happens to
         # place it back under the root: there is no legitimate need for it.
-        if (not name or posixpath.isabs(name) or ".." in name.split("/")
-                or "\\x00" in name):
-            raise UnsafeArchive(f"unsafe member path: {name!r}")
+        if (not raw or posixpath.isabs(raw) or ".." in raw.split("/")
+                or "\x00" in raw):
+            raise UnsafeArchive(f"unsafe member path: {raw!r}")
         if not (member.isfile() or member.isdir() or member.issym()):
-            raise UnsafeArchive(f"unsafe member type: {name!r}")
+            raise UnsafeArchive(f"unsafe member type: {raw!r}")
+        name = _norm(raw)
+        if not name or not _allowed_path(name, member.isdir()):
+            raise UnsafeArchive(f"member outside the Ollama layout: {raw!r}")
+        # setuid/setgid/sticky would survive a root extraction; Ollama needs none.
+        if member.mode & 0o7000:
+            raise UnsafeArchive(f"setuid/setgid/sticky bit on member: {raw!r}")
         if member.issym():
             link = member.linkname
-            if not link or posixpath.isabs(link) or "\\x00" in link:
-                raise UnsafeArchive(f"unsafe symlink: {name!r} -> {link!r}")
+            if not link or posixpath.isabs(link) or "\x00" in link:
+                raise UnsafeArchive(f"unsafe symlink: {raw!r} -> {link!r}")
             resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), link))
-            if resolved == ".." or resolved.startswith("../") or resolved.startswith("/"):
-                raise UnsafeArchive(f"symlink escapes /usr/local: {name!r} -> {link!r}")
+            if not (name.startswith(_LIB) and resolved.startswith(_LIB)):
+                raise UnsafeArchive(f"symlink leaves lib/ollama/: {raw!r} -> {link!r}")
 
 
 def validate(archive_path):

@@ -1,58 +1,49 @@
 # Approved SUID/SGID binaries and file-capability holders for the KratosOS image
 # (finding 46). tests/suid-audit.sh compares the built ./chroot against this
-# list and flags anything not here. Paths are absolute, as they appear in the
-# image. This is a STARTER baseline of the standard Debian/KDE privileged set;
-# after the first real build, run the audit, review every entry the inventory
-# reports, and tighten this list (then flip the CI step to hard-fail).
+# list; anything NOT here FAILS the release build.
 #
-# --- standard Debian setuid/setgid ---
+# This is the MINIMAL, REVIEWED set, taken from the real inventory of a built
+# image (CI run #181), not a guess. Over-broad entries would hide a binary that
+# later becomes privileged, so only list what the image actually ships and what
+# has been reviewed. Removed from the image instead of allowlisted (see
+# config/hooks/live/0100-kratos.hook.chroot): exim4 (no MTA), and the setuid
+# bit on pppd, ntfs-3g and spice-client-glib-usb-acl-helper.
+#
+# --- standard Debian setuid/setgid (account + mount tooling) ---
 /usr/bin/su
 /usr/bin/sudo
 /usr/bin/passwd
 /usr/bin/chfn
 /usr/bin/chsh
+/usr/bin/chage
+/usr/bin/expiry
 /usr/bin/gpasswd
 /usr/bin/newgrp
 /usr/bin/mount
 /usr/bin/umount
 /usr/bin/fusermount3
-/usr/bin/pkexec
 /usr/bin/crontab
-/usr/bin/wall
-/usr/bin/write
-/usr/bin/expiry
-/usr/bin/chage
 /usr/bin/dotlockfile
 /usr/bin/ssh-agent
-/usr/lib/dbus-1.0/dbus-daemon-launch-helper
-/usr/lib/polkit-1/polkit-agent-helper-1
-/usr/lib/openssh/ssh-keysign
-/usr/libexec/polkit-agent-helper-1
 /usr/sbin/unix_chkpwd
-/usr/sbin/pam_extrausers_chkpwd
-/usr/bin/sg
-# subuid/subgid mapping helpers (userns, flatpak) — setuid or cap_setuid
-/usr/bin/newuidmap
-/usr/bin/newgidmap
-# --- KDE / desktop ---
+/usr/lib/openssh/ssh-keysign
+# --- polkit / dbus (pkexec is how KratosOS's per-action helpers elevate) ---
+/usr/bin/pkexec
+/usr/lib/polkit-1/polkit-agent-helper-1
+/usr/lib/dbus-1.0/dbus-daemon-launch-helper
+# --- desktop ---
 /usr/lib/xorg/Xorg.wrap
-/usr/bin/kcheckpass
-/usr/libexec/kcheckpass
-/usr/lib/x86_64-linux-gnu/libexec/kcheckpass
-# --- sandboxing (we ship and rely on these) ---
-# firejail is SUID root by design (that is how it builds its sandbox).
+# --- sandboxing: firejail is SUID root by design (it builds the sandbox) ---
 /usr/bin/firejail
-# bubblewrap, used by flatpak; SUID only where unprivileged userns is off.
-/usr/bin/bwrap
-/usr/lib/flatpak/flatpak-bwrap
-# --- virtualization (libvirt + qemu bridge networking) ---
-/usr/lib/qemu/qemu-bridge-helper
-/usr/libexec/qemu-bridge-helper
-# --- filesystem helpers (fuse / NTFS migration media) ---
-/usr/bin/fusermount
-/usr/bin/ntfs-3g
-# --- file capabilities (ping etc.) ---
-/usr/bin/ping
-/usr/bin/mtr-packet
-# --- security tools known to ship setuid/caps (review against the suite) ---
+# --- file capabilities (reviewed Debian/KDE defaults) ---
+# KDE compositor realtime scheduling (cap_sys_nice)
+/usr/bin/kwin_wayland
+# KDE power management wake alarms (cap_wake_alarm)
+/usr/lib/x86_64-linux-gnu/libexec/org_kde_powerdevil
+# KDE system monitor network stats (cap_net_raw)
+/usr/lib/x86_64-linux-gnu/libexec/ksysguard/ksgrd_network_helper
+# GStreamer PTP network clock helper
+/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-ptp-helper
+# Wireshark capture (security toolkit). hook 0090 opts in; Debian then makes
+# dumpcap root:wireshark 0754, so only members of the wireshark group can sniff.
 /usr/bin/dumpcap

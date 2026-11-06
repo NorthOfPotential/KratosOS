@@ -66,4 +66,23 @@ fi
 rm -rf "$tools"
 rm -rf "$root"
 
+echo "— privileged binaries the OS does not need are removed, not allowlisted —"
+hook="$here/../config/hooks/live/0100-kratos.hook.chroot"
+pin="$here/../config/includes.chroot_before_packages/etc/apt/preferences.d/kratos-no-mta.pref"
+for p in /usr/sbin/exim4 /usr/sbin/pppd /usr/bin/ntfs-3g /usr/libexec/spice-client-glib-usb-acl-helper; do
+    if grep -qxF "$p" "$allow"; then flunk "$p is allowlisted (it should be removed/de-privileged instead)"
+    else pass "$p is not on the allowlist"; fi
+done
+if [[ -f "$pin" ]] && grep -qE '^Package: exim4\*' "$pin" && grep -qE '^Pin-Priority: -1' "$pin"; then
+    pass "apt pin keeps an MTA (exim4) out of the image and the installed system"
+else flunk "no apt pin blocking exim4"; fi
+if grep -qE 'apt-get purge -y' "$hook" && grep -q 'exim4-daemon-light' "$hook"; then
+    pass "build hook purges exim4 as a backstop"
+else flunk "build hook does not purge exim4"; fi
+for p in /usr/sbin/pppd /usr/bin/ntfs-3g /usr/libexec/spice-client-glib-usb-acl-helper; do
+    if grep -qE "^root (root|dip) +07[0-9]{2} $p$" "$hook"; then
+        pass "setuid stripped (dpkg-statoverride) from $p"
+    else flunk "setuid not stripped from $p"; fi
+done
+
 exit "$fail"

@@ -93,7 +93,7 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
 
 `kratos-ai setup` installs code as root, so the downloads are verified:
 
-- The **Ollama runtime** is pinned to **v0.40.3** (current on 2026-10-13)
+- The **Ollama runtime** is pinned to **v0.40.15** (current on 2026-11-06)
   with its official `.tar.zst` release-asset SHA256 embedded in the build.
   The checksum is verified before extraction (fail-closed), and the tar stream
   is screened for path traversal, symlink escapes and special files.
@@ -106,17 +106,21 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
   Full origin authentication (a signature over the tarball) isn't offered
   upstream, so this verifies integrity against the pinned release; the SHA256
   pin is the strongest available.
-- **Open WebUI** is pinned to **0.12.0** rather than a versionless PyPI
-  install, since older releases have published SSRF/XSS and authorization
-  advisories. Setup checks the installed version and recreates out-of-date
-  environments. **Important:** Debian 13/Trixie's default Python is 3.13,
-  but Open WebUI 0.12.0 requires Python 3.11 or 3.12, which Trixie does not
-  package. If neither runtime is installed, setup FAILS CLOSED with an
-  explanation; do not bypass the interpreter requirement or downgrade to a
-  vulnerable Open WebUI. A supported Python runtime must be separately
-  provisioned before enabling the UI. The dependency tree is installed as the unprivileged
-  `kratos-ai` account; the executable venv is then sealed root-owned and
-  made read-only to the service. Only `/opt/kratos-ai/data` remains writable.
-  **Dependency pinning is not a substitute for future security updates**.
+- **Open WebUI** is pinned to **0.13.0** rather than a versionless PyPI
+  install: 0.12.3, 0.12.4, 0.12.5 and 0.13.0 each shipped security fixes that
+  upstream says to apply as soon as possible, so older pins are known
+  vulnerable. Setup checks the installed version and rebuilds out-of-date
+  environments.
+- **Python for Open WebUI.** Open WebUI supports only Python 3.11/3.12, while
+  Debian 13 ships 3.13. Setup uses a system 3.11/3.12 if one exists; otherwise
+  (the normal case) it provisions an **app-private CPython 3.12** under
+  `/opt/kratos-ai/python` with **uv**. uv itself is installed from a single
+  **hash-pinned** PyPI wheel (`pip --require-hashes`), and uv verifies the
+  interpreter download against the checksums built into that pinned release.
+  This runs as the unprivileged `kratos-ai` account; the interpreter and the
+  venv are then made **root-owned and read-only** to the service (still
+  readable, so it can start). Only `/opt/kratos-ai/data` is writable.
+  **Dependency pinning is not a substitute for future security updates** —
+  re-run `sudo kratos-ai setup` after a KratosOS update to pick up new pins.
 - **Models** are pulled by Ollama, which verifies each blob against its
   manifest digest.

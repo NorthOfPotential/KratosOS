@@ -55,18 +55,35 @@ if [[ -f "$d" ]] && grep -q '^Exec=.*kratos-ai' "$d"; then pass "Kratos AI launc
 
 cli="$root/usr/local/bin/kratos-ai"
 echo "— patched third-party versions must be enforced (not just documented) —"
-if grep -q 'v0.40.3' "$lib/ai.sh" \
+if grep -q 'v0.40.15' "$lib/ai.sh" \
    && grep -q 'ollama-linux-amd64.tar.zst' "$lib/ai.sh" \
    && grep -q 'ollama version is' "$cli" \
-   && grep -q '0.12.0' "$cli" \
+   && grep -q 'webui_version="0.13.0"' "$cli" \
    && grep -q '"open-webui==$webui_version"' "$cli"; then
     pass "security-patched Ollama and Open WebUI releases are selected and verified"
 else flunk "AI runtime still risks installing a vulnerable version"; fi
 
-if grep -q 'requires Python 3.11/3.12' "$cli" \
-   && grep -q 'python3.11 python3.12 python3' "$cli"; then
-    pass "Open WebUI refuses unsupported Python 3.13 instead of downgrading"
+if grep -q 'requires 3.11/3.12' "$cli" \
+   && grep -q 'python3.11 python3.12 python3' "$cli" \
+   && grep -q 'provision_python312' "$cli"; then
+    pass "Open WebUI never runs on unsupported Python 3.13; a private 3.12 is provisioned instead"
 else flunk "Open WebUI may run on unsupported Python or downgrade insecurely"; fi
+
+echo "— the app-private Python is supply-chain pinned and sealed —"
+if grep -qE '^UV_VERSION="[0-9.]+"' "$cli" && grep -qE '^UV_WHEEL_SHA256="[0-9a-f]{64}"' "$cli" \
+   && grep -q -- '--require-hashes' "$cli" && grep -q -- '--only-binary=:all:' "$cli"; then
+    pass "uv comes from a single hash-pinned wheel (pip --require-hashes)"
+else flunk "uv bootstrap is not hash-pinned"; fi
+if grep -q 'runuser -u kratos-ai -- "${uvenv\[@\]}"' "$cli" \
+   && grep -q 'chown -R root:root "$pydir"' "$cli"; then
+    pass "interpreter is fetched unprivileged, then made root-owned"
+else flunk "interpreter provisioning runs as root or stays service-writable"; fi
+
+echo "— sealed code stays READABLE by the service (else the WebUI cannot start) —"
+if grep -q 'chmod -R go-w,go+rX "$AI_VENV"' "$cli" && grep -q 'chmod -R go-w,go+rX "$pydir"' "$cli" \
+   && ! grep -qE 'chmod -R go-w "\$(AI_VENV|pydir)"' "$cli"; then
+    pass "venv + interpreter are root-owned, non-writable, but traversable by kratos-ai"
+else flunk "sealed venv may be unreadable by the kratos-ai service (750 root:root)"; fi
 
 echo "— supply-chain: the Ollama runtime download is verified before it is unpacked as root —"
 cli="$root/usr/local/bin/kratos-ai"
@@ -108,7 +125,7 @@ fi
 
 echo "— WebUI must not persist compromised code across restarts —"
 if grep -q 'chown -R root:root "$AI_VENV"' "$cli" \
-   && grep -q 'chmod -R go-w "$AI_VENV"' "$cli" \
+   && grep -q 'chmod -R go-w,go+rX "$AI_VENV"' "$cli" \
    && grep -q '^ReadWritePaths=/opt/kratos-ai/data' "$root/etc/systemd/system/kratos-openwebui.service" \
    && ! grep -Fxq 'ReadWritePaths=/opt/kratos-ai' "$root/etc/systemd/system/kratos-openwebui.service"; then
     pass "WebUI code is root-owned, only user data is writable"
