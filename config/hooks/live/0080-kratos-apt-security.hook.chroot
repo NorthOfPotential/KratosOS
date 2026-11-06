@@ -20,6 +20,29 @@ apt-get update
 # them (finding 12). --force-confold keeps KratosOS's hardened /etc; never let
 # an upgrade silently replace our config with a package default.
 apt-get -y --no-install-recommends -o Dpkg::Options::=--force-confold full-upgrade
+# Ship exactly ONE kernel. A security kernel update installs the new ABI next
+# to the original (different package names), so the image carried two: the
+# UEFI live boot picked the OLD one and the build info reported it. Keep only
+# the kernel the linux-image-amd64 metapackage now depends on.
+keep="$(dpkg-query -W -f='${Depends}\n' linux-image-amd64 2>/dev/null \
+    | sed 's/[,|]/\n/g' | grep -oE 'linux-image-[0-9][^ (]*' | head -1)"
+if [ -z "$keep" ]; then
+    echo "KRATOS: ERROR — cannot tell which kernel linux-image-amd64 wants" >&2
+    exit 1
+fi
+old="$(dpkg-query -W -f='${binary:Package} ${db:Status-Abbrev}\n' 'linux-image-[0-9]*' 2>/dev/null \
+    | awk -v k="$keep" '$1 != k && $2 ~ /^ii/ {print $1}')"
+if [ -n "$old" ]; then
+    echo "KRATOS: removing superseded kernel(s): $old (keeping $keep)"
+    # shellcheck disable=SC2086  # one package name per word
+    apt-get -y purge $old
+fi
+kernels="$(find /boot -maxdepth 1 -name 'vmlinuz-*' | wc -l)"
+if [ "$kernels" -ne 1 ]; then
+    echo "KRATOS: ERROR — image has $kernels kernels in /boot, expected exactly 1" >&2
+    ls -l /boot >&2
+    exit 1
+fi
 
 # Fail the build if anything is still upgradeable after the full-upgrade: a
 # security image must not ship with known-pending updates.

@@ -194,6 +194,22 @@ fi
 # failed."). Fails the build if settings.conf can't be patched.
 if [ -x /usr/bin/calamares ]; then
     /usr/local/libexec/kratos/kratos-calamares-unmount --patch-settings /etc/calamares/settings.conf
+    # Finalize the target before the initramfs is built: no hibernation/resume
+    # (every encrypted boot stalled on the swap resume device), no TRIM on the
+    # encrypted disk, and no installer left on the installed system.
+    /usr/local/libexec/kratos/kratos-calamares-finalize --patch-settings /etc/calamares/settings.conf
+    # Installer artwork: our own branding (etc/calamares/branding/kratos), not
+    # Debian's logo and slideshow. Fail the build if it can't be selected.
+    sed -i -E 's/^branding:[[:space:]]*.*/branding: kratos/' /etc/calamares/settings.conf
+    if ! grep -qx 'branding: kratos' /etc/calamares/settings.conf \
+       || [ ! -f /etc/calamares/branding/kratos/branding.desc ]; then
+        echo "KratosOS: could not select the kratos Calamares branding" >&2
+        exit 1
+    fi
+    # Desktop "Install KratosOS" icon: Debian's swirl -> the KratosOS shield.
+    if [ -f /usr/share/pixmaps/install-debian.png ]; then
+        cp -f /etc/calamares/branding/kratos/kratos-logo.png /usr/share/pixmaps/install-debian.png
+    fi
 fi
 # Default KDE wallpaper for brand-new user profiles (best-effort; the
 # kratos-look autostart also applies it live).

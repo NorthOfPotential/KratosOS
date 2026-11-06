@@ -1,0 +1,42 @@
+#!/bin/sh
+# Brand the LIVE boot menus (BIOS isolinux and UEFI GRUB on the ISO) as
+# KratosOS instead of live-build's Debian artwork and labels (VM install test).
+#
+# Binary hooks run in live-build's binary/ tree (the ISO contents) after the
+# bootloader configs are generated and before the ISO is assembled. We swap
+# every bootloader splash for our 640x480 8-bit splash and rename the menu
+# labels. The build FAILS if no splash was replaced, so a changed live-build
+# layout can't silently bring the Debian menu back.
+set -e
+
+splash=""
+for c in ../config/includes.chroot/usr/share/kratos-assets/live-splash.png \
+         ../chroot/usr/share/kratos-assets/live-splash.png \
+         config/includes.chroot/usr/share/kratos-assets/live-splash.png; do
+    if [ -f "$c" ]; then splash=$c; break; fi
+done
+if [ -z "$splash" ]; then
+    echo "KratosOS: live-splash.png not found (cwd: $(pwd))" >&2
+    exit 1
+fi
+
+find . -path ./live -prune -o -type f -name 'splash.png' -print > ../kratos-splash.list
+replaced=0
+while IFS= read -r f; do
+    cp -f "$splash" "$f"
+    echo "KratosOS: boot splash -> $f"
+    replaced=$((replaced + 1))
+done < ../kratos-splash.list
+rm -f ../kratos-splash.list
+find . -path ./live -prune -o -type f \( -name '*.cfg' -o -name 'theme.txt' \) -exec \
+    sed -i -e 's/Debian GNU\/Linux/KratosOS/g' \
+           -e 's/Debian Live/KratosOS Live/g' \
+           -e 's/Live system/KratosOS live/g' \
+           -e 's/Live Boot Menu/KratosOS Boot Menu/g' {} +
+
+if [ "$replaced" -eq 0 ]; then
+    echo "KratosOS: no bootloader splash.png found to brand; tree was:" >&2
+    find . -path ./live -prune -o -type f -print | head -100 >&2
+    exit 1
+fi
+echo "KratosOS: live boot menu branded ($replaced splash image(s))"

@@ -1,0 +1,34 @@
+# KratosOS installer branding (selected by the image hook, which sets
+# "branding: kratos" in /etc/calamares/settings.conf).
+---
+componentName:   kratos
+welcomeStyleCalamares: true
+welcomeExpandingLogo: true
+windowExpanding: normal
+windowSize: 800px,580px
+windowPlacement: center
+strings:
+    productName:         KratosOS
+    shortProductName:    KratosOS
+    version:             13
+    shortVersion:        13
+    versionedName:       "KratosOS 13 (trixie)"
+    shortVersionedName:  "KratosOS 13"
+    bootloaderEntryName: KratosOS
+    productUrl:          https://github.com/NorthOfPotential/KratosOS
+    supportUrl:          https://github.com/NorthOfPotential/KratosOS/issues
+    knownIssuesUrl:      https://github.com/NorthOfPotential/KratosOS/issues
+    releaseNotesUrl:     https://github.com/NorthOfPotential/KratosOS
+sidebar: widget
+navigation: widget
+images:
+    productLogo:         "kratos-logo.png"
+    productIcon:         "kratos-logo.png"
+    productWelcome:      "welcome.png"
+slideshow:               "show.qml"
+style:
+   SidebarBackground:    "#0b1220"
+   SidebarText:          "#e6ebf5"
+   SidebarTextCurrent:   "#0b1220"
+   SidebarBackgroundCurrent: "#3be37a"
+slideshowAPI: 2

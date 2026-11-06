@@ -1,0 +1,137 @@
+#!/bin/sh
+# kratos-calamares-finalize — run by the Calamares "kratos-finalize" job, which
+# the image hook inserts into /etc/calamares/settings.conf immediately BEFORE
+# Calamares' "initramfs" job (so the initramfs it builds already reflects the
+# changes below). It edits the freshly installed target, found under
+# /tmp/calamares-root-*, from the live system.
+#
+# What it does to the installed system, and why (VM install test findings):
+#
+#  1. No hibernation. Calamares points resume= (kernel command line) at the
+#     encrypted swap, which the initramfs cannot open, so EVERY boot stalled on
+#     "Gave up waiting for suspend/resume device". Hibernating would also write
+#     the contents of RAM (keys, documents) to disk, which an anti-forensics
+#     system must not do. So: RESUME=none for initramfs-tools, strip resume=
+#     from GRUB's command line and regenerate grub.cfg. (Hibernation itself is
+#     disabled in /etc/systemd/sleep.conf.d/kratos-no-hibernate.conf.)
+#
+#  2. No TRIM. "discard" on an encrypted volume (and periodic fstrim) tells
+#     anyone holding the disk exactly which blocks are in use, which leaks the
+#     amount and layout of data. Strip "discard" from fstab/crypttab and mask
+#     fstrim.timer. (Costs some SSD write performance over time.)
+#
+#  3. No installer on the installed system. Calamares (a root-run partitioning
+#     tool) and its KratosOS helpers are useless after installation, so purge
+#     them from the target.
+#
+# Steps 1 and 2 are privacy/boot fixes and are best-effort per item: a failure
+# is logged, never fatal, so a working install is never thrown away over them.
+#
+# Usage:
+#   kratos-calamares-finalize [--root DIR]           (default: the one /tmp/calamares-root-*)
+#   kratos-calamares-finalize --patch-settings FILE  (build time: edit settings.conf)
+# KRATOS_FINALIZE_SKIP_CHROOT=1 skips the chroot steps (update-grub, apt) for tests.
+set -u
+
+log() { echo "kratos-finalize: $*"; }
+
+# Insert "- kratos-finalize" directly before the "- initramfs" exec step.
+# Idempotent. Non-zero if there is no initramfs step to anchor on, so the image
+# build fails loudly instead of silently shipping an installer without it.
+patch_settings() {
+    f=$1
+    [ -f "$f" ] || { log "no $f"; return 1; }
+    if ! grep -Eq '^[[:space:]]*-[[:space:]]+kratos-finalize[[:space:]]*$' "$f"; then
+        sed -i -E 's/^([[:space:]]*)-[[:space:]]+initramfs[[:space:]]*$/\1- kratos-finalize\n\1- initramfs/' "$f"
+    fi
+    awk '
+        /^[[:space:]]*-[[:space:]]+kratos-finalize[[:space:]]*$/ { prev = "k"; next }
+        /^[[:space:]]*-[[:space:]]+initramfs[[:space:]]*$/ { if (prev == "k") ok = 1; prev = ""; next }
+        { prev = "" }
+        END { exit ok ? 0 : 1 }' "$f" || { log "could not insert kratos-finalize before initramfs in $f"; return 1; }
+}
+
+# Remove the "discard" option from field $2 of the table file $1 (fstab: 4th
+# field, crypttab: 4th field). Comment lines and lines without discard are left
+# byte-for-byte alone. An emptied option list becomes $3 ("defaults"/"luks").
+strip_discard() {
+    file=$1 field=$2 empty=$3
+    [ -f "$file" ] || return 0
+    grep -q 'discard' "$file" || return 0
+    tmp="$file.kratos-tmp"
+    awk -v f="$field" -v empty="$empty" '
+        /^[[:space:]]*#/ || NF < f || $f !~ /(^|,)discard(,|$)/ { print; next }
+        {
+            n = split($f, o, ","); out = ""
+            for (i = 1; i <= n; i++) if (o[i] != "discard") out = out (out == "" ? "" : ",") o[i]
+            $f = (out == "" ? empty : out)
+            print
+        }' "$file" > "$tmp" && cat "$tmp" > "$file"
+    rm -f "$tmp"
+    if grep -Ev '^[[:space:]]*#' "$file" | grep -Eq '(^|[[:space:],])discard([[:space:],]|$)'; then
+        log "WARNING: discard still present in $file"
+    else
+        log "removed discard from $file"
+    fi
+}
+
+in_target() {
+    [ "${KRATOS_FINALIZE_SKIP_CHROOT:-0}" = 1 ] && { log "(test) skip chroot: $*"; return 0; }
+    chroot "$T" env DEBIAN_FRONTEND=noninteractive LC_ALL=C "$@" >/dev/null 2>&1
+}
+
+no_hibernation() {
+    install -d "$T/etc/initramfs-tools/conf.d"
+    printf 'RESUME=none\n' > "$T/etc/initramfs-tools/conf.d/resume"
+    log "initramfs: RESUME=none"
+    g="$T/etc/default/grub"
+    if [ -f "$g" ] && grep -Eq '^GRUB_CMDLINE_LINUX.*resume=' "$g"; then
+        sed -i -E '/^GRUB_CMDLINE_LINUX/ { s/(["[:space:]])resume=[^"[:space:]]*/\1/g; s/  +/ /g; s/=" /="/; s/ "$/"/ }' "$g"
+        log "grub: removed resume= from the kernel command line"
+        if [ -f "$T/boot/grub/grub.cfg" ] || [ "${KRATOS_FINALIZE_SKIP_CHROOT:-0}" = 1 ]; then
+            in_target update-grub || log "WARNING: update-grub failed"
+        fi
+    fi
+}
+
+no_trim() {
+    strip_discard "$T/etc/fstab" 4 defaults
+    strip_discard "$T/etc/crypttab" 4 luks
+    install -d "$T/etc/systemd/system"
+    ln -sfn /dev/null "$T/etc/systemd/system/fstrim.timer"
+    log "fstrim.timer masked"
+}
+
+no_installer() {
+    in_target apt-get -y purge calamares calamares-settings-debian \
+        || log "WARNING: could not purge calamares from the target"
+    rm -rf "$T/etc/calamares" "$T"/usr/lib/calamares/modules/kratos-* \
+           "$T"/usr/local/libexec/kratos/kratos-calamares-*
+    rmdir "$T/usr/lib/calamares/modules" "$T/usr/lib/calamares" 2>/dev/null || true
+    log "installer removed from the target"
+}
+
+if [ "${1:-}" = "--patch-settings" ]; then
+    patch_settings "${2:?settings.conf path}"
+    exit $?
+fi
+
+if [ "${1:-}" = "--root" ]; then
+    T=${2:?root dir}
+else
+    roots=$(findmnt -rn -o TARGET | grep -E '^/tmp/calamares-root-[^/]+$' | sort -u)
+    count=$(printf '%s\n' "$roots" | grep -c . || true)
+    if [ "$count" -ne 1 ]; then
+        log "WARNING: expected one Calamares target, found $count; skipping"
+        exit 0
+    fi
+    T=$roots
+fi
+[ -d "$T/etc" ] || { log "WARNING: $T does not look like an installed system; skipping"; exit 0; }
+
+log "finalizing $T"
+no_hibernation
+no_trim
+no_installer
+log "done"
+exit 0
