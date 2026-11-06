@@ -145,6 +145,9 @@ run tests/test_suid_gate.sh
 step "package lists are valid live-build input"
 run tests/test_package_lists.sh
 
+step "installer final unmount (no 10 s Calamares cap)"
+run tests/test_calamares_unmount.sh
+
 echo
 if (( status == 0 )); then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi
 exit "$status"

@@ -180,6 +180,13 @@ for b in /usr/share/calamares/branding/*/branding.desc \
         -e 's/^([[:space:]]*bootloaderEntryName:[[:space:]]*).*/\1KratosOS/' \
         "$b"
 done
+# Installer reliability: run our uncapped target unmount right before
+# Calamares' own "umount" job, whose 10-second-capped `umount -lv` otherwise
+# fails good installs on slow disks ("could not be unmounted. Installation
+# failed."). Fails the build if settings.conf can't be patched.
+if [ -x /usr/bin/calamares ]; then
+    /usr/local/libexec/kratos/kratos-calamares-unmount --patch-settings /etc/calamares/settings.conf
+fi
 # Default KDE wallpaper for brand-new user profiles (best-effort; the
 # kratos-look autostart also applies it live).
 update-mime-database /usr/share/mime >/dev/null 2>&1 || true
