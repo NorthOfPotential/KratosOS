@@ -69,14 +69,23 @@ rm -rf "$root"
 echo "— privileged binaries the OS does not need are removed, not allowlisted —"
 hook="$here/../config/hooks/live/0100-kratos.hook.chroot"
 pin="$here/../config/includes.chroot_before_packages/etc/apt/preferences.d/kratos-no-mta.pref"
-for p in /usr/sbin/exim4 /usr/sbin/pppd /usr/bin/ntfs-3g /usr/libexec/spice-client-glib-usb-acl-helper; do
+for p in /usr/sbin/exim4 /usr/sbin/ssmtp /usr/sbin/pppd /usr/bin/ntfs-3g /usr/libexec/spice-client-glib-usb-acl-helper; do
     if grep -qxF "$p" "$allow"; then flunk "$p is allowlisted (it should be removed/de-privileged instead)"
     else pass "$p is not on the allowlist"; fi
 done
 if [[ -f "$pin" ]] && grep -qE '^Package: exim4\*' "$pin" && grep -qE '^Pin-Priority: -1' "$pin"; then
     pass "apt pin keeps an MTA (exim4) out of the image and the installed system"
 else flunk "no apt pin blocking exim4"; fi
-if grep -qE 'apt-get purge -y' "$hook" && grep -q 'exim4-daemon-light' "$hook"; then
+# Blocking exim4 alone is not enough: bsd-mailx hard-depends on ANY MTA, so apt
+# substituted ssmtp (CI run #242). The pin must cover the mailx clients that
+# pull an MTA in and the other MTA providers too.
+for pkg in ssmtp nullmailer dma msmtp-mta opensmtpd bsd-mailx s-nail mailutils; do
+    if awk -v p="$pkg" '/^Package:/ {for (i = 2; i <= NF; i++) if ($i == p) hit = 1}
+                        /^Pin-Priority: -1/ && hit {ok = 1} /^$/ {hit = 0} END {exit !ok}' "$pin"; then
+        pass "apt pin blocks $pkg"
+    else flunk "apt pin does not block $pkg (apt could substitute it as the MTA)"; fi
+done
+if grep -qE 'apt-get purge -y' "$hook" && grep -q "'exim4\*'" "$hook" && grep -qw ssmtp "$hook"; then
     pass "build hook purges exim4 as a backstop"
 else flunk "build hook does not purge exim4"; fi
 for p in /usr/sbin/pppd /usr/bin/ntfs-3g /usr/libexec/spice-client-glib-usb-acl-helper; do

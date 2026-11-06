@@ -124,12 +124,19 @@ rm -f /etc/firejail/firejail.users
 # The SUID/capability inventory of a real built image flagged privileged
 # binaries KratosOS does not need. tests/suid-allowlist.txt is the reviewed set.
 #
-# 1) No mail server. exim4 (SUID root, long root-CVE history) arrived only via
-#    rkhunter's SOFT Recommends (bsd-mailx / default-mta). An apt pin in
-#    includes.chroot_before_packages keeps it out; purge here as a backstop.
-if dpkg-query -W -f='${Status}\n' exim4-base 2>/dev/null | grep -q 'install ok installed'; then
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        exim4 exim4-base exim4-config exim4-daemon-light bsd-mailx || true
+# 1) No mail server. MTAs ship SUID/SGID binaries (exim4 SUID root with a
+#    long root-CVE history; ssmtp SGID mail) and a privacy desktop never needs
+#    one. The only path in is rkhunter's SOFT Recommends: bsd-mailx, which then
+#    hard-depends on *any* MTA, so blocking exim4 alone just made apt pick
+#    ssmtp (CI run #242). The apt pin in includes.chroot_before_packages blocks
+#    the mailx clients and every MTA provider; purge here as a backstop.
+mta_pkgs="$(dpkg-query -W -f='${binary:Package} ${Status}\n' \
+    'exim4*' 'postfix*' 'sendmail*' ssmtp nullmailer dma msmtp-mta opensmtpd \
+    courier-mta citadel-mta esmtp-run masqmail bsd-mailx s-nail mailutils \
+    2>/dev/null | awk '/ install ok installed$/ {print $1}')"
+if [ -n "$mta_pkgs" ]; then
+    # shellcheck disable=SC2086  # word-splitting the package list is intended
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y $mta_pkgs || true
 fi
 # 2) Drop setuid where the binary is only ever started by root anyway, so the
 #    bit is pure local-privilege-escalation surface. dpkg-statoverride makes

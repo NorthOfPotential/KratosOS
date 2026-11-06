@@ -1,13 +1,15 @@
 # KratosOS: never install a mail transfer agent.
 #
-# A privacy/anti-forensics desktop has no use for a mail server, and Debian's
-# default MTA (exim4) installs a SUID-root binary with a long history of root
-# CVEs. It only ever arrived as a SOFT dependency (rkhunter Recommends
-# default-mta / bsd-mailx), so blocking it simply leaves those Recommends
-# unsatisfied. Placed in includes.chroot_before_packages so it applies while
-# the image is built AND stays in the installed system (an `apt install` that
-# hard-requires an MTA will now refuse instead of silently adding one; remove
-# this file if you genuinely need local mail).
+# A privacy/anti-forensics desktop has no use for a mail server, and MTAs ship
+# SUID/SGID binaries (Debian's default exim4 is SUID root with a long history
+# of root CVEs; ssmtp is SGID mail). The only path in is a SOFT dependency:
+# rkhunter Recommends bsd-mailx, and bsd-mailx hard-depends on ANY MTA, so
+# blocking exim4 alone made apt pick ssmtp instead (CI run #242). So block the
+# mailx clients that drag an MTA in AND every MTA provider; the Recommends are
+# then simply left unsatisfied. Placed in includes.chroot_before_packages so it
+# applies while the image is built AND stays in the installed system (an `apt
+# install` that hard-requires an MTA now refuses instead of silently adding
+# one; remove this file if you genuinely need local mail).
 Package: exim4*
 Pin: release *
 Pin-Priority: -1
@@ -17,5 +19,13 @@ Pin: release *
 Pin-Priority: -1
 
 Package: sendmail*
+Pin: release *
+Pin-Priority: -1
+
+Package: ssmtp nullmailer dma msmtp-mta opensmtpd courier-mta citadel-mta esmtp-run masqmail
+Pin: release *
+Pin-Priority: -1
+
+Package: bsd-mailx s-nail mailutils
 Pin: release *
 Pin-Priority: -1
