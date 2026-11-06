@@ -4,7 +4,8 @@
 # cryptsetup keyutils` and `grub-pc`, which silently fail with no network. So
 # everything they would fetch must already be in the image. Missing
 # cryptsetup-initramfs made every encrypted install drop to "(initramfs)" after
-# GRUB (VM install test); missing grub-pc left no bootloader (earlier test).
+# GRUB (VM install test); missing systemd-cryptsetup left the encrypted swap
+# locked (no crypttab generator); missing grub-pc left no bootloader.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 lists="$here/../config/package-lists"
@@ -14,7 +15,7 @@ pass() { echo "  PASS  $1"; }
 flunk() { echo "  FAIL  $1"; fail=1; }
 
 in_image() { grep -hvE '^[[:space:]]*(#|$)' "$lists"/*.list.chroot | grep -qx "$1"; }
-for p in cryptsetup cryptsetup-initramfs keyutils grub-pc grub-efi-amd64-bin grub2-common; do
+for p in cryptsetup cryptsetup-initramfs systemd-cryptsetup keyutils grub-pc grub-efi-amd64-bin grub2-common; do
     if in_image "$p"; then pass "$p ships in the image (offline install)"
     else flunk "$p is not in any package list: offline installs break"; fi
 done
