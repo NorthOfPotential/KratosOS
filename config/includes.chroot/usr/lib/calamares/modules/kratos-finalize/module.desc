@@ -1,0 +1,10 @@
+# KratosOS: finalize the installed target right before Calamares' "initramfs"
+# job: no hibernation/resume (boot stall + RAM written to disk), no TRIM on the
+# encrypted disk, no installer left on the installed system.
+# See /usr/local/libexec/kratos/kratos-calamares-finalize.
+---
+type:       "job"
+name:       "kratos-finalize"
+interface:  "process"
+command:    "/usr/local/libexec/kratos/kratos-calamares-finalize"
+timeout:    600

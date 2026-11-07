@@ -151,6 +151,9 @@ run tests/test_calamares_unmount.sh
 step "installer works offline (LUKS initramfs, GRUB in image)"
 run tests/test_installer_offline.sh
 
+step "installer finalize (no hibernation/TRIM, no installer left) + branding/kernel guards"
+run tests/test_installer_finalize.sh
+
 step "kratos status firewall line (no false FAIL without root)"
 run tests/test_status_firewall.sh
 
