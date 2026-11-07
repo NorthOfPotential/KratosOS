@@ -102,6 +102,32 @@ else
 fi
 grep -q 'update-grub' <<<"$out" && pass "grub.cfg is regenerated" || flunk "update-grub not run"
 
+# The form Calamares actually writes (VM install test): SINGLE quotes with
+# resume= last. Treating only " as a quote ate the closing ' and left an
+# unterminated string, so grub-mkconfig dropped the hardening parameters that
+# /etc/default/grub.d/kratos.cfg appends. The edited file must still parse and
+# yield the right values, with the drop-in's additions intact.
+T2="$tmp/target2"; mkdir -p "$T2/etc/default/grub.d" "$T2/boot/grub"
+cat > "$T2/etc/default/grub" <<'EOF'
+GRUB_DEFAULT=0
+GRUB_DISTRIBUTOR='KratosOS'
+GRUB_CMDLINE_LINUX_DEFAULT='quiet cryptdevice=UUID=a1:luks-a1 root=/dev/mapper/luks-a1 splash resume=/dev/mapper/luks-b2'
+GRUB_CMDLINE_LINUX=""
+GRUB_ENABLE_CRYPTODISK=y
+EOF
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT slab_nomerge apparmor=1"' \
+    > "$T2/etc/default/grub.d/kratos.cfg"
+: > "$T2/boot/grub/grub.cfg"
+KRATOS_FINALIZE_SKIP_CHROOT=1 "$helper" --root "$T2" >/dev/null 2>&1
+got="$(sh -c '. "$1"; . "$2"; printf "%s|%s" "$GRUB_CMDLINE_LINUX_DEFAULT" "$GRUB_ENABLE_CRYPTODISK"' _ \
+       "$T2/etc/default/grub" "$T2/etc/default/grub.d/kratos.cfg" 2>&1)"
+want='quiet cryptdevice=UUID=a1:luks-a1 root=/dev/mapper/luks-a1 splash slab_nomerge apparmor=1|y'
+if sh -n "$T2/etc/default/grub" && [[ "$got" == "$want" ]] && [[ ! -e "$T2/etc/default/grub.kratos-orig" ]]; then
+    pass "single-quoted (Calamares) cmdline: resume= stripped, file parses, hardening drop-in still applies"
+else
+    flunk "single-quoted cmdline broken: got [$got]; file: $(grep CMDLINE "$T2/etc/default/grub" | tr '\n' ' ')"
+fi
+
 if grep -Eq '^UUID=aaaa +/ +ext4 +defaults,noatime +0 +1$' "$T/etc/fstab" \
    && grep -Eq '^/dev/mapper/luks-swap +swap +swap +defaults +0 +0$' "$T/etc/fstab" \
    && grep -q '^# /etc/fstab: discard in a comment stays$' "$T/etc/fstab" \

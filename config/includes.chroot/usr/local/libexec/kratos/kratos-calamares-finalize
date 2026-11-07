@@ -86,7 +86,24 @@ no_hibernation() {
     log "initramfs: RESUME=none"
     g="$T/etc/default/grub"
     if [ -f "$g" ] && grep -Eq '^GRUB_CMDLINE_LINUX.*resume=' "$g"; then
-        sed -i -E '/^GRUB_CMDLINE_LINUX/ { s/(["[:space:]])resume=[^"[:space:]]*/\1/g; s/  +/ /g; s/=" /="/; s/ "$/"/ }' "$g"
+        # Calamares writes this line with SINGLE quotes
+        # (GRUB_CMDLINE_LINUX_DEFAULT='quiet ... splash resume=/dev/mapper/..'),
+        # so both quote characters delimit a value. Treating only " as a quote
+        # ate the closing ' and left an unterminated string, which made
+        # grub-mkconfig drop every hardening parameter appended by
+        # /etc/default/grub.d/kratos.cfg (VM install test).
+        q="'"
+        cp -p "$g" "$g.kratos-orig"
+        sed -i -E "/^GRUB_CMDLINE_LINUX/ { s/([\"${q}[:space:]])resume=[^\"${q}[:space:]]*/\\1/g; s/  +/ /g; s/=([\"$q]) /=\\1/; s/ ([\"$q])\$/\\1/ }" "$g"
+        # Never leave a broken /etc/default/grub behind: if the edit doesn't
+        # parse, put the original back (a resume wait beats losing the
+        # hardened kernel command line).
+        if ! sh -n "$g" 2>/dev/null; then
+            mv -f "$g.kratos-orig" "$g"
+            log "WARNING: editing $g broke its syntax; restored the original (resume= kept)"
+            return 0
+        fi
+        rm -f "$g.kratos-orig"
         log "grub: removed resume= from the kernel command line"
         if [ -f "$T/boot/grub/grub.cfg" ] || [ "${KRATOS_FINALIZE_SKIP_CHROOT:-0}" = 1 ]; then
             in_target update-grub || log "WARNING: update-grub failed"
