@@ -197,6 +197,13 @@ if [[ -x "$binhook" ]] && grep -q 'live-splash.png' "$binhook" \
 else
     flunk "live boot menu branding hook/splash wrong"
 fi
+# The logo lives in the splash's top third, so nothing may be drawn there:
+# GRUB's theme title line is blanked (it overlapped the logo in the VM test).
+if grep -q "title-text:" "$binhook" && grep -q '\\1""' "$binhook"; then
+    pass "live GRUB theme title is blanked (no text over the logo)"
+else
+    flunk "live boot menu branding hook/splash wrong"
+fi
 
 if grep -q "dpkg-query -W -f='\${Depends}" "$sechook" && grep -q 'apt-get -y purge \$old' "$sechook" \
    && grep -q 'expected exactly 1' "$sechook"; then
