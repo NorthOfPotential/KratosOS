@@ -59,8 +59,9 @@ if grep -qx 'WorkingDirectory=/opt/kratos-ai/data' "$ow" \
     pass "Open WebUI runs from its writable data dir (secret key not written to read-only /), private umask"
 else flunk "Open WebUI cwd is not its writable data dir (crash-loops writing .webui_secret_key)"; fi
 if grep -qx 'Environment=DO_NOT_TRACK=true' "$ow" && grep -qx 'Environment=SCARF_NO_ANALYTICS=true' "$ow" \
-   && grep -qx 'Environment=ANONYMIZED_TELEMETRY=false' "$ow"; then
-    pass "Open WebUI telemetry opt-outs set"
+   && grep -qx 'Environment=ANONYMIZED_TELEMETRY=false' "$ow" \
+   && grep -qx 'Environment=ENABLE_VERSION_UPDATE_CHECK=false' "$ow"; then
+    pass "Open WebUI telemetry opt-outs and update check off"
 else flunk "Open WebUI telemetry opt-outs missing"; fi
 d="$root/usr/share/applications/kratos-ai.desktop"
 if [[ -f "$d" ]] && grep -q '^Exec=.*kratos-ai' "$d"; then pass "Kratos AI launcher present"; else flunk "launcher missing"; fi

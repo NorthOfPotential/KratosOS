@@ -91,6 +91,10 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
 - Open WebUI's **usage telemetry is switched off** in its service
   (`SCARF_NO_ANALYTICS`, `DO_NOT_TRACK`, `ANONYMIZED_TELEMETRY=false`), the same
   opt-outs upstream bakes into its container image but a pip install lacks.
+- Open WebUI's **"new version available" check is off**
+  (`ENABLE_VERSION_UPDATE_CHECK=false`); upgrades come from `kratos-ai setup`.
+  On first use of document chat it downloads its small embedding model from
+  Hugging Face (one time, subject to your `kratos mode`).
 
 ## Download integrity
 
