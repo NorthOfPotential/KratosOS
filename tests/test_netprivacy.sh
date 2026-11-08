@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Network privacy posture: DHCP/MAC identity (finding 23) and libvirt
 # authorization (finding 26).
+# shellcheck disable=SC2016 # literal $user/$* in grep patterns and fake scripts
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$here/../config/includes.chroot"
@@ -105,6 +106,41 @@ if grep -qE '^firecfg' "$hook" && grep -qE '^rm -f /etc/firejail/firejail\.users
 else
     flunk "firejail allow-list not cleared after firecfg (installed user locked out)"
 fi
+# Instead of the allow-list, a group decides who may run the SUID binary:
+# root:firejail 4750, so service accounts can't execute it at all.
+if grep -qE '^getent group firejail >/dev/null \|\| groupadd --system firejail$' "$hook" \
+   && grep -qxF 'root firejail 4750 /usr/bin/firejail' "$hook" \
+   && grep -qF '!= "root:firejail 4750"' "$hook"; then
+    pass "firejail is root:firejail 4750 via dpkg-statoverride, and the build verifies it"
+else
+    flunk "firejail is not restricted to the firejail group"
+fi
+# The group line must come before the statoverride loop that needs it.
+if (( $(grep -n 'groupadd --system firejail' "$hook" | cut -d: -f1) < $(grep -n 'root firejail 4750' "$hook" | cut -d: -f1) )); then
+    pass "firejail group is created before the statoverride uses it"
+else
+    flunk "statoverride references the firejail group before it exists"
+fi
+# Both people who log in get the group: the live user (live-config component)
+# and the installed user (Calamares users.conf, tested in test_installer_finalize).
+lc="$here/../config/includes.chroot/usr/lib/live/config/9000-kratos-firejail"
+if [[ -x "$lc" ]] && grep -q 'usermod -a -G firejail "$user"' "$lc" && grep -q 'LIVE_USERNAME:-user' "$lc"; then
+    pass "live user joins the firejail group at live boot"
+else
+    flunk "live user is not put in the firejail group (sandboxed apps would not start)"
+fi
+# Run the live-config component against a fake usermod/getent/id.
+fk="$(mktemp -d)"
+printf '#!/bin/sh\nexit 0\n' > "$fk/getent"; printf '#!/bin/sh\nexit 0\n' > "$fk/id"
+printf '#!/bin/sh\necho "$*" >> "%s/usermod.log"\n' "$fk" > "$fk/usermod"
+chmod +x "$fk/getent" "$fk/id" "$fk/usermod"
+PATH="$fk:$PATH" sh "$lc" >/dev/null 2>&1
+if grep -qx -- '-a -G firejail user' "$fk/usermod.log" 2>/dev/null; then
+    pass "live-config component runs: usermod -a -G firejail user"
+else
+    flunk "live-config component did not add the live user: $(cat "$fk/usermod.log" 2>/dev/null)"
+fi
+rm -rf "$fk"
 
 echo "— libvirt authorization (finding 26) —"
 if [[ -f "$lvrule" ]] && grep -qE 'org\.libvirt\.' "$lvrule" && grep -qE 'polkit\.Result\.NO' "$lvrule"; then

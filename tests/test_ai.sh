@@ -72,7 +72,7 @@ if grep -q 'v0.40.15' "$lib/ai.sh" \
    && grep -q 'ollama-linux-amd64.tar.zst' "$lib/ai.sh" \
    && grep -q 'ollama version is' "$cli" \
    && grep -q 'webui_version="0.13.1"' "$cli" \
-   && grep -q '"open-webui==$webui_version"' "$cli"; then
+   && grep -qF 'grep -qxF "open-webui==$webui_version \\" "$lock"' "$cli"; then
     pass "security-patched Ollama and Open WebUI releases are selected and verified"
 else flunk "AI runtime still risks installing a vulnerable version"; fi
 
@@ -82,10 +82,11 @@ if sed -n '/^cmd_setup()/,/^}/p' "$cli" | grep -qE '^[[:space:]]+cd / '; then
     pass "setup runs from a neutral cwd (unprivileged steps never touch the caller's home)"
 else flunk "setup runs the unprivileged uv/pip steps from the caller's cwd"; fi
 
-if grep -q 'requires 3.11/3.12' "$cli" \
-   && grep -q 'python3.11 python3.12 python3' "$cli" \
+if grep -q 'it needs 3.12' "$cli" \
+   && grep -q 'for candidate in python3.12 python3; do' "$cli" \
+   && grep -qF '[[ "$version" == 3.12 ]]' "$cli" \
    && grep -q 'provision_python312' "$cli"; then
-    pass "Open WebUI never runs on unsupported Python 3.13; a private 3.12 is provisioned instead"
+    pass "Open WebUI runs on 3.12 (what the locks are resolved for), never 3.13; a private 3.12 is provisioned"
 else flunk "Open WebUI may run on unsupported Python or downgrade insecurely"; fi
 
 echo "— the app-private Python is supply-chain pinned and sealed —"
@@ -116,8 +117,7 @@ else flunk "no path-traversal screen before tar extraction"; fi
 if grep -qF -- '-C /usr/local' "$cli" && grep -q 'tar --zstd -xf' "$cli"; then
     pass "extracts into /usr/local (matches OLLAMA_BIN), not bare /usr"
 else flunk "extraction target mismatch with OLLAMA_BIN"; fi
-if grep -q 'runuser -u kratos-ai --' "$cli" \
-   && grep -q '"open-webui==$webui_version"' "$cli"; then
+if grep -q 'runuser -u kratos-ai -- "$AI_VENV/bin/pip" install' "$cli"; then
     pass "Open WebUI pip install runs as the unprivileged kratos-ai user, not root"
 else flunk "pip install still runs as root (hostile-dependency root-RCE)"; fi
 
@@ -194,10 +194,80 @@ if grep -q 'ai_require_free /usr/local 3' "$cli" \
    && grep -q 'ai_require_free "$AI_HOME"' "$cli"; then
     pass "setup checks free space before the runtime, model and Open WebUI downloads"
 else flunk "a large setup step is not space-checked"; fi
-if grep -q -- '--index-url "$KRATOS_AI_TORCH_CPU_INDEX" torch' "$cli" \
+if grep -q 'extra_index=(--extra-index-url "$KRATOS_AI_TORCH_CPU_INDEX")' "$cli" \
    && grep -q 'KRATOS_AI_TORCH_CPU_INDEX:=https://download.pytorch.org/whl/cpu' "$lib/ai.sh" \
-   && grep -q '"$gpu_vendor" != nvidia' "$cli"; then
-    pass "without an NVIDIA GPU the CPU-only PyTorch build is installed (HTTPS, official index)"
+   && grep -q 'lock="$KRATOS_AI_LOCK_DIR/openwebui-cpu.lock"' "$cli" \
+   && grep -q '"$gpu_vendor" == nvidia' "$cli"; then
+    pass "without an NVIDIA GPU the CPU-only PyTorch lock is installed (HTTPS, official index)"
 else flunk "CUDA PyTorch is installed even without an NVIDIA GPU"; fi
+
+echo "— temp-dir cleanup traps don't outlive their function (VM test: setup exited 1) —"
+# The real trap line from install_ollama, run under set -u inside a nested call
+# exactly as cmd_setup -> install_ollama does.
+trapline="$(grep -m1 'trap ".*trap - RETURN" RETURN' "$cli" | sed 's/^[[:space:]]*//')"
+if [[ -n "$trapline" ]] && out="$(bash -c '
+    set -euo pipefail
+    inner() { local tmp; tmp="$(mktemp -d)"; '"$trapline"'; echo "$tmp"; }
+    outer() { d="$(inner)"; [[ ! -e "$d" ]] || { echo "LEFT $d"; exit 3; }; inner >/dev/null; echo OUTER-DONE; }
+    outer; echo REACHED-END' 2>&1)" && grep -q 'REACHED-END' <<<"$out"; then
+    pass "install_ollama's cleanup runs once, removes the dir, and the caller returns cleanly under set -u"
+else
+    flunk "temp-dir trap breaks the caller: ${out:-no trap line found}"
+fi
+bad_traps="$(grep -rn 'trap .*RETURN' "$cli" "$lib" | grep -v 'trap - RETURN" RETURN' || true)"
+if [[ -z "$bad_traps" ]]; then
+    pass "every RETURN trap in kratos-ai and lib/kratos clears itself after running"
+else
+    flunk "RETURN traps that persist past their function: $bad_traps"
+fi
+
+echo "— Open WebUI and every library under it come from a hash-pinned lock —"
+locks="$root/usr/local/share/kratos/ai"
+webui="$(sed -n 's/^[[:space:]]*local webui_version="\([^"]*\)".*/\1/p' "$cli")"
+if grep -q 'KRATOS_AI_LOCK_DIR:=/usr/local/share/kratos/ai' "$lib/ai.sh" \
+   && grep -q 'KRATOS_AI_SKIP_SPACE_CHECK KRATOS_AI_LOCK_DIR' "$cli"; then
+    pass "lock directory is fixed for the installed binary (not caller-selectable)"
+else flunk "lock directory can be redirected by the caller"; fi
+# The install must be hash-checked, wheel-only and resolve nothing, and pip
+# must not fetch anything unpinned (the old "pip install --upgrade pip" did).
+inst="$(sed -n '/^setup_webui()/,/^}/p' "$cli")"
+if grep -q -- '--require-hashes --no-deps' <<<"$inst" \
+   && grep -qF -- '--only-binary=:all: "${extra_index[@]}" -r "$lock"' <<<"$inst" \
+   && ! grep -q -- '--upgrade pip' <<<"$inst" \
+   && [[ "$(grep -c 'bin/pip" install' <<<"$inst")" == 1 ]]; then
+    pass "setup_webui's only pip install is hash-checked, wheels-only, no dependency resolution"
+else flunk "setup_webui installs something that is not hash-pinned"; fi
+for v in cpu nvidia; do
+    f="$locks/openwebui-$v.lock"
+    if [[ ! -f "$f" ]]; then flunk "$v lock missing"; continue; fi
+    # Every requirement is name==version followed by at least one sha256 hash;
+    # nothing unpinned, no URLs/VCS/editables, no index or option lines.
+    if res="$(python3 "$here/check_lock.py" "$f")"; then
+        pass "$v lock: all $res packages pinned to one version with sha256 hashes"
+    else flunk "$v lock has unpinned or unhashed entries: $res"; fi
+    if grep -qxF "open-webui==$webui \\" "$f"; then pass "$v lock pins open-webui==$webui (matches kratos-ai)"
+    else flunk "$v lock is not for open-webui $webui (regenerate: tools/lock-openwebui.sh)"; fi
+done
+if grep -Eq '^torch==[^ ]+\+cpu \\$' "$locks/openwebui-cpu.lock" \
+   && ! grep -Eq '^nvidia-' "$locks/openwebui-cpu.lock"; then
+    pass "CPU lock: CPU-only PyTorch, no NVIDIA CUDA libraries"
+else flunk "CPU lock would pull CUDA PyTorch"; fi
+if grep -Eq '^torch==[0-9.]+ \\$' "$locks/openwebui-nvidia.lock"; then
+    pass "NVIDIA lock: regular (CUDA) PyTorch"
+else flunk "NVIDIA lock has no CUDA PyTorch"; fi
+# The lock checker itself must reject what it is meant to catch.
+bad="$(mktemp)"
+printf 'requests==2.0 \\\n    --hash=sha256:%064d\nflask>=1.0\n' 0 > "$bad"
+if ! python3 "$here/check_lock.py" "$bad" >/dev/null 2>&1; then pass "lock checker rejects an unpinned entry"
+else flunk "lock checker accepted an unpinned entry"; fi
+printf 'requests==2.0\nurllib3==2.0 \\\n    --hash=sha256:%064d\n' 0 > "$bad"
+if ! python3 "$here/check_lock.py" "$bad" >/dev/null 2>&1; then pass "lock checker rejects an entry without a hash"
+else flunk "lock checker accepted an unhashed entry"; fi
+rm -f "$bad"
+gen="$here/../tools/lock-openwebui.sh"
+if [[ -x "$gen" ]] && grep -q -- '--generate-hashes --only-binary :all:' "$gen" \
+   && grep -q 'explicit = true' "$gen"; then
+    pass "lock generator: hashes, wheels only, CPU torch only from PyTorch's index"
+else flunk "lock generator missing or weaker than the install"; fi
 
 exit "$fail"

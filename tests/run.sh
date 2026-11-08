@@ -19,12 +19,13 @@ run shellcheck -x $inc/usr/local/bin/kratos $inc/usr/local/bin/kratos-panic \
     $inc/usr/local/lib/kratos/*.sh $inc/usr/local/lib/kratos/stealth-seat \
     $inc/usr/local/libexec/kratos/* \
     workstation/gateway/kratos-gw-harden \
-    build.sh tools/kratos-validate.sh config/hooks/live/*.chroot tests/*.sh && echo ok
+    $inc/usr/lib/live/config/9000-kratos-firejail \
+    build.sh tools/kratos-validate.sh tools/lock-openwebui.sh config/hooks/live/*.chroot tests/*.sh && echo ok
 
 step "nftables syntax"
 tmp="$(mktemp -d)"
 printf 'define WG_IF = "wg0"\ndefine WG_ENDPOINT = 198.51.100.7\ndefine WG_PORT = 51820\ndefine WG_DNS = { 10.2.0.1 }\ndefine WG_FWMARK = 0xca6c\n' > "$tmp/defs"
-for f in "$inc"/etc/kratos/modes/*.nft "$inc"/etc/kratos/stealth.nft; do
+for f in "$inc"/etc/kratos/modes/*.nft "$inc"/etc/kratos/stealth.nft "$inc"/etc/kratos/ai-loopback.nft; do
     sed "s|/run/kratos/vpn.nft|$tmp/defs|" "$f" > "$tmp/x.nft"
     if nft -c -f "$tmp/x.nft"; then echo "ok   $f"; else echo "FAIL $f"; status=1; fi
 done
@@ -122,6 +123,13 @@ fi
 step "firewall behaviour (network namespace)"
 if [[ $EUID -eq 0 ]]; then
     run unshare -n python3 tests/firewall_test.py
+else
+    echo "skipped (needs root)"
+fi
+
+step "only people and the AI services reach Ollama's API (network namespace)"
+if [[ $EUID -eq 0 ]]; then
+    run unshare -n bash tests/test_ai_loopback.sh
 else
     echo "skipped (needs root)"
 fi

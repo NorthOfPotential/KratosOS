@@ -22,7 +22,7 @@ _self="$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")"
 if [[ "$_self" == /usr/local/bin/kratos-ai ]]; then
     unset KRATOS_LIB AI_HOME AI_VENV AI_STATE OLLAMA_BIN OLLAMA_SHA_BASELINE \
           OLLAMA_HOST WEBUI_HOST WEBUI_PORT \
-          KRATOS_AI_TORCH_CPU_INDEX KRATOS_AI_SKIP_SPACE_CHECK
+          KRATOS_AI_TORCH_CPU_INDEX KRATOS_AI_SKIP_SPACE_CHECK KRATOS_AI_LOCK_DIR
 fi
 unset _self
 
@@ -106,7 +106,14 @@ install_ollama() {
     ai_require_free /usr/local 3 "the Ollama runtime"
     info "Installing or updating the Ollama runtime ($KRATOS_AI_OLLAMA_VERSION)..."
     need_cmd zstd tar python3
-    local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+    # A RETURN trap stays set after this function returns and fires again when
+    # the caller returns, where the local $tmp no longer exists: under set -u
+    # that ended `kratos-ai setup` with "tmp: unbound variable" and exit 1 after
+    # a successful setup (VM test). Expand the path now and clear the trap once
+    # it has run.
+    local tmp; tmp="$(mktemp -d)"
+    # shellcheck disable=SC2064  # expand $tmp now, at trap-set time
+    trap "rm -rf -- '$tmp'; trap - RETURN" RETURN
     local tarball="$tmp/ollama.tar.zst" asset; asset="${KRATOS_AI_OLLAMA_URL##*/}"
     [[ "$asset" == *.tar.zst ]] || die "unsupported Ollama archive; require .tar.zst"
     curl -fL --proto "=https" --tlsv1.2 --connect-timeout 30 "$KRATOS_AI_OLLAMA_URL" -o "$tarball" \
@@ -217,23 +224,25 @@ setup_webui() {
         ok "Open WebUI $webui_version already installed (root-owned code)"
         return
     fi
-    # Open WebUI explicitly supports Python 3.11/3.12 only. Never force an
-    # unsupported interpreter or silently install an old vulnerable WebUI:
-    # prefer a system 3.11/3.12; otherwise (the normal case on Debian 13, which
+    # Open WebUI supports Python 3.11/3.12 only, and the dependency locks are
+    # resolved for 3.12 (their wheels are cp312). Never force an unsupported
+    # interpreter or silently install an old vulnerable WebUI: use a system
+    # 3.12 if there is one; otherwise (the normal case on Debian 13, which
     # ships only 3.13) provision a hash-verified app-private 3.12 with uv.
     require_network
+    local lock extra_index=()
     local python_cmd="" candidate version
-    for candidate in python3.11 python3.12 python3; do
+    for candidate in python3.12 python3; do
         command -v "$candidate" >/dev/null 2>&1 || continue
         version="$("$candidate" -c 'import sys;print("%d.%d"%sys.version_info[:2])')" || continue
-        if [[ "$version" == 3.11 || "$version" == 3.12 ]]; then
+        if [[ "$version" == 3.12 ]]; then
             python_cmd="$(command -v "$candidate")"
             break
         fi
     done
     if [[ -z "$python_cmd" ]]; then
         python_cmd="$(provision_python312)" \
-            || die "could not provision Python $UV_PYTHON for Open WebUI (it requires 3.11/3.12; Debian 13 ships 3.13)"
+            || die "could not provision Python $UV_PYTHON for Open WebUI (it needs 3.12; Debian 13 ships 3.13)"
     fi
     info "Installing patched Open WebUI $webui_version with unprivileged pip..."
     systemctl stop kratos-openwebui.service >/dev/null 2>&1 || true
@@ -242,20 +251,30 @@ setup_webui() {
     ai_require_free "$AI_HOME" "$(ai_webui_disk_gb "$gpu_vendor")" "Open WebUI"
     install -d -m 750 -o kratos-ai -g kratos-ai "$AI_VENV"
     runuser -u kratos-ai -- "$python_cmd" -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
-    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir --upgrade pip >/dev/null 2>&1 || true
+    # Every package is installed from a hash-pinned lock (tools/lock-openwebui.sh):
+    # one exact version per package, and pip refuses any file whose SHA256 isn't
+    # in the lock, so a library swapped on PyPI can't get in. Wheels only (an
+    # sdist build would fetch unpinned build tools), no dependency resolution
+    # (the lock is complete), and no self-upgrade of pip (that was unpinned).
     # Open WebUI's embedding stack needs PyTorch. The default PyPI build
     # bundles ~5 GB of NVIDIA CUDA libraries that only an NVIDIA GPU can use
-    # (VM test: it filled a 21 GB root). Without one, install PyTorch's
-    # official CPU-only build first; pip then keeps it for open-webui.
+    # (VM test: it filled a 21 GB root), so without one the CPU lock pins
+    # PyTorch's official CPU-only build, found on PyTorch's own index; its
+    # hash in the lock is what makes that second index safe to use.
     # (Inference itself runs in Ollama, which has its own GPU support.)
-    if [[ "$gpu_vendor" != nvidia ]]; then
-        info "No NVIDIA GPU: installing the CPU-only PyTorch build (no CUDA libraries)..."
-        runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir \
-            --index-url "$KRATOS_AI_TORCH_CPU_INDEX" torch \
-            || die "could not install the CPU-only PyTorch build"
+    if [[ "$gpu_vendor" == nvidia ]]; then
+        lock="$KRATOS_AI_LOCK_DIR/openwebui-nvidia.lock"
+    else
+        lock="$KRATOS_AI_LOCK_DIR/openwebui-cpu.lock"
+        extra_index=(--extra-index-url "$KRATOS_AI_TORCH_CPU_INDEX")
+        info "No NVIDIA GPU: using the CPU-only PyTorch build (no CUDA libraries)..."
     fi
-    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir "open-webui==$webui_version" \
-        || die "could not install patched Open WebUI"
+    [[ -f "$lock" && ! -L "$lock" ]] || die "dependency lock missing: $lock"
+    grep -qxF "open-webui==$webui_version \\" "$lock" \
+        || die "$lock does not pin open-webui==$webui_version (regenerate it: tools/lock-openwebui.sh)"
+    runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir --require-hashes --no-deps \
+        --only-binary=:all: "${extra_index[@]}" -r "$lock" \
+        || die "could not install Open WebUI from the hash-pinned lock $lock"
     installed="$(installed_webui_version)"
     [[ "$installed" == "$webui_version" ]] \
         || die "Open WebUI version mismatch after install (found $installed; want $webui_version)"

@@ -273,7 +273,7 @@ Download the KVM image, its .asc signature and the signing key from https://www.
     stage="$(mktemp -d "$KRATOS_STATE/.setup.XXXXXXXX")" || die "cannot create a root-only staging directory"
     chmod 700 "$stage"
     # shellcheck disable=SC2064  # expand $stage now, at trap-set time
-    trap "rm -rf -- '$stage'" RETURN
+    trap "rm -rf -- '$stage'; trap - RETURN" RETURN
     info "Copying the download to root-only storage before verifying it..."
     if ! cp -- "$archive" "$stage/whonix.libvirt.xz" || ! cp -- "$sig" "$stage/whonix.libvirt.xz.asc"; then
         die "could not copy the Whonix download to $stage (out of space?)"
@@ -491,8 +491,8 @@ stealth_autoprovision() {
         info "${BOLD}Fetching and verifying Whonix${RESET} (one time per release; then just toggle)."
         local stage
         stage="$(mktemp -d)"
-        # shellcheck disable=SC2064
-        trap "rm -rf '$stage'" RETURN
+        # shellcheck disable=SC2064  # expand $stage now; clear the trap once run
+        trap "rm -rf -- '$stage'; trap - RETURN" RETURN
         archive="$(stealth_fetch_whonix "$stage")" || die "could not download Whonix (check your connection, or set STEALTH_WHONIX_URL)"
         verify_whonix "$archive" "$archive.asc" "$key"
         if [[ "${STEALTH_WHONIX_CACHE:-yes}" == yes ]]; then

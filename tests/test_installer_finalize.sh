@@ -66,6 +66,77 @@ else
     pass "patch fails loudly without an initramfs step"
 fi
 
+# ── 1b. users.conf: the installed user joins the firejail group ────────────
+# (only firejail group members may run the root:firejail 4750 sandbox binary)
+cat > "$tmp/users.conf" <<'EOF'
+---
+userGroup:       users
+defaultGroups:
+    - cdrom
+    - sudo
+    - audio
+autologinGroup:  autologin
+sudoersGroup:    sudo
+EOF
+"$helper" --patch-users "$tmp/users.conf" >/dev/null
+"$helper" --patch-users "$tmp/users.conf" >/dev/null
+if [[ "$(grep -c -- '- firejail' "$tmp/users.conf")" == 1 ]] \
+   && [[ "$(sed -n '/^defaultGroups:/,/^[a-z]/p' "$tmp/users.conf" | grep -c '^    - ')" == 4 ]] \
+   && grep -qx 'autologinGroup:  autologin' "$tmp/users.conf" && grep -qx '    - firejail' "$tmp/users.conf"; then
+    pass "users.conf: firejail added once to defaultGroups, same indentation, rest untouched"
+else
+    flunk "users.conf patch wrong: $(tr '\n' ' ' < "$tmp/users.conf")"
+fi
+printf -- '---\nuserGroup: users\n' > "$tmp/nogroups.conf"
+if "$helper" --patch-users "$tmp/nogroups.conf" >/dev/null 2>&1; then
+    flunk "users patch succeeded without a defaultGroups list"
+else
+    pass "users patch fails loudly without a defaultGroups list"
+fi
+grep -q -- "kratos-calamares-finalize --patch-users /etc/calamares/modules/users.conf" "$hook" \
+    && pass "image hook patches users.conf" || flunk "image hook does not patch users.conf"
+
+# ── 1c. partition.conf: no hibernation-sized swap ──────────────────────────
+# Calamares' legacy default (no userSwapChoices) is suspend-to-disk swap of at
+# least RAM size: 8.8 GB on the 8 GB VM test machine, for a system that never
+# hibernates.
+cat > "$tmp/partition.conf" <<'EOF'
+---
+efiSystemPartition: "/boot/efi"
+userSwapChoices:
+    - none      # Create no swap, use no swap
+    - small     # Up to 4GB
+    - suspend   # At least main memory size
+    # - reuse
+    - file      # To swap file instead of partition
+
+initialSwapChoice: suspend
+ensureSuspendToDisk: true
+luksGeneration: luks2
+EOF
+"$helper" --patch-partition "$tmp/partition.conf" >/dev/null
+"$helper" --patch-partition "$tmp/partition.conf" >/dev/null
+if [[ "$(grep -c '^userSwapChoices:' "$tmp/partition.conf")" == 1 ]] \
+   && grep -qx 'initialSwapChoice: small' "$tmp/partition.conf" \
+   && [[ "$(grep -c '^initialSwapChoice:' "$tmp/partition.conf")" == 1 ]] \
+   && [[ "$(sed -n '/^userSwapChoices:/,/^[a-z]/p' "$tmp/partition.conf" | grep -cE '^[[:space:]]+- ')" == 2 ]] \
+   && ! grep -Eq 'suspend|file|ensureSuspendToDisk' <(grep -v '^#' "$tmp/partition.conf") \
+   && grep -qx 'efiSystemPartition: "/boot/efi"' "$tmp/partition.conf" \
+   && grep -qx 'luksGeneration: luks2' "$tmp/partition.conf"; then
+    pass "partition.conf: swap choices none/small (default small), other keys kept, idempotent"
+else
+    flunk "partition.conf patch wrong: $(tr '\n' ' ' < "$tmp/partition.conf")"
+fi
+rm -f "$tmp/nopart.conf"
+"$helper" --patch-partition "$tmp/nopart.conf" >/dev/null
+if head -1 "$tmp/nopart.conf" | grep -qx -- '---' && grep -qx 'initialSwapChoice: small' "$tmp/nopart.conf"; then
+    pass "partition.conf is created when the package ships none"
+else
+    flunk "no partition.conf created: $(tr '\n' ' ' < "$tmp/nopart.conf" 2>/dev/null)"
+fi
+grep -q -- "kratos-calamares-finalize --patch-partition /etc/calamares/modules/partition.conf" "$hook" \
+    && pass "image hook patches partition.conf" || flunk "image hook does not patch partition.conf"
+
 # ── 2. finalize an installed-target tree ───────────────────────────────────
 T="$tmp/target"; mkdir -p "$T/etc/default" "$T/boot/grub" "$T/usr/lib/calamares/modules/kratos-unmount" \
     "$T/usr/local/libexec/kratos" "$T/etc/calamares"

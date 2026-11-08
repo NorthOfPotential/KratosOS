@@ -84,6 +84,12 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
 
 - Inference is 100% local. The model never phones home.
 - The UI and Ollama bind to **loopback only**.
+- Ollama's API has no password, so the firewall decides who may reach it
+  (`/etc/kratos/ai-loopback.nft`, in every network mode): root, people's own
+  accounts (uid 1000–59999) and the `ollama`/`kratos-ai` service accounts.
+  Any other account on the machine (e.g. a compromised system service) is
+  refused, so it can't run, download or delete models. Open WebUI has its own
+  login.
 - **Web search** (optional, toggled per-chat in the UI) makes outbound requests
   to a search engine (DuckDuckGo by default) — that traffic goes out like any
   other, subject to your current `kratos mode` (normal/VPN/offline).
@@ -118,8 +124,17 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
   upstream says to apply as soon as possible, so older pins are known
   vulnerable. Setup checks the installed version and rebuilds out-of-date
   environments.
+- **Open WebUI's dependencies** (~240 packages, PyTorch included) are
+  installed from a **hash-pinned lock** shipped in the image
+  (`/usr/local/share/kratos/ai/openwebui-cpu.lock`, or `-nvidia.lock` with an
+  NVIDIA GPU): every package at one exact version, and pip refuses any file
+  whose SHA256 isn't in the lock, so a library replaced on PyPI after the lock
+  was made can't be installed. Wheels only (no package builds from source).
+  The locks are generated with `tools/lock-openwebui.sh` (CI job
+  `lock-openwebui`) whenever the Open WebUI version changes.
 - **Python for Open WebUI.** Open WebUI supports only Python 3.11/3.12, while
-  Debian 13 ships 3.13. Setup uses a system 3.11/3.12 if one exists; otherwise
+  Debian 13 ships 3.13, and the locks are resolved for 3.12. Setup uses a
+  system 3.12 if one exists; otherwise
   (the normal case) it provisions an **app-private CPython 3.12** under
   `/opt/kratos-ai/python` with **uv**. uv itself is installed from a single
   **hash-pinned** PyPI wheel (`pip --require-hashes`), and uv verifies the

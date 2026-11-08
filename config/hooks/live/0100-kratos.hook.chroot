@@ -72,6 +72,18 @@ getent passwd kstealth >/dev/null || \
     useradd -r -g kstealth -s /usr/sbin/nologin -d /var/lib/kratos/stealth-home kstealth
 install -d -m 700 -o kstealth -g kstealth /var/lib/kratos/stealth-home
 
+# ── Kratos AI service accounts ───────────────────────────────
+# Created here (kratos-ai setup creates them identically if missing) so they
+# exist from the first boot: /etc/kratos/ai-loopback.nft names them as the only
+# service accounts allowed to reach Ollama's API, and nft resolves the names
+# when that table loads.
+getent group ollama >/dev/null || groupadd --system ollama
+getent passwd ollama >/dev/null || \
+    useradd --system --home-dir /var/lib/kratos/ai/models --shell /usr/sbin/nologin -g ollama ollama
+getent group kratos-ai >/dev/null || groupadd --system kratos-ai
+getent passwd kratos-ai >/dev/null || \
+    useradd --system --home-dir /opt/kratos-ai --shell /usr/sbin/nologin -g kratos-ai kratos-ai
+
 # ── Hide processes between users ────────────────────────────
 # With hidepid=2 a normal user can't see the QEMU processes, their command
 # lines (which name the display sockets) or the kstealth session at all.
@@ -115,8 +127,14 @@ CONF
 # may run the SUID binary — but at BUILD time no human account exists yet (the
 # install user is created later by Calamares), so that list ends up without them
 # and every real login hits "user is not allowed to use Firejail", disabling the
-# sandbox for the only person who uses the machine. Remove the allow-list so
-# firejail is available to all (human) accounts; the app symlinks still sandbox.
+# sandbox for the only person who uses the machine. So the allow-list goes, and
+# who may run firejail is decided by a group instead: /usr/bin/firejail is made
+# root:firejail 4750 (dpkg-statoverride below), so service accounts can't even
+# execute the SUID binary (firejail has had local-root bugs); the live user
+# (/usr/lib/live/config/9000-kratos-firejail) and the installed user (Calamares
+# users.conf, patched below) are put in the group. Users added later need
+# `sudo adduser NAME firejail`, or their sandboxed apps won't start.
+getent group firejail >/dev/null || groupadd --system firejail
 # Never wrap plain command-line utilities: a firejail'd sha256sum fails on more
 # than 128 arguments (firejail's MAX_ARGS) and sandboxes nothing useful.
 install -d /etc/firejail/firecfg.d
@@ -167,7 +185,13 @@ root root 0755 /usr/libexec/spice-client-glib-usb-acl-helper
 root root 0755 /usr/bin/chfn
 root root 0755 /usr/bin/chsh
 root root 0755 /usr/lib/openssh/ssh-keysign
+root firejail 4750 /usr/bin/firejail
 EOF
+# firejail stays setuid, but only for members of the firejail group (above).
+if [ "$(stat -c '%U:%G %a' /usr/bin/firejail)" != "root:firejail 4750" ]; then
+    echo "KratosOS: /usr/bin/firejail is not root:firejail 4750" >&2
+    exit 1
+fi
 
 # ── Branding: make the installer and look say KratosOS, not Debian ──────────
 chmod 755 /usr/local/bin/kratos-apply-look 2>/dev/null || true
@@ -212,6 +236,18 @@ if [ -x /usr/bin/calamares ]; then
     # (every encrypted boot stalled on the swap resume device), no TRIM on the
     # encrypted disk, and no installer left on the installed system.
     /usr/local/libexec/kratos/kratos-calamares-finalize --patch-settings /etc/calamares/settings.conf
+    # The installed user joins the firejail group (only members may run the
+    # SUID sandbox), and swap is sized for a system that never hibernates.
+    # Calamares reads /etc/calamares/modules first; start from the packaged
+    # config when there is one. Both fail the build if they can't be applied.
+    install -d /etc/calamares/modules
+    for m in users partition; do
+        if [ ! -f "/etc/calamares/modules/$m.conf" ] && [ -f "/usr/share/calamares/modules/$m.conf" ]; then
+            cp "/usr/share/calamares/modules/$m.conf" "/etc/calamares/modules/$m.conf"
+        fi
+    done
+    /usr/local/libexec/kratos/kratos-calamares-finalize --patch-users /etc/calamares/modules/users.conf
+    /usr/local/libexec/kratos/kratos-calamares-finalize --patch-partition /etc/calamares/modules/partition.conf
     # Installer artwork: our own branding (etc/calamares/branding/kratos), not
     # Debian's logo and slideshow. Fail the build if it can't be selected.
     sed -i -E 's/^branding:[[:space:]]*.*/branding: kratos/' /etc/calamares/settings.conf
