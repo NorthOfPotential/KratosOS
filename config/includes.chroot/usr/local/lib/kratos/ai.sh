@@ -35,6 +35,9 @@
 # the archive is verified before any root extraction. For nondefault versions
 # also explicitly override SHA256, otherwise the checksum refuses to install.
 : "${KRATOS_AI_OLLAMA_SHA256:=628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379}"
+# PyTorch's official CPU-only wheel index (same publisher as the PyPI torch,
+# TLS-verified like PyPI). Used only when there is no NVIDIA GPU.
+: "${KRATOS_AI_TORCH_CPU_INDEX:=https://download.pytorch.org/whl/cpu}"
 
 # ── Hardware detection ────────────────────────────────────────────────────────
 # Each reader honors a KRATOS_AI_* override so the selection logic is unit
@@ -119,6 +122,41 @@ ai_pick_model() {   # <budget_gb> -> echoes "<ollama-tag> <label>"
     elif (( b >= 9  )); then printf '%s:7b 7B abliterated coder\n'    "$base"
     elif (( b >= 5  )); then printf '%s:3b 3B abliterated coder\n'    "$base"
     else                     printf '%s:1.5b 1.5B abliterated coder\n' "$base"
+    fi
+}
+
+# Approximate on-disk size (GB, rounded up) of a catalog model; 0 = unknown
+# (a user-pinned tag), in which case the model step is not size-checked.
+ai_model_disk_gb() {   # <ollama-tag>
+    case "$1" in
+        huihui_ai/qwen2.5-coder-abliterate:32b) echo 20 ;;
+        huihui_ai/qwen2.5-coder-abliterate:14b) echo 9 ;;
+        huihui_ai/qwen2.5-coder-abliterate:7b)  echo 5 ;;
+        huihui_ai/qwen2.5-coder-abliterate:3b)  echo 2 ;;
+        huihui_ai/qwen2.5-coder-abliterate:1.5b) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# Disk needed (GB) for the Open WebUI venv. Its embedding stack pulls PyTorch;
+# the default PyPI build drags in ~5 GB of NVIDIA CUDA libraries, which only an
+# NVIDIA GPU can use. Without one we install the CPU-only build (see kratos-ai).
+ai_webui_disk_gb() {   # <gpu-vendor>
+    if [[ "$1" == nvidia ]]; then echo 10; else echo 4; fi
+}
+
+# Fail BEFORE a large download if the filesystem holding <path> lacks <gb> GB
+# (+1 GB headroom). VM test: a CPU-only install on a 21 GB root ran out of
+# space half-way through the Open WebUI install with a bare ENOSPC.
+ai_require_free() {   # <path> <gb> <what>
+    local path="$1" want="$2" what="$3" avail
+    [[ "${KRATOS_AI_SKIP_SPACE_CHECK:-}" == 1 ]] && return 0
+    (( want > 0 )) || return 0
+    while [[ ! -e "$path" ]]; do path="$(dirname "$path")"; done
+    avail="$(df -P -BG "$path" 2>/dev/null | awk 'NR==2 {sub(/G$/, "", $4); print $4}')"
+    [[ "$avail" =~ ^[0-9]+$ ]] || return 0   # cannot tell: let the step itself fail
+    if (( avail < want + 1 )); then
+        die "not enough disk space for $what: needs about $((want + 1)) GB free on $(df -P "$path" | awk 'NR==2 {print $6}'), only ${avail} GB available. Free some space (or install KratosOS on a larger disk) and run setup again."
     fi
 }
 

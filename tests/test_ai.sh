@@ -153,4 +153,37 @@ if ! grep -rq 'ollama\.service\|kratos-openwebui\.service' "$here/../config/hook
     pass "AI services are not auto-enabled during the build"
 else flunk "AI services enabled at build (must be enabled only after setup)"; fi
 
+echo "— disk-space preflight and CPU-only PyTorch (VM test: ENOSPC on a 21 GB root) —"
+if [[ "$(ai_model_disk_gb huihui_ai/qwen2.5-coder-abliterate:3b)" == 2 \
+   && "$(ai_model_disk_gb huihui_ai/qwen2.5-coder-abliterate:32b)" == 20 \
+   && "$(ai_model_disk_gb some/user-pinned:tag)" == 0 ]]; then
+    pass "catalog models have an on-disk size; unknown tags are not size-checked"
+else flunk "ai_model_disk_gb sizes wrong"; fi
+if (( $(ai_webui_disk_gb none) < $(ai_webui_disk_gb nvidia) )); then
+    pass "Open WebUI needs less space without NVIDIA (CPU-only PyTorch)"
+else flunk "webui size does not account for the CPU-only PyTorch build"; fi
+fake="$(mktemp -d)"
+printf '#!/bin/sh\necho "Filesystem 1G-blocks Used Available Capacity Mounted"\necho "/dev/x 21G 20G 3G 95%% /"\n' > "$fake/df"
+chmod +x "$fake/df"
+die() { echo "DIE: $*"; return 1; }
+if out="$(PATH="$fake:$PATH" ai_require_free / 4 "Open WebUI")"; then
+    flunk "3 GB free passed a 4 GB (+1) requirement"
+elif [[ "$out" == *"needs about 5 GB"*"only 3 GB"* ]]; then
+    pass "too little space fails early with a clear message"
+else flunk "unexpected preflight message: $out"; fi
+if PATH="$fake:$PATH" ai_require_free / 2 "the model" >/dev/null; then
+    pass "enough space passes"
+else flunk "2 GB (+1) requirement refused with 3 GB free"; fi
+rm -rf "$fake"; unset -f die
+if grep -q 'ai_require_free /usr/local 3' "$cli" \
+   && grep -q 'ai_require_free "$AI_STATE/models"' "$cli" \
+   && grep -q 'ai_require_free "$AI_HOME"' "$cli"; then
+    pass "setup checks free space before the runtime, model and Open WebUI downloads"
+else flunk "a large setup step is not space-checked"; fi
+if grep -q -- '--index-url "$KRATOS_AI_TORCH_CPU_INDEX" torch' "$cli" \
+   && grep -q 'KRATOS_AI_TORCH_CPU_INDEX:=https://download.pytorch.org/whl/cpu' "$lib/ai.sh" \
+   && grep -q '"$gpu_vendor" != nvidia' "$cli"; then
+    pass "without an NVIDIA GPU the CPU-only PyTorch build is installed (HTTPS, official index)"
+else flunk "CUDA PyTorch is installed even without an NVIDIA GPU"; fi
+
 exit "$fail"
