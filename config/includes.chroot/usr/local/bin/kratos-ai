@@ -6,7 +6,12 @@
 # download (and optional web search). Works offline once provisioned.
 set -euo pipefail
 
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# System directories FIRST: firecfg puts firejail wrapper symlinks in
+# /usr/local/bin (sha256sum, wget, clamscan, ssh, ...). Searched first, root
+# ran those through firejail, which broke `kratos bootcheck` (firejail refuses
+# >128 arguments) and silently changed what root executes. /usr/local stays
+# on PATH, last, only for programs nothing else provides.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin
 unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
       LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT PYTHONPATH PYTHONSTARTUP PYTHONHOME 2>/dev/null || true
 

@@ -20,9 +20,16 @@ bootcheck_manifest() {
     local p
     for p in "${BOOT_PATHS[@]}"; do
         [[ -d "$p" ]] || continue
-        find "$p" -type f -print0 2>/dev/null \
+        # The caller runs under `set -euo pipefail`: a failing sha256sum made
+        # xargs exit 123 and killed `kratos bootcheck` with NO message (VM test).
+        # A hashing failure is itself suspicious, so record it IN the manifest
+        # (it then shows up as drift) and say so, instead of aborting silently.
+        if ! find "$p" -type f -print0 2>/dev/null \
             | sort -z \
-            | xargs -0 sha256sum 2>/dev/null
+            | xargs -0 -r sha256sum; then
+            printf 'HASHING-INCOMPLETE  %s\n' "$p"
+            warn "could not hash every file under $p (see the errors above)"
+        fi
     done
 }
 
