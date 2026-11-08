@@ -50,6 +50,19 @@ for u in ollama.service kratos-openwebui.service; do
         pass "$u shipped, loopback-bound, gated on its binary"
     else flunk "$u missing / not gated / not loopback-bound"; fi
 done
+# VM test: `open-webui serve` writes .webui_secret_key into its cwd; with the
+# default cwd (/) under ProtectSystem=strict the service crash-looped (EROFS).
+ow="$root/etc/systemd/system/kratos-openwebui.service"
+if grep -qx 'WorkingDirectory=/opt/kratos-ai/data' "$ow" \
+   && grep -qx 'ReadWritePaths=/opt/kratos-ai/data' "$ow" \
+   && grep -qx 'UMask=0077' "$ow"; then
+    pass "Open WebUI runs from its writable data dir (secret key not written to read-only /), private umask"
+else flunk "Open WebUI cwd is not its writable data dir (crash-loops writing .webui_secret_key)"; fi
+if grep -qx 'Environment=DO_NOT_TRACK=true' "$ow" && grep -qx 'Environment=SCARF_NO_ANALYTICS=true' "$ow" \
+   && grep -qx 'Environment=ANONYMIZED_TELEMETRY=false' "$ow" \
+   && grep -qx 'Environment=ENABLE_VERSION_UPDATE_CHECK=false' "$ow"; then
+    pass "Open WebUI telemetry opt-outs and update check off"
+else flunk "Open WebUI telemetry opt-outs missing"; fi
 d="$root/usr/share/applications/kratos-ai.desktop"
 if [[ -f "$d" ]] && grep -q '^Exec=.*kratos-ai' "$d"; then pass "Kratos AI launcher present"; else flunk "launcher missing"; fi
 
@@ -58,10 +71,16 @@ echo "— patched third-party versions must be enforced (not just documented) �
 if grep -q 'v0.40.15' "$lib/ai.sh" \
    && grep -q 'ollama-linux-amd64.tar.zst' "$lib/ai.sh" \
    && grep -q 'ollama version is' "$cli" \
-   && grep -q 'webui_version="0.13.0"' "$cli" \
+   && grep -q 'webui_version="0.13.1"' "$cli" \
    && grep -q '"open-webui==$webui_version"' "$cli"; then
     pass "security-patched Ollama and Open WebUI releases are selected and verified"
 else flunk "AI runtime still risks installing a vulnerable version"; fi
+
+# VM test: runuser inherits the caller's cwd (their home, unreadable to the
+# kratos-ai account) and `uv python find` died probing ./.venv there.
+if sed -n '/^cmd_setup()/,/^}/p' "$cli" | grep -qE '^[[:space:]]+cd / '; then
+    pass "setup runs from a neutral cwd (unprivileged steps never touch the caller's home)"
+else flunk "setup runs the unprivileged uv/pip steps from the caller's cwd"; fi
 
 if grep -q 'requires 3.11/3.12' "$cli" \
    && grep -q 'python3.11 python3.12 python3' "$cli" \
@@ -146,5 +165,39 @@ echo "— AI services ship DISABLED (provisioned by 'kratos-ai setup', not at bu
 if ! grep -rq 'ollama\.service\|kratos-openwebui\.service' "$here/../config/hooks/live/" 2>/dev/null; then
     pass "AI services are not auto-enabled during the build"
 else flunk "AI services enabled at build (must be enabled only after setup)"; fi
+
+echo "— disk-space preflight and CPU-only PyTorch (VM test: ENOSPC on a 21 GB root) —"
+if [[ "$(ai_model_disk_gb huihui_ai/qwen2.5-coder-abliterate:3b)" == 2 \
+   && "$(ai_model_disk_gb huihui_ai/qwen2.5-coder-abliterate:32b)" == 20 \
+   && "$(ai_model_disk_gb some/user-pinned:tag)" == 0 ]]; then
+    pass "catalog models have an on-disk size; unknown tags are not size-checked"
+else flunk "ai_model_disk_gb sizes wrong"; fi
+if (( $(ai_webui_disk_gb none) < $(ai_webui_disk_gb nvidia) )); then
+    pass "Open WebUI needs less space without NVIDIA (CPU-only PyTorch)"
+else flunk "webui size does not account for the CPU-only PyTorch build"; fi
+fake="$(mktemp -d)"
+printf '#!/bin/sh\necho "Filesystem 1G-blocks Used Available Capacity Mounted"\necho "/dev/x 21G 20G 3G 95%% /"\n' > "$fake/df"
+chmod +x "$fake/df"
+# shellcheck disable=SC2317  # called indirectly by ai_require_free
+die() { echo "DIE: $*"; return 1; }
+if out="$(PATH="$fake:$PATH" ai_require_free / 4 "Open WebUI")"; then
+    flunk "3 GB free passed a 4 GB (+1) requirement"
+elif [[ "$out" == *"needs about 5 GB"*"only 3 GB"* ]]; then
+    pass "too little space fails early with a clear message"
+else flunk "unexpected preflight message: $out"; fi
+if PATH="$fake:$PATH" ai_require_free / 2 "the model" >/dev/null; then
+    pass "enough space passes"
+else flunk "2 GB (+1) requirement refused with 3 GB free"; fi
+rm -rf "$fake"; unset -f die
+if grep -q 'ai_require_free /usr/local 3' "$cli" \
+   && grep -q 'ai_require_free "$AI_STATE/models"' "$cli" \
+   && grep -q 'ai_require_free "$AI_HOME"' "$cli"; then
+    pass "setup checks free space before the runtime, model and Open WebUI downloads"
+else flunk "a large setup step is not space-checked"; fi
+if grep -q -- '--index-url "$KRATOS_AI_TORCH_CPU_INDEX" torch' "$cli" \
+   && grep -q 'KRATOS_AI_TORCH_CPU_INDEX:=https://download.pytorch.org/whl/cpu' "$lib/ai.sh" \
+   && grep -q '"$gpu_vendor" != nvidia' "$cli"; then
+    pass "without an NVIDIA GPU the CPU-only PyTorch build is installed (HTTPS, official index)"
+else flunk "CUDA PyTorch is installed even without an NVIDIA GPU"; fi
 
 exit "$fail"

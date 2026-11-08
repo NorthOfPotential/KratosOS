@@ -7,14 +7,13 @@
 # later becomes privileged, so only list what the image actually ships and what
 # has been reviewed. Removed from the image instead of allowlisted (see
 # config/hooks/live/0100-kratos.hook.chroot): exim4 (no MTA), and the setuid
-# bit on pppd, ntfs-3g and spice-client-glib-usb-acl-helper.
+# bit on pppd, ntfs-3g, spice-client-glib-usb-acl-helper, chfn, chsh and
+# ssh-keysign.
 #
 # --- standard Debian setuid/setgid (account + mount tooling) ---
 /usr/bin/su
 /usr/bin/sudo
 /usr/bin/passwd
-/usr/bin/chfn
-/usr/bin/chsh
 /usr/bin/chage
 /usr/bin/expiry
 /usr/bin/gpasswd
@@ -26,7 +25,6 @@
 /usr/bin/dotlockfile
 /usr/bin/ssh-agent
 /usr/sbin/unix_chkpwd
-/usr/lib/openssh/ssh-keysign
 # --- polkit / dbus (pkexec is how KratosOS's per-action helpers elevate) ---
 /usr/bin/pkexec
 /usr/lib/polkit-1/polkit-agent-helper-1

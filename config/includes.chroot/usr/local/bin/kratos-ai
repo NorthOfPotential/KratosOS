@@ -6,7 +6,12 @@
 # download (and optional web search). Works offline once provisioned.
 set -euo pipefail
 
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# System directories FIRST: firecfg puts firejail wrapper symlinks in
+# /usr/local/bin (sha256sum, wget, clamscan, ssh, ...). Searched first, root
+# ran those through firejail, which broke `kratos bootcheck` (firejail refuses
+# >128 arguments) and silently changed what root executes. /usr/local stays
+# on PATH, last, only for programs nothing else provides.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin
 unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
       LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT PYTHONPATH PYTHONSTARTUP PYTHONHOME 2>/dev/null || true
 
@@ -16,7 +21,8 @@ unset BASH_ENV ENV CDPATH GLOBIGNORE IFS \
 _self="$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")"
 if [[ "$_self" == /usr/local/bin/kratos-ai ]]; then
     unset KRATOS_LIB AI_HOME AI_VENV AI_STATE OLLAMA_BIN OLLAMA_SHA_BASELINE \
-          OLLAMA_HOST WEBUI_HOST WEBUI_PORT
+          OLLAMA_HOST WEBUI_HOST WEBUI_PORT \
+          KRATOS_AI_TORCH_CPU_INDEX KRATOS_AI_SKIP_SPACE_CHECK
 fi
 unset _self
 
@@ -97,6 +103,7 @@ install_ollama() {
         systemctl stop ollama.service >/dev/null 2>&1 || true
     fi
     require_network
+    ai_require_free /usr/local 3 "the Ollama runtime"
     info "Installing or updating the Ollama runtime ($KRATOS_AI_OLLAMA_VERSION)..."
     need_cmd zstd tar python3
     local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
@@ -187,11 +194,11 @@ PY
 
 setup_webui() {
     need_cmd python3
-    # Pinned to the newest release. 0.12.3, 0.12.4, 0.12.5 and 0.13.0 each ship
-    # undisclosed security fixes upstream says to apply ASAP, so 0.12.0 is known
+    # Pinned to the newest release. 0.12.3, 0.12.4, 0.12.5, 0.13.0 and 0.13.1 each ship
+    # undisclosed security fixes upstream says to apply ASAP, so older pins are known
     # vulnerable. Versionless 'pip install open-webui' plus "already installed"
     # bypassed upgrades entirely, leaving installations on vulnerable versions.
-    local webui_version="0.13.0" installed
+    local webui_version="0.13.1" installed
     getent group kratos-ai >/dev/null || groupadd --system kratos-ai
     getent passwd kratos-ai >/dev/null || useradd --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
     [[ ! -L "$AI_HOME" ]] || die "AI home is an unsafe symlink"
@@ -231,9 +238,22 @@ setup_webui() {
     info "Installing patched Open WebUI $webui_version with unprivileged pip..."
     systemctl stop kratos-openwebui.service >/dev/null 2>&1 || true
     rm -rf -- "$AI_VENV"
+    local gpu_vendor _vram; read -r gpu_vendor _vram < <(ai_gpu_info)
+    ai_require_free "$AI_HOME" "$(ai_webui_disk_gb "$gpu_vendor")" "Open WebUI"
     install -d -m 750 -o kratos-ai -g kratos-ai "$AI_VENV"
     runuser -u kratos-ai -- "$python_cmd" -m venv "$AI_VENV" || die "could not create the Open WebUI virtualenv"
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir --upgrade pip >/dev/null 2>&1 || true
+    # Open WebUI's embedding stack needs PyTorch. The default PyPI build
+    # bundles ~5 GB of NVIDIA CUDA libraries that only an NVIDIA GPU can use
+    # (VM test: it filled a 21 GB root). Without one, install PyTorch's
+    # official CPU-only build first; pip then keeps it for open-webui.
+    # (Inference itself runs in Ollama, which has its own GPU support.)
+    if [[ "$gpu_vendor" != nvidia ]]; then
+        info "No NVIDIA GPU: installing the CPU-only PyTorch build (no CUDA libraries)..."
+        runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir \
+            --index-url "$KRATOS_AI_TORCH_CPU_INDEX" torch \
+            || die "could not install the CPU-only PyTorch build"
+    fi
     runuser -u kratos-ai -- "$AI_VENV/bin/pip" install --no-cache-dir "open-webui==$webui_version" \
         || die "could not install patched Open WebUI"
     installed="$(installed_webui_version)"
@@ -253,6 +273,9 @@ pull_model() {
     systemctl enable --now ollama.service >/dev/null 2>&1 || true
     # Wait for the daemon socket.
     local n=0; while (( n++ < 30 )); do curl -fsS -o /dev/null "http://$OLLAMA_HOST/api/version" 2>/dev/null && break; sleep 1; done
+    if ! OLLAMA_HOST="$OLLAMA_HOST" "$OLLAMA_BIN" list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qxF "$model"; then
+        ai_require_free "$AI_STATE/models" "$(ai_model_disk_gb "$model")" "the $model model"
+    fi
     info "Pulling model: $model  ($label) — sized to ~${budget} GB budget. This is large; one time."
     OLLAMA_HOST="$OLLAMA_HOST" "$OLLAMA_BIN" pull "$model" || die "could not pull $model (check connection, or set KRATOS_AI_MODEL)"
     save_ai_control_file "$AI_STATE/model" "$model" 644
@@ -261,6 +284,11 @@ pull_model() {
 
 cmd_setup() {
     need_root setup
+    # Work from a neutral directory. The unprivileged steps (runuser -u
+    # kratos-ai ...) inherit our cwd, usually the invoking user's home, which
+    # the service account cannot read: `uv python find` probes ./.venv there
+    # and failed with "Permission denied", aborting setup (VM test).
+    cd / || die "cannot change to /"
     info "== KratosOS local AI setup =="
     ai_report_hardware
     install_ollama

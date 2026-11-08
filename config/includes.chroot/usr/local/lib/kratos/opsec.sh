@@ -23,12 +23,25 @@ opsec_shred() {
     confirm "Permanently destroy $# item(s)?" || exit 0
     local f
     for f in "$@"; do
+        # Never follow a symlink: shred overwrites the link's TARGET, so a
+        # symlink to /etc/shadow or /dev/sda would destroy that instead.
+        if [[ -L "$f" ]]; then
+            warn "skipping $f: it is a symlink (shred would overwrite its target)"
+            continue
+        fi
+        # Shred AS THE INVOKING USER, never as root (the same rule as scrub/
+        # scan). Elevated via sudo/pkexec, a root shred of a path in a
+        # user-writable folder could be raced: anything running as that user
+        # swaps the file (or a parent directory) for a symlink to a system file
+        # or a raw disk between the check above and the overwrite. As the
+        # invoker, shred can only destroy what that user could delete anyway.
         # `--` so a filename beginning with '-' is never read as an option.
         if [[ -d "$f" ]]; then
-            find "$f" -type f -exec shred -uz -- {} + && rm -rf -- "$f"
+            run_as_invoker find "$f" -xdev -type f -exec shred -uz -- {} + \
+                && run_as_invoker rm -rf -- "$f"
         else
-            shred -uz -- "$f"
-        fi
+            run_as_invoker shred -uz -- "$f"
+        fi || { bad "could not destroy $f"; continue; }
         ok "destroyed $f"
     done
 }

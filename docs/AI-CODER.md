@@ -88,6 +88,13 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
   to a search engine (DuckDuckGo by default) — that traffic goes out like any
   other, subject to your current `kratos mode` (normal/VPN/offline).
 - The services ship **disabled**; they are enabled only after `kratos-ai setup`.
+- Open WebUI's **usage telemetry is switched off** in its service
+  (`SCARF_NO_ANALYTICS`, `DO_NOT_TRACK`, `ANONYMIZED_TELEMETRY=false`), the same
+  opt-outs upstream bakes into its container image but a pip install lacks.
+- Open WebUI's **"new version available" check is off**
+  (`ENABLE_VERSION_UPDATE_CHECK=false`); upgrades come from `kratos-ai setup`.
+  On first use of document chat it downloads its small embedding model from
+  Hugging Face (one time, subject to your `kratos mode`).
 
 ## Download integrity
 
@@ -106,8 +113,8 @@ sudo KRATOS_AI_MODEL=<ollama-tag> kratos-ai setup
   Full origin authentication (a signature over the tarball) isn't offered
   upstream, so this verifies integrity against the pinned release; the SHA256
   pin is the strongest available.
-- **Open WebUI** is pinned to **0.13.0** rather than a versionless PyPI
-  install: 0.12.3, 0.12.4, 0.12.5 and 0.13.0 each shipped security fixes that
+- **Open WebUI** is pinned to **0.13.1** rather than a versionless PyPI
+  install: 0.12.3, 0.12.4, 0.12.5, 0.13.0 and 0.13.1 each shipped security fixes that
   upstream says to apply as soon as possible, so older pins are known
   vulnerable. Setup checks the installed version and rebuilds out-of-date
   environments.

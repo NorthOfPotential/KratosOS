@@ -257,6 +257,29 @@ Download the KVM image, its .asc signature and the signing key from https://www.
     [[ -r "$sig" ]] || die "signature not found: $sig"
     [[ -r "$key" ]] || die "signing key not found: $key (download derivative.asc from whonix.org)"
 
+    # Verify-then-use on the SAME bytes. The archive usually sits in a
+    # user-writable folder (~/Downloads); verifying it there and then extracting
+    # it again by path let anything running as that user swap in a different
+    # (unsigned, backdoored) image between the signature check and the root
+    # extraction. Copy archive + signature into a root-only staging dir first,
+    # then verify and extract ONLY that copy, which no unprivileged process can
+    # touch.
+    local stage
+    install -d -m 755 "$KRATOS_STATE"
+    # A previous setup that died part-way (die exits, so RETURN never fired)
+    # can leave its staging copy behind; we hold the operation lock, so no
+    # other setup is using one.
+    rm -rf -- "$KRATOS_STATE"/.setup.*
+    stage="$(mktemp -d "$KRATOS_STATE/.setup.XXXXXXXX")" || die "cannot create a root-only staging directory"
+    chmod 700 "$stage"
+    # shellcheck disable=SC2064  # expand $stage now, at trap-set time
+    trap "rm -rf -- '$stage'" RETURN
+    info "Copying the download to root-only storage before verifying it..."
+    if ! cp -- "$archive" "$stage/whonix.libvirt.xz" || ! cp -- "$sig" "$stage/whonix.libvirt.xz.asc"; then
+        die "could not copy the Whonix download to $stage (out of space?)"
+    fi
+    archive="$stage/whonix.libvirt.xz"; sig="$stage/whonix.libvirt.xz.asc"
+
     verify_whonix "$archive" "$sig" "$key"
     _stealth_provision "$archive"
     ok "Stealth Mode is ready. Turn it on from the tray, or: sudo kratos stealth on"

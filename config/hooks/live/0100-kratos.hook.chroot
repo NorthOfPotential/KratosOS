@@ -117,7 +117,12 @@ CONF
 # and every real login hits "user is not allowed to use Firejail", disabling the
 # sandbox for the only person who uses the machine. Remove the allow-list so
 # firejail is available to all (human) accounts; the app symlinks still sandbox.
+# Never wrap plain command-line utilities: a firejail'd sha256sum fails on more
+# than 128 arguments (firejail's MAX_ARGS) and sandboxes nothing useful.
+install -d /etc/firejail/firecfg.d
+echo '!sha256sum' > /etc/firejail/firecfg.d/kratos.conf
 firecfg >/dev/null 2>&1 || true
+rm -f /usr/local/bin/sha256sum
 rm -f /etc/firejail/firejail.users
 
 # ── Shrink the privileged attack surface (release-gate findings) ─────────────
@@ -145,6 +150,12 @@ fi
 #    - ntfs-3g: only `kratos migrate` (root) and udisks2 (root) mount NTFS.
 #    - spice usb-acl-helper: lets a VM viewer grab host USB devices; USB
 #      passthrough into the Stealth VMs is exactly what must NOT happen.
+#    - chfn/chsh: setuid-root account editors with a long local-root CVE
+#      history; a single-user desktop never needs a user to change their own
+#      GECOS field or login shell (KDE's user settings go through
+#      AccountsService, a root daemon, not these).
+#    - ssh-keysign: only used for SSH HostbasedAuthentication, which is off by
+#      default and has no place on a privacy desktop.
 while read -r owner group mode path; do
     [ -e "$path" ] || continue
     dpkg-statoverride --list "$path" >/dev/null 2>&1 \
@@ -153,6 +164,9 @@ done <<'EOF'
 root dip  0754 /usr/sbin/pppd
 root root 0755 /usr/bin/ntfs-3g
 root root 0755 /usr/libexec/spice-client-glib-usb-acl-helper
+root root 0755 /usr/bin/chfn
+root root 0755 /usr/bin/chsh
+root root 0755 /usr/lib/openssh/ssh-keysign
 EOF
 
 # ── Branding: make the installer and look say KratosOS, not Debian ──────────
