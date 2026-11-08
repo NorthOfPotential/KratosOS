@@ -35,8 +35,11 @@ bootcheck_manifest() {
 
 # Snapshot TPM PCRs 0-7 (firmware, option ROMs, bootloader) if a TPM is present.
 bootcheck_pcr_snapshot() {
+    # tpm2-tools present but no TPM (VMs, many laptops) makes tpm2_pcrread fail;
+    # under `set -e` that killed `bootcheck record` silently (VM test). No
+    # output simply means "no PCR baseline", which the callers report.
     if command -v tpm2_pcrread >/dev/null 2>&1; then
-        tpm2_pcrread sha256:0,1,2,3,4,5,6,7 2>/dev/null
+        tpm2_pcrread sha256:0,1,2,3,4,5,6,7 2>/dev/null || true
     fi
 }
 

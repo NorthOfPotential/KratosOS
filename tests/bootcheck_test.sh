@@ -75,6 +75,29 @@ else
     flunk "bootcheck aborted silently when sha256sum failed: $out"
 fi
 
+# VM test, part 2: tpm2-tools installed but no TPM (VirtualBox) -> tpm2_pcrread
+# fails; under errexit that killed `bootcheck record` silently too.
+rm -f "$tmp/fakebin/sha256sum"
+printf '#!/bin/sh\necho "ERROR: no TPM" >&2\nexit 1\n' > "$tmp/fakebin/tpm2_pcrread"
+chmod +x "$tmp/fakebin/tpm2_pcrread"
+out="$(PATH="$tmp/fakebin:$PATH" bash -c '
+    set -euo pipefail
+    KRATOS_STATE="'"$tmp/state"'"
+    . "'"$lib"'/common.sh"
+    . "'"$lib"'/bootcheck.sh"
+    BOOT_PATHS=("'"$tmp"'/boot")
+    need_root() { :; }
+    load_config() { :; }
+    bootcheck_main record
+    echo REACHED-END
+' 2>&1)"
+if grep -q REACHED-END <<<"$out" && grep -q 'recorded boot baseline' <<<"$out" \
+   && grep -q 'no TPM found' <<<"$out"; then
+    pass "tpm2-tools without a TPM: record completes and says no TPM (no silent abort)"
+else
+    flunk "bootcheck record aborted silently without a TPM: $out"
+fi
+
 # Root tools must search system directories before /usr/local, where firecfg
 # drops firejail wrapper symlinks for ordinary commands.
 inc="$here/../config/includes.chroot/usr/local/bin"
