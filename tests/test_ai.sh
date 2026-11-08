@@ -178,6 +178,7 @@ else flunk "webui size does not account for the CPU-only PyTorch build"; fi
 fake="$(mktemp -d)"
 printf '#!/bin/sh\necho "Filesystem 1G-blocks Used Available Capacity Mounted"\necho "/dev/x 21G 20G 3G 95%% /"\n' > "$fake/df"
 chmod +x "$fake/df"
+# shellcheck disable=SC2317  # called indirectly by ai_require_free
 die() { echo "DIE: $*"; return 1; }
 if out="$(PATH="$fake:$PATH" ai_require_free / 4 "Open WebUI")"; then
     flunk "3 GB free passed a 4 GB (+1) requirement"
