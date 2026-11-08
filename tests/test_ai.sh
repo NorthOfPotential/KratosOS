@@ -50,6 +50,18 @@ for u in ollama.service kratos-openwebui.service; do
         pass "$u shipped, loopback-bound, gated on its binary"
     else flunk "$u missing / not gated / not loopback-bound"; fi
 done
+# VM test: `open-webui serve` writes .webui_secret_key into its cwd; with the
+# default cwd (/) under ProtectSystem=strict the service crash-looped (EROFS).
+ow="$root/etc/systemd/system/kratos-openwebui.service"
+if grep -qx 'WorkingDirectory=/opt/kratos-ai/data' "$ow" \
+   && grep -qx 'ReadWritePaths=/opt/kratos-ai/data' "$ow" \
+   && grep -qx 'UMask=0077' "$ow"; then
+    pass "Open WebUI runs from its writable data dir (secret key not written to read-only /), private umask"
+else flunk "Open WebUI cwd is not its writable data dir (crash-loops writing .webui_secret_key)"; fi
+if grep -qx 'Environment=DO_NOT_TRACK=true' "$ow" && grep -qx 'Environment=SCARF_NO_ANALYTICS=true' "$ow" \
+   && grep -qx 'Environment=ANONYMIZED_TELEMETRY=false' "$ow"; then
+    pass "Open WebUI telemetry opt-outs set"
+else flunk "Open WebUI telemetry opt-outs missing"; fi
 d="$root/usr/share/applications/kratos-ai.desktop"
 if [[ -f "$d" ]] && grep -q '^Exec=.*kratos-ai' "$d"; then pass "Kratos AI launcher present"; else flunk "launcher missing"; fi
 
