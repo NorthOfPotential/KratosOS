@@ -75,20 +75,25 @@ SBOM, a signed provenance attestation, and uploads artifact `kratosos-iso`
   - A bug the last VM test caught and that is fixed in main: `resume=`
     stripping broke Calamares' single-quoted GRUB line → hardening kernel
     params were lost.
-- Branch `claude/privacy-centric-os-vgpsve` = `a0d0b8a`, **one commit ahead of
-  main, not merged**: fixes the live boot menu text overlapping the KRATOS logo
-  (new `live-splash.png` with the logo in the top third + GRUB theme title
-  blanked). Its ISO: Actions run **42408970321**, SHA256
-  `aa69667c9730466a8f6c5ce8076e95d3e77943733df400fe502e599e71ab1b76`
-  (artifacts expire ~14 days after 2026-11-07).
+- The live boot-menu fix (logo moved to the top third, GRUB title blanked;
+  the menu text used to overlap the KRATOS logo) was VM-verified on BIOS and
+  UEFI and merged after this doc was written. Use the **latest successful
+  `workflow_dispatch` ISO build on `main`** (`gh run list -R
+  NorthOfPotential/KratosOS --workflow ci.yml --event workflow_dispatch
+  --branch main --status success -L 1`); artifacts expire after 14 days, so
+  dispatch a new build if it's gone.
 - Already verified in an emulated QEMU VM (BIOS + UEFI, Erase disk + Encrypt,
   booted to desktop): install completes, LUKS unlocks, no resume stall,
   encrypted swap active, 0 discard, fstrim masked, no Calamares, one kernel,
   0 failed units, DNS only over TLS to Quad9, `CanHibernate`=no, firewall
   loaded, AppArmor enforcing.
-- **Never tested yet:** real VirtualBox on Windows, real hardware, the boot
-  menu fix (a0d0b8a), and `sudo kratos-ai setup` end to end (VM had no
-  internet). Note: `kratos probe` is not a command; the probe is
+- **Never tested yet:** real VirtualBox on Windows, real hardware, and
+  `sudo kratos-ai setup` end to end. The emulated VM got as far as hardware
+  detection (12 GB RAM, no GPU/NPU -> ~9 GB budget -> picks
+  `huihui_ai/qwen2.5-coder-abliterate:7b`), then stopped at "kratos: no
+  network" because the cloud sandbox gave the VM no internet. Ollama download +
+  checksum, uv/CPython 3.12, Open WebUI install, services and the UI are all
+  untested. Note: `kratos probe` is not a command; the probe is
   `tools/kratos-validate.sh` / `.ps1`.
 
 ## Tasks
@@ -97,12 +102,14 @@ SBOM, a signed provenance attestation, and uploads artifact `kratosos-iso`
 - Check `git`, `gh` (`gh auth status` → NorthOfPotential), VirtualBox
   (`VBoxManage --version`), and whether WSL2 exists. Report what's missing and
   ask before installing anything.
-- Clone or update the repo, check out `claude/privacy-centric-os-vgpsve`.
+- Clone or update the repo; work on branch `claude/privacy-centric-os-vgpsve`
+  (restart it from `main` if its last PR is already merged).
 
 ### 2. VirtualBox test of the branch ISO (the real user path)
-- Download run 42408970321's `kratosos-iso` (`gh run download 42408970321 -R
-  NorthOfPotential/KratosOS -n kratosos-iso -D <dir>`), verify the SHA256. If
-  it expired, dispatch a new build on the branch and use that.
+- Download the latest `main` ISO build's `kratosos-iso` (`gh run download
+  <run-id> -R NorthOfPotential/KratosOS -n kratosos-iso -D <dir>`), verify it
+  against the SHA256SUMS inside the artifact and the build log. If it expired,
+  `gh workflow run ci.yml -R NorthOfPotential/KratosOS --ref main` and wait.
 - Create a VM with `VBoxManage` (name it e.g. `KratosOS-Test`; Debian 64-bit,
   4–8 GB RAM, 2–4 CPUs, 25 GB+ dynamic VDI, VMSVGA, NAT network, **EFI off**
   first). Or use `tools/kratos-validate.ps1 vm` if it fits. Use
