@@ -23,6 +23,10 @@ RemainAfterExit=yes
 # EITHER step fails the unit fails and networking never comes up at all.
 ExecStartPre=/usr/sbin/nft -f /etc/kratos/modes/offline.nft
 ExecStart=/usr/local/bin/kratos boot
+# Who may reach the local AI runtime's port (/etc/kratos/ai-loopback.nft). A
+# table of its own that mode switches leave alone. "-": a failure here is
+# logged but must not fail this unit, which would keep networking down.
+ExecStartPost=-/usr/sbin/nft -f /etc/kratos/ai-loopback.nft
 
 [Install]
 WantedBy=sysinit.target

@@ -30,6 +30,7 @@ die() { echo "lock-openwebui: $*" >&2; exit 1; }
 uv_version="$(sed -n 's/^UV_VERSION="\([^"]*\)"$/\1/p' "$ai")"
 uv_sha="$(sed -n 's/^UV_WHEEL_SHA256="\([0-9a-f]*\)"$/\1/p' "$ai")"
 webui="$(sed -n 's/^[[:space:]]*local webui_version="\([^"]*\)".*/\1/p' "$ai")"
+# shellcheck disable=SC2016  # a literal ${ in the sed pattern, not an expansion
 cpu_index="$(sed -n 's/^: "\${KRATOS_AI_TORCH_CPU_INDEX:=\(https:[^}]*\)}"$/\1/p' "$ailib")"
 [[ -n "$uv_version" && ${#uv_sha} -eq 64 ]] || die "could not read the uv pin from $ai"
 [[ -n "$webui" ]] || die "could not read webui_version from $ai"

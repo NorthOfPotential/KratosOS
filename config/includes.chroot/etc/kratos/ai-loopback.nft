@@ -1,0 +1,27 @@
+#!/usr/sbin/nft -f
+# KratosOS: who may talk to the local AI runtime (Ollama, 127.0.0.1:11434).
+#
+# Ollama's API has no authentication: anything that can connect can run,
+# download (filling the disk) or delete models. It only listens on loopback,
+# so the remaining risk is another account on this machine, e.g. a
+# compromised system service. This allows only:
+#   root                 (sudo kratos-ai setup / model pull)
+#   uid 1000-59999       people's own accounts (kratos-ai model list, ollama CLI)
+#   ollama, kratos-ai    the runtime itself and Open WebUI
+# and resets every other account's connection.
+#
+# A table of its own, loaded by kratos-firewall.service after the mode
+# ruleset: switching network modes replaces only "inet kratos", so this stays
+# in force in every mode, and a failure to load it can't break the kill switch.
+# The names resolve when the table loads; the image creates both accounts.
+
+table inet kratos_ai
+delete table inet kratos_ai
+
+table inet kratos_ai {
+    chain output {
+        type filter hook output priority filter - 1; policy accept;
+        oifname "lo" tcp dport 11434 meta skuid != { 0, 1000-59999 } \
+            meta skuid != "ollama" meta skuid != "kratos-ai" reject with tcp reset
+    }
+}

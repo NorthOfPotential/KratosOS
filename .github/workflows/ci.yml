@@ -32,6 +32,9 @@ jobs:
           sudo useradd -r -g kstealth -s /usr/sbin/nologin kstealth || true
           sudo useradd -m mallory || true
           sudo useradd -r kratos-nym || true
+          # The AI service accounts (ai-loopback.nft names them)
+          sudo useradd -r ollama || true
+          sudo useradd -r kratos-ai || true
       - name: Run the full suite
         run: sudo ATTACKER=mallory tests/run.sh
 

@@ -152,6 +152,17 @@ and a disposable Workstation option.
   Whonix archive and its signature into a root-only staging directory first and
   verifies and extracts only that copy, so a user-writable download cannot be
   swapped for an unsigned image after the signature check.
+- **Firejail is limited to a group.** firejail is setuid root by design and
+  has had local-root bugs, so `/usr/bin/firejail` is `root:firejail 4750`:
+  only members of the `firejail` group (the live user and the installed user)
+  can execute it, and a compromised service account can't use it as a step to
+  root. Users created later must be added (`sudo adduser NAME firejail`), or
+  their sandboxed apps won't start.
+- **The local AI API is limited by account.** Ollama's API has no
+  authentication; it listens on loopback only, and `ai-loopback.nft` refuses
+  every account except root, people's accounts (uid 1000–59999) and the AI
+  service accounts. It does not separate one person's account from another's,
+  or from malware already running as that person.
 - **bootcheck is change-detection, not trusted boot.** It records a baseline and
   flags changes, but the baseline is writable by the same root compromise it is
   meant to detect. Real assurance needs Secure/measured boot, signed boot chain,

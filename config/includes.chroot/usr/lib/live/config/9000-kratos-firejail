@@ -1,0 +1,16 @@
+#!/bin/sh
+# live-config component (runs as root at live boot, after 0030-user-setup has
+# created the live user): put the live user in the "firejail" group. The image
+# makes /usr/bin/firejail root:firejail 4750, so only members may run the SUID
+# sandbox, and every firecfg-wrapped app (browser, mail, ...) goes through it.
+# The installed system gets the same membership from Calamares (users.conf).
+
+for f in /etc/live/config.conf /etc/live/config.conf.d/*.conf; do
+    # shellcheck disable=SC1090
+    [ -r "$f" ] && . "$f"
+done
+user="${LIVE_USERNAME:-user}"
+
+if getent group firejail >/dev/null && id "$user" >/dev/null 2>&1; then
+    usermod -a -G firejail "$user" || echo "kratos: could not add $user to the firejail group" >&2
+fi

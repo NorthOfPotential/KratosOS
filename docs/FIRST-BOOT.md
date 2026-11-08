@@ -74,6 +74,10 @@ stick in **live mode** before you install over anything. Tick each item.
 ## 7. Only after all of the above
 - [ ] Back up your Windows data and **verify the backup on another computer** (see MIGRATION.md).
 - [ ] Install KratosOS with **Erase disk + Encrypt** and a strong passphrase.
+      Swap defaults to **"Swap (no Hibernate)"**: KratosOS never hibernates
+      (that would write RAM to disk), so the installer sizes swap from RAM, at
+      most 8 GiB and never more than 10% of the disk, instead of reserving
+      more than all of RAM. "No swap" is the other choice.
 - [ ] Re-run this checklist on the installed system.
 
 If something here fails, note exactly which step and open an issue — those are the

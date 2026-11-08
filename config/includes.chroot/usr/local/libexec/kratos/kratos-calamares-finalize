@@ -30,6 +30,8 @@
 # Usage:
 #   kratos-calamares-finalize [--root DIR]           (default: the one /tmp/calamares-root-*)
 #   kratos-calamares-finalize --patch-settings FILE  (build time: edit settings.conf)
+#   kratos-calamares-finalize --patch-users FILE     (build time: users.conf, firejail group)
+#   kratos-calamares-finalize --patch-partition FILE (build time: partition.conf, swap size)
 # KRATOS_FINALIZE_SKIP_CHROOT=1 skips the chroot steps (update-grub, apt) for tests.
 set -u
 
@@ -49,6 +51,74 @@ patch_settings() {
         /^[[:space:]]*-[[:space:]]+initramfs[[:space:]]*$/ { if (prev == "k") ok = 1; prev = ""; next }
         { prev = "" }
         END { exit ok ? 0 : 1 }' "$f" || { log "could not insert kratos-finalize before initramfs in $f"; return 1; }
+}
+
+# Build time: put the installed user in the "firejail" group. Only members may
+# run the root:firejail 4750 sandbox binary, so without this every sandboxed
+# app of the installed user would fail to start. Adds "- firejail" to
+# users.conf's defaultGroups list (indented like its other entries), once.
+# Non-zero if there is no defaultGroups list, so the image build fails loudly.
+patch_users() {
+    f=$1
+    [ -f "$f" ] || { log "no $f"; return 1; }
+    grep -Eq '^defaultGroups:[[:space:]]*$' "$f" || { log "no defaultGroups list in $f"; return 1; }
+    if ! grep -Eq '^[[:space:]]+-[[:space:]]+(name:[[:space:]]*)?"?firejail"?[[:space:]]*$' "$f"; then
+        tmp="$f.kratos-tmp"
+        if ! awk '
+            /^defaultGroups:[[:space:]]*$/ { print; inlist = 1; next }
+            inlist && /^[[:space:]]+-/ && !done {
+                match($0, /^[[:space:]]+/); ind = substr($0, 1, RLENGTH)
+                print ind "- firejail"; done = 1
+            }
+            inlist && /^[^[:space:]#]/ { inlist = 0 }
+            { print }
+            END { exit done ? 0 : 1 }' "$f" > "$tmp"; then
+            rm -f "$tmp"; log "could not add firejail to $f"; return 1
+        fi
+        cat "$tmp" > "$f"; rm -f "$tmp"
+    fi
+    log "users: installed user joins the firejail group"
+}
+
+# Build time: swap for a system that never hibernates (see no_hibernation).
+# Without a userSwapChoices list Calamares falls back to its legacy default,
+# "suspend to disk": swap at least the size of RAM (8.8 GB on an 8 GB machine)
+# that nothing ever uses. Offer only "none" and "small", default "small":
+# Calamares sizes that from RAM, at most 8 GiB, and never more than 10% of the
+# disk. Creates the file if it doesn't exist (Calamares then uses its built-in
+# defaults for every other key, exactly as with no file). Idempotent.
+patch_partition() {
+    f=$1
+    tmp="$f.kratos-tmp"
+    if [ -f "$f" ]; then
+        # Drop any existing swap settings: the userSwapChoices block (its
+        # indented/blank/comment continuation lines), initialSwapChoice, and
+        # the legacy ensureSuspendToDisk/neverCreateSwap keys.
+        awk '
+            /^userSwapChoices:/ { skip = 1; next }
+            skip && (/^[[:space:]]/ || /^$/ || /^#/) { next }
+            { skip = 0 }
+            /^(initialSwapChoice|ensureSuspendToDisk|neverCreateSwap):/ { next }
+            /^# KratosOS: never hibernates/ { next }
+            { print }' "$f" > "$tmp" || { rm -f "$tmp"; log "could not edit $f"; return 1; }
+    else
+        printf -- '---\n' > "$tmp"
+    fi
+    cat >> "$tmp" <<'EOF'
+# KratosOS: never hibernates, so no RAM-sized swap (kratos-calamares-finalize).
+userSwapChoices:
+    - none
+    - small
+initialSwapChoice: small
+EOF
+    if ! cat "$tmp" > "$f"; then rm -f "$tmp"; log "could not write $f"; return 1; fi
+    rm -f "$tmp"
+    if [ "$(grep -c '^userSwapChoices:' "$f")" != 1 ] || ! grep -qx 'initialSwapChoice: small' "$f" \
+       || grep -Eq '^[[:space:]]+-[[:space:]]+(suspend|file)' "$f"; then
+        log "swap settings in $f are not as expected"
+        return 1
+    fi
+    log "partition: swap choices none/small, default small (no hibernation-sized swap)"
 }
 
 # Remove the "discard" option from field $2 of the table file $1 (fstab: 4th
@@ -130,6 +200,14 @@ no_installer() {
 
 if [ "${1:-}" = "--patch-settings" ]; then
     patch_settings "${2:?settings.conf path}"
+    exit $?
+fi
+if [ "${1:-}" = "--patch-users" ]; then
+    patch_users "${2:?users.conf path}"
+    exit $?
+fi
+if [ "${1:-}" = "--patch-partition" ]; then
+    patch_partition "${2:?partition.conf path}"
     exit $?
 fi
 
