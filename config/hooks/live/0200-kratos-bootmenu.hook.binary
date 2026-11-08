@@ -33,6 +33,11 @@ find . -path ./live -prune -o -type f \( -name '*.cfg' -o -name 'theme.txt' \) -
            -e 's/Debian Live/KratosOS Live/g' \
            -e 's/Live system/KratosOS live/g' \
            -e 's/Live Boot Menu/KratosOS Boot Menu/g' {} +
+# The splash carries the KratosOS logo in its top third; the menus sit below
+# it. GRUB's theme also draws a title line at the very top, which landed on
+# the logo (VM test: overlapping text). The logo is the title, so blank it.
+find . -path ./live -prune -o -type f -name 'theme.txt' -exec \
+    sed -i -E 's/^([[:space:]]*title-text:[[:space:]]*).*/\1""/' {} +
 
 if [ "$replaced" -eq 0 ]; then
     echo "KratosOS: no bootloader splash.png found to brand; tree was:" >&2
