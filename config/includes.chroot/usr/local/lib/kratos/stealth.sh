@@ -275,8 +275,9 @@ Download the KVM image, its .asc signature and the signing key from https://www.
     # shellcheck disable=SC2064  # expand $stage now, at trap-set time
     trap "rm -rf -- '$stage'" RETURN
     info "Copying the download to root-only storage before verifying it..."
-    cp -- "$archive" "$stage/whonix.libvirt.xz" && cp -- "$sig" "$stage/whonix.libvirt.xz.asc" \
-        || die "could not copy the Whonix download to $stage (out of space?)"
+    if ! cp -- "$archive" "$stage/whonix.libvirt.xz" || ! cp -- "$sig" "$stage/whonix.libvirt.xz.asc"; then
+        die "could not copy the Whonix download to $stage (out of space?)"
+    fi
     archive="$stage/whonix.libvirt.xz"; sig="$stage/whonix.libvirt.xz.asc"
 
     verify_whonix "$archive" "$sig" "$key"
