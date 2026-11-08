@@ -3,6 +3,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      lock_openwebui:
+        description: "Regenerate Open WebUI's hash-pinned dependency locks instead of building the ISO"
+        type: boolean
+        default: false
 
 # Least privilege by default: the workflow's token can only read the repo.
 # Jobs that need more (the ISO build signs provenance) raise it for themselves.
@@ -30,6 +35,34 @@ jobs:
       - name: Run the full suite
         run: sudo ATTACKER=mallory tests/run.sh
 
+  lock-openwebui:
+    # Regenerates the Open WebUI dependency locks (tools/lock-openwebui.sh) on
+    # the same Debian trixie base the image uses and uploads them for review.
+    # Nothing is committed automatically: download the "openwebui-locks"
+    # artifact, review the diff, commit it through a PR.
+    if: github.event_name == 'workflow_dispatch' && inputs.lock_openwebui
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates python3 python3-venv
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lock Open WebUI dependencies
+        run: tools/lock-openwebui.sh out
+      - name: Show the changes against the committed locks
+        run: |
+          for v in cpu nvidia; do
+            diff -u "config/includes.chroot/usr/local/share/kratos/ai/openwebui-$v.lock" "out/openwebui-$v.lock" || true
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openwebui-locks
+          path: out/
+          retention-days: 14
+
   build-iso:
     # Builds the installer ISO so you never need a Linux machine: download it
     # from this job's Artifacts. Runs on manual dispatch and tags.
@@ -39,7 +72,7 @@ jobs:
     # target and fails on suite names / index paths). Matching the tool to the
     # target is what makes the build reliable. --privileged: live-build needs
     # mount, chroot and loop devices.
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    if: (github.event_name == 'workflow_dispatch' && !inputs.lock_openwebui) || startsWith(github.ref, 'refs/tags/')
     # Gate the release artifact on the security test suite: a red test job must
     # NOT yield a built, SBOM'd, provenance-attested ISO as the normal release
     # path (finding R8/CI). `needs: test` makes build-iso wait for and require a
