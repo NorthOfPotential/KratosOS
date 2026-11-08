@@ -106,7 +106,14 @@ install_ollama() {
     ai_require_free /usr/local 3 "the Ollama runtime"
     info "Installing or updating the Ollama runtime ($KRATOS_AI_OLLAMA_VERSION)..."
     need_cmd zstd tar python3
-    local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+    # A RETURN trap stays set after this function returns and fires again when
+    # the caller returns, where the local $tmp no longer exists: under set -u
+    # that ended `kratos-ai setup` with "tmp: unbound variable" and exit 1 after
+    # a successful setup (VM test). Expand the path now and clear the trap once
+    # it has run.
+    local tmp; tmp="$(mktemp -d)"
+    # shellcheck disable=SC2064  # expand $tmp now, at trap-set time
+    trap "rm -rf -- '$tmp'; trap - RETURN" RETURN
     local tarball="$tmp/ollama.tar.zst" asset; asset="${KRATOS_AI_OLLAMA_URL##*/}"
     [[ "$asset" == *.tar.zst ]] || die "unsupported Ollama archive; require .tar.zst"
     curl -fL --proto "=https" --tlsv1.2 --connect-timeout 30 "$KRATOS_AI_OLLAMA_URL" -o "$tarball" \

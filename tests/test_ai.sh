@@ -201,6 +201,26 @@ if grep -q 'extra_index=(--extra-index-url "$KRATOS_AI_TORCH_CPU_INDEX")' "$cli"
     pass "without an NVIDIA GPU the CPU-only PyTorch lock is installed (HTTPS, official index)"
 else flunk "CUDA PyTorch is installed even without an NVIDIA GPU"; fi
 
+echo "— temp-dir cleanup traps don't outlive their function (VM test: setup exited 1) —"
+# The real trap line from install_ollama, run under set -u inside a nested call
+# exactly as cmd_setup -> install_ollama does.
+trapline="$(grep -m1 'trap ".*trap - RETURN" RETURN' "$cli" | sed 's/^[[:space:]]*//')"
+if [[ -n "$trapline" ]] && out="$(bash -c '
+    set -euo pipefail
+    inner() { local tmp; tmp="$(mktemp -d)"; '"$trapline"'; echo "$tmp"; }
+    outer() { d="$(inner)"; [[ ! -e "$d" ]] || { echo "LEFT $d"; exit 3; }; inner >/dev/null; echo OUTER-DONE; }
+    outer; echo REACHED-END' 2>&1)" && grep -q 'REACHED-END' <<<"$out"; then
+    pass "install_ollama's cleanup runs once, removes the dir, and the caller returns cleanly under set -u"
+else
+    flunk "temp-dir trap breaks the caller: ${out:-no trap line found}"
+fi
+bad_traps="$(grep -rn 'trap .*RETURN' "$cli" "$lib" | grep -v 'trap - RETURN" RETURN' || true)"
+if [[ -z "$bad_traps" ]]; then
+    pass "every RETURN trap in kratos-ai and lib/kratos clears itself after running"
+else
+    flunk "RETURN traps that persist past their function: $bad_traps"
+fi
+
 echo "— Open WebUI and every library under it come from a hash-pinned lock —"
 locks="$root/usr/local/share/kratos/ai"
 webui="$(sed -n 's/^[[:space:]]*local webui_version="\([^"]*\)".*/\1/p' "$cli")"
