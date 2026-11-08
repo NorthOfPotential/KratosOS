@@ -142,7 +142,16 @@ and a disposable Workstation option.
   storage, and `echo 3 > drop_caches` drops caches — it is not memory
   sanitisation. The real confidentiality boundary is the LUKS2 vault (locked =
   data at rest encrypted) and `init_on_free=1`; sensitive VM logs belong on
-  tmpfs so there is nothing persistent to overwrite.
+  tmpfs so there is nothing persistent to overwrite. `kratos shred` refuses
+  symlinks and does the overwrite **as the invoking user**, not as root, so a
+  file swapped for a symlink (to `/etc/shadow`, a raw disk, ...) by something
+  running as that user between authorization and overwrite cannot turn an
+  elevated shred against the system. To shred root-owned files, run it from a
+  real root shell.
+- **Verify-then-use on the same bytes.** `kratos stealth setup` copies the
+  Whonix archive and its signature into a root-only staging directory first and
+  verifies and extracts only that copy, so a user-writable download cannot be
+  swapped for an unsigned image after the signature check.
 - **bootcheck is change-detection, not trusted boot.** It records a baseline and
   flags changes, but the baseline is writable by the same root compromise it is
   meant to detect. Real assurance needs Secure/measured boot, signed boot chain,

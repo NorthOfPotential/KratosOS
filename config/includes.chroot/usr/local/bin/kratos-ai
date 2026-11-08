@@ -187,11 +187,11 @@ PY
 
 setup_webui() {
     need_cmd python3
-    # Pinned to the newest release. 0.12.3, 0.12.4, 0.12.5 and 0.13.0 each ship
-    # undisclosed security fixes upstream says to apply ASAP, so 0.12.0 is known
+    # Pinned to the newest release. 0.12.3, 0.12.4, 0.12.5, 0.13.0 and 0.13.1 each ship
+    # undisclosed security fixes upstream says to apply ASAP, so older pins are known
     # vulnerable. Versionless 'pip install open-webui' plus "already installed"
     # bypassed upgrades entirely, leaving installations on vulnerable versions.
-    local webui_version="0.13.0" installed
+    local webui_version="0.13.1" installed
     getent group kratos-ai >/dev/null || groupadd --system kratos-ai
     getent passwd kratos-ai >/dev/null || useradd --system --home-dir "$AI_HOME" --shell /usr/sbin/nologin -g kratos-ai kratos-ai
     [[ ! -L "$AI_HOME" ]] || die "AI home is an unsafe symlink"

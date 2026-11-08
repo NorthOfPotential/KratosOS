@@ -17,6 +17,12 @@ Environment=OLLAMA_BASE_URL=http://127.0.0.1:11434
 Environment=HOST=127.0.0.1
 Environment=PORT=8080
 Environment=WEBUI_AUTH=true
+# No usage telemetry. Upstream's container image sets these three; a pip
+# install (what kratos-ai setup does) does NOT, so without them Open WebUI and
+# its bundled libraries (Scarf, Chroma/PostHog) may phone home.
+Environment=SCARF_NO_ANALYTICS=true
+Environment=DO_NOT_TRACK=true
+Environment=ANONYMIZED_TELEMETRY=false
 # Privacy-respecting web search with no API key. Toggle per-chat in the UI.
 Environment=ENABLE_RAG_WEB_SEARCH=true
 Environment=RAG_WEB_SEARCH_ENGINE=duckduckgo

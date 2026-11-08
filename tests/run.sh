@@ -50,6 +50,12 @@ run tests/test_stealth_require.sh
 step "Stealth zero-touch auto-provision (download/verify/vault logic)"
 run tests/test_autoprovision.sh
 
+step "Stealth setup verifies and extracts the same bytes (no swap race)"
+run tests/test_stealth_setup_stage.sh
+
+step "kratos shred runs as the invoking user and never follows symlinks"
+run tests/test_shred_invoker.sh
+
 step "branding (KratosOS identity, wallpaper, installer rename)"
 run tests/test_branding.sh
 

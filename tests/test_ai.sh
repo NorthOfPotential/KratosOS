@@ -58,7 +58,7 @@ echo "â€” patched third-party versions must be enforced (not just documented) â€
 if grep -q 'v0.40.15' "$lib/ai.sh" \
    && grep -q 'ollama-linux-amd64.tar.zst' "$lib/ai.sh" \
    && grep -q 'ollama version is' "$cli" \
-   && grep -q 'webui_version="0.13.0"' "$cli" \
+   && grep -q 'webui_version="0.13.1"' "$cli" \
    && grep -q '"open-webui==$webui_version"' "$cli"; then
     pass "security-patched Ollama and Open WebUI releases are selected and verified"
 else flunk "AI runtime still risks installing a vulnerable version"; fi
