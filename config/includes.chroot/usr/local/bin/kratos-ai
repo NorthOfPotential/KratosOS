@@ -266,6 +266,11 @@ pull_model() {
 
 cmd_setup() {
     need_root setup
+    # Work from a neutral directory. The unprivileged steps (runuser -u
+    # kratos-ai ...) inherit our cwd, usually the invoking user's home, which
+    # the service account cannot read: `uv python find` probes ./.venv there
+    # and failed with "Permission denied", aborting setup (VM test).
+    cd / || die "cannot change to /"
     info "== KratosOS local AI setup =="
     ai_report_hardware
     install_ollama

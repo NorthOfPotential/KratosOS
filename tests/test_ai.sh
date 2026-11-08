@@ -63,6 +63,12 @@ if grep -q 'v0.40.15' "$lib/ai.sh" \
     pass "security-patched Ollama and Open WebUI releases are selected and verified"
 else flunk "AI runtime still risks installing a vulnerable version"; fi
 
+# VM test: runuser inherits the caller's cwd (their home, unreadable to the
+# kratos-ai account) and `uv python find` died probing ./.venv there.
+if sed -n '/^cmd_setup()/,/^}/p' "$cli" | grep -qE '^[[:space:]]+cd / '; then
+    pass "setup runs from a neutral cwd (unprivileged steps never touch the caller's home)"
+else flunk "setup runs the unprivileged uv/pip steps from the caller's cwd"; fi
+
 if grep -q 'requires 3.11/3.12' "$cli" \
    && grep -q 'python3.11 python3.12 python3' "$cli" \
    && grep -q 'provision_python312' "$cli"; then
